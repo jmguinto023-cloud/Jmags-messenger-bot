@@ -1,0 +1,58 @@
+# Render Blueprint – one always-on web service (Starter plan, US$7/month) + 1 GB disk
+# (US$0.25/GB/month) so chat history and handoff status survive restarts and deploys.
+# Secrets marked "sync: false" are typed into the Render dashboard, never stored in this file.
+services:
+  - type: web
+    name: jmags-messenger-bot
+    runtime: docker
+    plan: starter
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: false
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: BOT_ENABLED
+        value: "false"
+      - key: BOT_TEST_PSIDS
+        sync: false
+      - key: BOT_ACTIVE_HOURS
+        sync: false
+      - key: BOT_ALWAYS_ON_DAYS
+        sync: false
+      - key: BOT_TIMEZONE
+        value: Asia/Manila
+      - key: VERIFY_TOKEN
+        generateValue: true
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: APP_ID
+        sync: false
+      - key: APP_SECRET
+        sync: false
+      - key: PAGE_ID
+        value: "102622881557025"
+      - key: PAGE_ACCESS_TOKEN
+        sync: false
+      - key: GRAPH_API_VERSION
+        value: v26.0
+      - key: PAGE_INBOX_APP_ID
+        value: "263902037430900"
+      - key: NEEDS_IVAN_LABEL
+        value: ""
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: HUMAN_PAUSE_HOURS
+        value: "12"
+      - key: HANDOFF_RESUME_HOURS
+        value: "72"
+      - key: DATA_RETENTION_DAYS
+        value: "90"

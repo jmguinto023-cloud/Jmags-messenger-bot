@@ -1,0 +1,41 @@
+   [server] [2026-10-17T15:42:49.758Z] INFO JMAG's Messenger bot listening on :3930 | BOT_ENABLED=true | allowlist=0 | hours=24/7
+   [server] [2026-10-17T15:42:49.808Z] INFO WEBHOOK_VERIFIED
+
+1) Webhook verification -> 200 body="4242"
+   [server] [2026-10-17T15:42:50.395Z] INFO replied to …_joi (237 chars)
+
+2) Customer (psid_joi): "Hm po magpa gawa backlight ang prob. Good sound no visual on screen, 40' smart tv. Biñan Laguna po"
+   webhook ack: 200 in 7 ms, reply after 813 ms
+   BOT → Pwde po iservice maam/sir 😊 Possible backlight po yan. Para sa 40" smart TV nyo po:
+         💰 ₱4,000 all-in + ₱500 travel fee
+         ✅ Brand new LED strips ✅ Home service ✅ Full testing
+         🛡️ 6 months warranty
+         Bukas po ba, umaga o hapon mas ok sa inyo?
+   [server] [2026-10-17T15:42:51.138Z] INFO replied to …seph (276 chars)
+
+3) Customer (psid_joseph): "magkano po palit lcd 65 inch tcl basag po"
+   webhook ack: 200 in 4 ms, reply after 758 ms
+   BOT → Para sa TCL 65" nyo po maam/sir, palit brand new LCD po:
+         💰 ₱27,000 all-in + travel fee (₱500 within 50 km)
+         ✅ Brand new panel ✅ Home service ✅ Full testing
+         🛡️ 6 months warranty
+         After repair na po ang bayad, wala pong hidden charges. Bukas po ba, umaga o hapon mas ok sa inyo?
+   [server] [2026-10-17T15:42:51.893Z] INFO HANDOFF …emma: customer wants to book
+   [server] [2026-10-17T15:42:51.896Z] INFO replied to …emma (109 chars)
+
+4) Customer (psid_gemma): "good morning, Ipa schedule ko na po. TCL Android TV 65 inches basag ang LCD, Sabang Dasmariñas Cavite"
+   webhook ack: 200 in 3 ms, reply after 756 ms
+   BOT → Noted po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito para ma-confirm ang schedule nyo. Saglit lang po.
+   HANDOFF → pass_thread_control to app 263902037430900 (Needs Ivan: customer wants to book)
+   [server] [2026-10-17T15:42:52.144Z] INFO HANDOFF …hoto: customer sent image
+   [server] [2026-10-17T15:42:52.146Z] INFO replied to …hoto (108 chars)
+
+5) Customer (psid_photo) sends a photo
+   BOT → Noted po maam/sir 🙏 Natanggap po namin, si Ivan na po ang titingin at tutuloy sa inyo dito. Saglit lang po.
+   HANDOFF calls so far: 2
+   [server] [2026-10-17T15:42:52.197Z] WARN Rejected webhook: bad or missing X-Hub-Signature-256
+
+6) Forged request (bad signature) -> 401
+
+Summary: 4 messages sent, 3 typing indicators, 2 handoffs, 3 AI calls.
+   [server] [2026-10-17T15:42:52.198Z] INFO shutting down
