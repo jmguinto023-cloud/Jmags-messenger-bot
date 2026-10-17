@@ -1,5 +1,7 @@
 'use strict';
 // Core logic: turns Messenger webhook events into Ivan-style replies or handoffs.
+// TODO: remind a quiet customer about 2 hours after their last message (max 2 follow-ups).
+// No scheduler yet — the prompt only reminds on the next inbound message.
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
 const { sanitizeOutgoing, bookingFormMessage } = lines;

@@ -328,22 +328,35 @@ test('temperature 400 is retried once without temperature and then omitted', asy
 
 test('system prompt hides the travel fee, stays plain, and sends the form before any booking handoff', () => {
   const prompt = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8');
-  assert.match(prompt, /add ₱500 to every quoted price when the customer is 1-50 km/);
-  assert.match(prompt, /₱1,500 when they are 50-80 km/);
-  assert.match(prompt, /Biñan \(1-50 km\) quote ₱9,500–₱10,000 all-in including home service/);
-  assert.match(prompt, /Over 80 km or outside the 4 areas/);
+  assert.match(prompt, /add ₱500 to every quoted price when they are 1-50 km/);
+  assert.match(prompt, /₱1,500 when 50-85 km/);
+  assert.match(prompt, /up to 85 km from the nearest branch/);
+  assert.match(prompt, /in Biñan quote ₱9,500–₱10,000 all-in including home service/);
   assert.match(prompt, /walang dagdag/);
   assert.match(prompt, /Never write "travel fee", "pamasahe", or "transpo"/);
-  assert.match(prompt, /Check-up fee \(home service\): \*\*₱1,000\*\*, \*\*₱500 for 32" and 40" TVs\*\*/);
-  assert.match(prompt, /no \*\*bold\*\*/);
+  assert.match(prompt, /never tell the customer km/);
+  assert.match(prompt, /Check-up fee: ₱1,000, ₱500 for 32" and 40" TVs/);
+  assert.match(prompt, /Waived if the repair proceeds/);
+  assert.match(prompt, /No \*\*bold\*\*/);
   assert.match(prompt, /Do not open with an apology/);
+  assert.match(prompt, /Do not propose a day or time/);
+  assert.match(prompt, /Pwede po malaman kung taga-saan po sila\?/);
   assert.match(prompt, /Hello Mam\/Sir eto po ang schedule form niyo/);
   assert.match(prompt, /\{\{BOOKING_FORM_URL\}\}/);
-  assert.match(prompt, /only once per conversation/);
-  assert.match(prompt, /Do not ask "umaga o hapon" if they already gave a date or time/);
+  assert.match(prompt, /Only once per conversation/);
+  assert.match(prompt, /Google Maps pin is required/);
   assert.match(prompt, /Do NOT hand off to Ivan\. Do not output \[HANDOFF\]/);
   assert.match(prompt, /filled it up or submitted the form/);
-  assert.doesNotMatch(prompt.slice(prompt.indexOf('Example quote')), /travel fee/);
+  assert.match(prompt, /first time they ask for a discount, tawad, less, or promo/);
+  assert.match(prompt, /No receipt, no warranty/);
+  assert.match(prompt, /At 55" the base is ₱8,000/);
+  assert.match(prompt, /Monday to Saturday, 8am–5pm/);
+  assert.match(prompt, /We do repair refrigerators and aircon/);
+  assert.match(prompt, /Do not quote a price\. Then hand off to Ivan for the quote/);
+  assert.doesNotMatch(prompt, /no refrigerator/i);
+  assert.doesNotMatch(prompt, /don't repair refrigerator/i);
+  const example = prompt.slice(prompt.indexOf('Example quote'), prompt.indexOf('Send the schedule form'));
+  assert.doesNotMatch(example, /travel fee|within 50 km|\bkm\b/i);
 });
 
 test('BOOKING_FORM_URL is injected into the system prompt', async () => {
