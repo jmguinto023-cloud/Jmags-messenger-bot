@@ -9,6 +9,7 @@ const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { isActiveNow, keywordHit } = require('../src/bot');
 const { parseHandoff } = require('../src/llm');
+const { sanitizeOutgoing } = require('../src/messages');
 
 const SECRET = 'test_app_secret';
 const PAGE = '102622881557025';
@@ -113,8 +114,9 @@ test('photo forces handoff: holding line, pass_thread_control to Page Inbox, the
     assert.equal(s.mock.calls.pass[0].recipient.id, '555');
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(s.mock.calls.labels[0].user, '555');
-    await s.post(msg('555', { text: 'ano na po?' }));
-    assert.equal(s.mock.calls.messages.length, 1, 'no more auto replies after handoff');
+    await s.post({ object: 'page', entry: [{ id: PAGE, time: Date.now(), standby: [{ sender: { id: '555' }, recipient: { id: PAGE }, timestamp: Date.now(), message: { mid: 'standby.555', text: 'ano na po?' } }] }] });
+    assert.equal(s.mock.calls.messages.length, 1, 'no auto reply while the inbox still owns the thread');
+    assert.equal(s.app.store.thread('555').handedOff, true);
   } finally { await s.close(); }
 });
 
@@ -207,6 +209,7 @@ test('LLM failure sends Ivan-style fallback, second failure hands off', async ()
     assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
     await s.post(msg('fail', { text: 'hello?' }));
     assert.equal(s.mock.calls.pass.length, 1);
+    assert.equal(s.mock.calls.pass[0].target_app_id, '263902037430900');
   } finally { await s.close(); }
 });
 
@@ -236,6 +239,192 @@ test('outside BOT_ACTIVE_HOURS the bot stays quiet', async () => {
   try {
     await s.post(msg('day', { text: 'hm po' }, new Date('2026-10-19T04:00:00Z').getTime()));
     assert.equal(s.mock.calls.messages.length, 0);
+  } finally { await s.close(); }
+});
+
+test('sanitizeOutgoing strips markdown markers and keeps emoji and line breaks', () => {
+  assert.equal(sanitizeOutgoing('**bold** and __under__'), 'bold and under');
+  assert.equal(sanitizeOutgoing('# Heading\n## Sub\nkeep # this'), 'Heading\nSub\nkeep # this');
+  assert.equal(sanitizeOutgoing('a `code` and ```fence```'), 'a code and fence');
+  assert.equal(sanitizeOutgoing('😊 line\nnext'), '😊 line\nnext');
+  assert.equal(sanitizeOutgoing('  # Title  '), 'Title');
+});
+
+test('markdown in an AI reply is stripped before it is sent', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => '**Pwde po** iservice\n# Presyo\nuse `LCD` __all-in__';
+  try {
+    await s.post(msg('md', { text: 'magkano po' }));
+    assert.equal(s.mock.calls.messages[0].message.text, 'Pwde po iservice\nPresyo\nuse LCD all-in');
+  } finally { await s.close(); }
+});
+
+test('LLM fallback is not stored in the history sent back to the model', async () => {
+  const s = await setup();
+  let failed = false;
+  s.mock.state.llmGate = () => {
+    if (!failed) { failed = true; return { status: 500, message: 'unavailable' }; }
+    return null;
+  };
+  s.mock.state.llmResponder = (body) => {
+    const prev = body.messages.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n');
+    if (/brand at size|Pasensya/.test(prev)) return 'Pasensya na po maam/sir 😊 Nandito pa po ako!';
+    return 'Samsung 55 po, all-in including home service. Taga saan po sila?';
+  };
+  try {
+    await s.post(msg('fb', { text: 'hm po backlight' }));
+    assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
+    await s.post(msg('fb', { text: 'Samsung 55 Biñan' }));
+    const nonSystem = s.mock.calls.llm.at(-1).body.messages.filter((m) => m.role !== 'system');
+    assert.deepEqual(nonSystem.map((m) => m.role), ['user', 'user']);
+    assert.equal(nonSystem.some((m) => /brand at size|Pasensya/.test(m.content)), false);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /Pasensya/);
+    assert.equal(s.mock.calls.pass.length, 0);
+  } finally { await s.close(); }
+});
+
+test('LLM HTTP 4xx is logged at ERROR and does not hand off', async () => {
+  const s = await setup({ LOG_LEVEL: 'error' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => { logged.push(a.map(String).join(' ')); };
+  s.mock.state.llmFail = true;
+  s.mock.state.llmStatus = 400;
+  s.mock.state.llmError = 'invalid api key';
+  try {
+    await s.post(msg('cfg', { text: 'hm po' }));
+    await s.post(msg('cfg', { text: 'hello ulit po' }));
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.mock.calls.llm.length, 2);
+    assert.equal(s.app.store.thread('cfg').handedOff, false);
+    assert.equal(s.app.store.thread('cfg').history.some((h) => h.role === 'assistant'), false);
+    assert.ok(logged.some((l) => /\bERROR\b/.test(l) && /400/.test(l) && /config error/i.test(l)));
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
+});
+
+test('temperature 400 is retried once without temperature and then omitted', async () => {
+  const s = await setup();
+  s.mock.state.llmGate = (body) => {
+    if (body.temperature !== undefined) return { status: 400, message: 'temperature is deprecated for this model' };
+    return null;
+  };
+  s.mock.state.llmResponder = () => 'Pwde po iservice maam/sir 😊 Taga saan po sila?';
+  try {
+    await s.post(msg('temp', { text: 'magkano po backlight' }));
+    assert.equal(s.mock.calls.messages[0].message.text, 'Pwde po iservice maam/sir 😊 Taga saan po sila?');
+    assert.equal(s.mock.calls.llm.length, 2);
+    assert.equal(s.mock.calls.llm[0].body.temperature, 0.4);
+    assert.equal(s.mock.calls.llm[1].body.temperature, undefined);
+    assert.equal(s.mock.calls.pass.length, 0);
+    await s.post(msg('temp', { text: '55 inch samsung po' }));
+    assert.equal(s.mock.calls.llm.length, 3);
+    assert.equal(s.mock.calls.llm[2].body.temperature, undefined);
+    assert.equal(s.app.store.thread('temp').handedOff, false);
+  } finally { await s.close(); }
+});
+
+test('system prompt hides the travel fee, stays plain, and sends the form before any booking handoff', () => {
+  const prompt = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8');
+  assert.match(prompt, /add ₱500 to every quoted price when the customer is 1-50 km/);
+  assert.match(prompt, /₱1,500 when they are 50-80 km/);
+  assert.match(prompt, /Biñan \(1-50 km\) quote ₱9,500–₱10,000 all-in including home service/);
+  assert.match(prompt, /Over 80 km or outside the 4 areas/);
+  assert.match(prompt, /walang dagdag/);
+  assert.match(prompt, /Never write "travel fee", "pamasahe", or "transpo"/);
+  assert.match(prompt, /Check-up fee \(home service\): \*\*₱1,000\*\*, \*\*₱500 for 32" and 40" TVs\*\*/);
+  assert.match(prompt, /no \*\*bold\*\*/);
+  assert.match(prompt, /Do not open with an apology/);
+  assert.match(prompt, /Hello Mam\/Sir eto po ang schedule form niyo/);
+  assert.match(prompt, /\{\{BOOKING_FORM_URL\}\}/);
+  assert.match(prompt, /only once per conversation/);
+  assert.match(prompt, /Do not ask "umaga o hapon" if they already gave a date or time/);
+  assert.match(prompt, /Do NOT hand off to Ivan\. Do not output \[HANDOFF\]/);
+  assert.match(prompt, /filled it up or submitted the form/);
+  assert.doesNotMatch(prompt.slice(prompt.indexOf('Example quote')), /travel fee/);
+});
+
+test('BOOKING_FORM_URL is injected into the system prompt', async () => {
+  const s = await setup();
+  try {
+    await s.post(msg('bookurl', { text: 'magkano po' }));
+    const sys = s.mock.calls.llm[0].body.messages[0].content;
+    assert.match(sys, /https:\/\/jmagscutomerform\.netlify\.app\//);
+    assert.match(sys, /Hello Mam\/Sir eto po ang schedule form/);
+    assert.doesNotMatch(sys, /\{\{BOOKING_FORM_URL\}\}/);
+  } finally { await s.close(); }
+});
+
+test('custom BOOKING_FORM_URL replaces the default in the system prompt', async () => {
+  const s = await setup({ BOOKING_FORM_URL: 'https://forms.example.com/jmag' });
+  try {
+    await s.post(msg('bookurl2', { text: 'magkano po' }));
+    const sys = s.mock.calls.llm[0].body.messages[0].content;
+    assert.match(sys, /https:\/\/forms\.example\.com\/jmag/);
+    assert.doesNotMatch(sys, /jmagscutomerform/);
+  } finally { await s.close(); }
+});
+
+test('HANDOFF for booking intent sends the form instead of passing the thread', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Noted po, i-confirm ko na.\n[HANDOFF: Customer ready to book]';
+  try {
+    await s.post(msg('ready', { text: 'sige po bukas 10am' }));
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.store.thread('ready').handedOff, false);
+    assert.equal(
+      s.mock.calls.messages[0].message.text,
+      "Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊\n\nhttps://jmagscutomerform.netlify.app/",
+    );
+  } finally { await s.close(); }
+});
+
+test('a schedule-form reply is sent and does not hand off even with a HANDOFF tag', async () => {
+  const s = await setup();
+  const url = 'https://jmagscutomerform.netlify.app/';
+  s.mock.state.llmResponder = () => `Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊\n\n${url}\n[HANDOFF: Customer ready to book]`;
+  try {
+    await s.post(msg('bf', { text: 'sige po bukas 10am' }));
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.store.thread('bf').handedOff, false);
+    assert.match(s.mock.calls.messages[0].message.text, /jmagscutomerform\.netlify\.app/);
+    assert.doesNotMatch(s.mock.calls.messages[0].message.text, /HANDOFF/);
+    assert.match(s.mock.calls.messages[0].message.text, /Hello Mam\/Sir eto po ang schedule form/);
+  } finally { await s.close(); }
+});
+
+test('Mark as done: a normal message after our handoff resumes; standby does not; inbox echo still pauses', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Pwde po iservice maam/sir 😊 Taga saan po sila?';
+  try {
+    await s.post(msg('mdone', { text: 'pa tawag na lang po' }));
+    assert.equal(s.mock.calls.pass.length, 1);
+    assert.equal(s.app.store.thread('mdone').passedByBot, true);
+    assert.equal(s.app.store.thread('mdone').handedOff, true);
+
+    await s.post({ object: 'page', entry: [{ id: PAGE, time: Date.now(), standby: [{ sender: { id: 'mdone' }, recipient: { id: PAGE }, timestamp: Date.now(), message: { mid: 'st.mdone', text: 'nandito pa po ako' } }] }] });
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(s.app.store.thread('mdone').handedOff, true);
+
+    await s.post(msg('mdone', { text: 'hello ulit po' }));
+    assert.equal(s.mock.calls.llm.length, 1);
+    assert.equal(s.mock.calls.messages.length, 2);
+    const t = s.app.store.thread('mdone');
+    assert.equal(t.handedOff, false);
+    assert.equal(t.pausedUntil, 0);
+    assert.equal(t.passedByBot, false);
+
+    await s.post(echo('mdone', '263902037430900', 'ako na po'));
+    await s.post(msg('mdone', { text: 'salamat po' }));
+    assert.equal(s.mock.calls.llm.length, 1, 'human inbox reply still pauses the bot');
+    assert.ok(s.app.store.thread('mdone').pausedUntil > Date.now());
+
+    await s.post({ object: 'page', entry: [{ id: PAGE, time: Date.now(), messaging: [{ sender: { id: 'ext' }, recipient: { id: PAGE }, timestamp: Date.now(), pass_thread_control: { new_owner_app_id: '555', metadata: '' } }] }] });
+    await s.post(msg('ext', { text: 'hello po' }));
+    assert.equal(s.mock.calls.llm.length, 1, 'a handoff this bot did not start stays silent');
+    assert.equal(s.app.store.thread('ext').handedOff, true);
   } finally { await s.close(); }
 });
 

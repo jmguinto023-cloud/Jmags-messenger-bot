@@ -17,7 +17,11 @@ function startMock({ llmResponder } = {}) {
 
       if (url.pathname.endsWith('/chat/completions')) {
         calls.llm.push({ body, auth: req.headers.authorization });
-        if (state.llmFail) return json(500, { error: 'boom' });
+        if (typeof state.llmGate === 'function') {
+          const gate = state.llmGate(body);
+          if (gate) return json(gate.status || 500, { error: { message: gate.message || 'boom' } });
+        }
+        if (state.llmFail) return json(state.llmStatus || 500, { error: { message: state.llmError || 'boom' } });
         const content = await state.llmResponder(body);
         return json(200, { choices: [{ message: { role: 'assistant', content } }] });
       }

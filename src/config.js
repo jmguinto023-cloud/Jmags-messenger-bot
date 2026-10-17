@@ -35,6 +35,8 @@ function loadConfig(env = process.env) {
     llmTimeoutMs: num(env.LLM_TIMEOUT_MS, 20000),
     llmTemperature: /^off$/i.test(env.LLM_TEMPERATURE || '') ? null : num(env.LLM_TEMPERATURE, 0.4),
     llmMaxTokens: num(env.LLM_MAX_TOKENS, 400),
+    // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
+    bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
     // Safety switches
     botEnabled: bool(env.BOT_ENABLED, false),

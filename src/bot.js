@@ -2,7 +2,17 @@
 // Core logic: turns Messenger webhook events into Ivan-style replies or handoffs.
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
+const { sanitizeOutgoing, bookingFormMessage } = lines;
 const { short } = require('./log');
+
+// Model sometimes emits [HANDOFF: Customer ready to book] instead of the form.
+function isBookingIntentHandoff(reason) {
+  return /ready to book|wants to book|agreed to (the )?price|asked to (be )?schedul|gave a (date|time)|booking intent|pa-book|pa-schedule/i.test(reason || '');
+}
+
+function isCannedLine(text) {
+  return text === lines.fallback || text === lines.holding || text === lines.holdingMedia || text === lines.holdingPerson;
+}
 
 const HOUR = 3600 * 1000;
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -108,9 +118,16 @@ class Bot {
     const t = this.store.thread(psid);
     const now = this.now();
 
-    // Old handoff expired? (e.g. returning customer days later)
-    if (t.handedOff && this.cfg.handoffResumeHours > 0 && now - t.handoffAt > this.cfg.handoffResumeHours * HOUR) {
-      t.handedOff = false; t.handoffReason = '';
+    // Mark as done returns the thread without a handover webhook. A normal
+    // (non-standby) customer message means we own it again after our own
+    // pass_thread_control. Echo pauses are handled separately and stay in place.
+    if (t.handedOff && t.passedByBot) {
+      t.handedOff = false; t.pausedUntil = 0; t.handoffReason = ''; t.passedByBot = false;
+      this.store.save();
+      this.log.info(`thread back with bot for ${short(psid)} after our handoff – resuming`);
+    } else if (t.handedOff && this.cfg.handoffResumeHours > 0 && now - t.handoffAt > this.cfg.handoffResumeHours * HOUR) {
+      // Old handoff expired (e.g. returning customer days later).
+      t.handedOff = false; t.handoffReason = ''; t.passedByBot = false;
     }
     const block = this.blockReason(psid, t, ts);
     if (block) { this.log.info(`no reply to ${short(psid)}: ${block}`); return; }
@@ -180,6 +197,11 @@ class Bot {
     try {
       raw = await this.llm.reply(t.history, { nowText: this.nowText() });
     } catch (e) {
+      const status = Number(e.status) || 0;
+      if (status >= 400 && status < 500) {
+        this.log.error(`LLM config error for ${short(psid)}: HTTP ${status} (not handing off). ${e.message}`);
+        return this.send(psid, lines.fallback);
+      }
       this.log.error(`LLM failed for ${short(psid)}:`, e.message);
       t.fallbackCount = (t.fallbackCount || 0) + 1;
       if (t.fallbackCount >= 2) return this.handoff(psid, 'AI unavailable twice', lines.holding);
@@ -188,20 +210,32 @@ class Bot {
     t.fallbackCount = 0;
     const { text, handoff, reason } = parseHandoff(raw);
     if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
+    // The schedule form must go out before any handoff. A [HANDOFF] tag on that
+    // same reply used to silence the bot before the customer got the link.
+    const formUrl = this.cfg.bookingFormUrl;
+    const formAlreadySent = formUrl && t.history.some((h) => h.role === 'assistant' && h.content.includes(formUrl));
+    if (formUrl && text.includes(formUrl)) return this.send(psid, text);
+    if (handoff && formUrl && !formAlreadySent && isBookingIntentHandoff(reason)) {
+      return this.send(psid, bookingFormMessage(formUrl));
+    }
     if (handoff) return this.handoff(psid, reason || 'model', text || lines.holding);
     return this.send(psid, text);
   }
 
   async send(psid, text) {
-    await this.graph.sendText(psid, text);
-    this.store.addTurn(psid, 'assistant', text);
-    this.log.info(`replied to ${short(psid)} (${text.length} chars)`);
+    const clean = sanitizeOutgoing(text);
+    if (!clean) { this.log.warn(`empty reply to ${short(psid)} after sanitize`); return; }
+    await this.graph.sendText(psid, clean);
+    // Canned fallback/holding lines are not part of the chat the model sees,
+    // or the next reply continues them ("Pasensya na po... Nandito pa po ako").
+    if (!isCannedLine(clean)) this.store.addTurn(psid, 'assistant', clean);
+    this.log.info(`replied to ${short(psid)} (${clean.length} chars)`);
   }
 
   async handoff(psid, reason, holdingText) {
     const t = this.store.thread(psid);
     if (t.handedOff) return;
-    t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = reason;
+    t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = reason; t.passedByBot = true;
     this.store.save();
     this.log.info(`HANDOFF ${short(psid)}: ${reason}`);
     try { await this.send(psid, holdingText); } catch (e) { this.log.error('holding line failed', e.message); }
@@ -237,7 +271,7 @@ class Bot {
     const newOwner = ctl && ctl.new_owner_app_id !== undefined ? String(ctl.new_owner_app_id) : '';
     const t = this.store.thread(psid);
     if (newOwner && newOwner === this.cfg.appId) {
-      t.handedOff = false; t.pausedUntil = 0; t.handoffReason = '';
+      t.handedOff = false; t.pausedUntil = 0; t.handoffReason = ''; t.passedByBot = false;
       this.log.info(`thread control returned to bot for ${short(psid)} – auto-reply resumed`);
     } else if (newOwner) {
       t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = t.handoffReason || `control moved to app ${newOwner}`;
@@ -250,7 +284,7 @@ class Bot {
   // Admin: let the bot answer this customer again.
   resume(psid) {
     const t = this.store.thread(psid);
-    t.handedOff = false; t.pausedUntil = 0; t.handoffReason = '';
+    t.handedOff = false; t.pausedUntil = 0; t.handoffReason = ''; t.passedByBot = false;
     this.store.save();
   }
 }

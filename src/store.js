@@ -23,7 +23,7 @@ class Store {
   thread(psid) {
     const t = (this.data.threads[psid] ||= {
       history: [], lastUserTs: 0, handedOff: false, handoffAt: 0, handoffReason: '',
-      pausedUntil: 0, fallbackCount: 0,
+      pausedUntil: 0, fallbackCount: 0, passedByBot: false,
     });
     return t;
   }
