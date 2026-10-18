@@ -12,7 +12,7 @@ const { asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
 const {
   emptyOps, moneyReport, nextJobId, addMonths, jobStatusText, dailyStatusText, warrantyText,
   asksJobStatus, asksWarrantyProblem, importOps, parseJobsCsv, jobBalance, jobPaid, duplicatePayments,
-  ensureOps, STATUSES, DELIVERY_NOTICE, DELIVERY_STATUS,
+  ensureOps, STATUSES, DELIVERY_NOTICE, DELIVERY_STATUS, areaFromAd, adBudgetOf, adBudgetReport,
 } = require('../src/ops');
 
 const SECRET = 'test_app_secret';
@@ -793,5 +793,138 @@ test('For Delivery notifies once inside the reply window and lists a text otherw
     assert.doesNotMatch(warranty, /ready na for delivery/);
     assert.equal(s.app.store.thread(psid).handedOff, true);
     assert.equal(s.app.store.thread(psid).awaitingVideo, false);
+  } finally { await s.close(); }
+});
+
+test('ad area fills from the ad name and finance can group profit by ad budget', async () => {
+  const parsed = parseJobsCsv(JOBS_CSV);
+  assert.equal(parsed[0].ad, '');
+  assert.equal(parsed[0].adArea, 'North');
+  assert.equal(areaFromAd('CAVITE - area ads'), 'CAVITE');
+  assert.equal(areaFromAd('June messaging LAGUNA'), 'LAGUNA');
+  assert.equal(areaFromAd('BATANGAS flyer'), 'BATANGAS');
+  assert.equal(areaFromAd('Not from an ad'), '');
+  assert.equal(adBudgetOf({ adArea: 'CAVITE', ad: 'LAGUNA post' }), 'Cavite');
+  assert.equal(adBudgetOf({ adArea: 'North', ad: 'BATANGAS flyer' }), 'San Pablo');
+  assert.equal(adBudgetOf({ adArea: 'San Pablo ads', ad: '' }), 'San Pablo');
+  assert.equal(adBudgetOf({ adArea: 'North', ad: '' }), '');
+
+  const kept = { data: {}, save() {} };
+  importOps(kept, {
+    jobsCsv: 'Job ID,Date received,Customer name,Lead source,Ad,Ad area,Branch,Status\nJO-261018-003,2026-10-18,Mara Quill,Facebook,BATANGAS flyer,North,San Pablo,Inquiry',
+  });
+  assert.equal(kept.data.ops.jobs[0].ad, 'BATANGAS flyer');
+  assert.equal(kept.data.ops.jobs[0].adArea, 'North');
+  kept.data.ops.jobs[0].ad = 'LAGUNA - area ads';
+  kept.data.ops.jobs[0].adArea = 'LAGUNA';
+  importOps(kept, {
+    jobsCsv: 'Job ID,Date received,Customer name,Lead source,Ad,Ad area,Branch,Status\nJO-261018-003,2026-10-18,Mara Quill,Facebook,,North,San Pablo,Inquiry',
+  });
+  assert.equal(kept.data.ops.jobs[0].ad, 'LAGUNA - area ads');
+  assert.equal(kept.data.ops.jobs[0].adArea, 'North');
+  kept.data.ops.jobs[0].adArea = 'LAGUNA';
+  importOps(kept, {
+    jobsCsv: 'Job ID,Date received,Customer name,Lead source,Ad,Ad area,Branch,Status\nJO-261018-003,2026-10-18,Mara Quill,Facebook,,,San Pablo,Inquiry',
+  });
+  assert.equal(kept.data.ops.jobs[0].ad, 'LAGUNA - area ads');
+  assert.equal(kept.data.ops.jobs[0].adArea, 'LAGUNA');
+
+  const ops = emptyOps();
+  ops.jobs.push(
+    { id: 'JO-1', date: '2026-10-12', branch: 'San Pablo', ad: 'LAGUNA - area ads', adArea: 'LAGUNA', partsCost: 200, status: 'Under Repair', customerName: 'Mara Quill' },
+    { id: 'JO-2', date: '2026-10-12', branch: 'Cavite', ad: 'CAVITE - area ads', adArea: 'CAVITE', partsCost: 0, status: 'For Delivery', customerName: 'Theo Farrow' },
+    { id: 'JO-3', date: '2026-10-12', branch: 'San Pablo', ad: '', adArea: 'North', partsCost: 0, status: 'Inquiry', customerName: 'Willa Ibarra' },
+  );
+  ops.payments.push(
+    { date: '2026-10-12', jobId: 'JO-1', branch: 'San Pablo', amount: 124000, type: 'Repair', method: 'Cash' },
+    { date: '2026-10-12', jobId: 'JO-2', branch: 'Cavite', amount: 24000, type: 'Repair', method: 'Cash' },
+    { date: '2026-10-12', jobId: 'JO-3', branch: 'San Pablo', amount: 5000, type: 'Check-up fee', method: 'Cash' },
+  );
+  ops.ads.push(
+    { start: '2026-10-01', end: '2026-10-17', branch: 'San Pablo', amount: 1000, chats: 10 },
+    { start: '2026-10-01', end: '2026-10-17', branch: 'Cavite', amount: 500, chats: 5 },
+  );
+  const report = adBudgetReport(ops, { period: 'all', now: NOON, tz: 'Asia/Manila' });
+  assert.equal(report.groups['San Pablo'].collected, 124000);
+  assert.equal(report.groups['San Pablo'].costs, 1200);
+  assert.equal(report.groups['San Pablo'].profit, 122800);
+  assert.equal(report.groups.Cavite.collected, 24000);
+  assert.equal(report.groups.Cavite.costs, 500);
+  assert.equal(report.groups.Cavite.profit, 23500);
+  assert.equal(report.groups.Untraced.collected, 5000);
+  assert.equal(report.groups.Untraced.profit, 5000);
+  assert.equal(report.groups.Untraced.jobs, 1);
+  assert.equal(report.untraced, 1);
+  assert.equal(report.cross['San Pablo']['San Pablo'].collected, 124000);
+  assert.equal(report.cross.Cavite.Cavite.jobs, 1);
+  assert.equal(report.cross.Untraced['San Pablo'].collected, 5000);
+
+  const s = await setup();
+  s.app.bot.now = () => NOON;
+  try {
+    const jar = await cookie(s.base);
+    const post = (body) => fetch(`${s.base}/ops/action`, {
+      method: 'POST', redirect: 'manual',
+      headers: { Cookie: jar, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(),
+    });
+    await post({
+      action: 'create-job', returnTab: 'jobs', returnBranch: 'ALL',
+      customerName: 'Mara Quill', phone: '09120001111', city: 'Testville', address: '1 Inventa Road',
+      date: '2026-10-12', visitDate: '2026-10-18', branch: 'San Pablo', status: 'Under Repair',
+      ad: 'LAGUNA - area ads', adArea: 'North', price: '124000', partsCost: '200',
+    });
+    await post({
+      action: 'create-job', returnTab: 'jobs', returnBranch: 'ALL',
+      customerName: 'Theo Farrow', phone: '09120002222', city: 'Testville', address: '2 Inventa Road',
+      date: '2026-10-12', visitDate: '2026-10-18', branch: 'Cavite', status: 'For Delivery',
+      ad: 'CAVITE - area ads', adArea: 'North', price: '24000',
+    });
+    await post({
+      action: 'create-job', returnTab: 'jobs', returnBranch: 'ALL',
+      customerName: 'Willa Ibarra', phone: '09120003333', city: 'Testville', address: '3 Inventa Road',
+      date: '2026-10-12', visitDate: '2026-10-18', branch: 'San Pablo', status: 'Inquiry',
+      adArea: 'North', price: '5000',
+    });
+    const jobs = s.app.store.data.ops.jobs;
+    const laguna = jobs.find((job) => job.customerName === 'Mara Quill');
+    const cavite = jobs.find((job) => job.customerName === 'Theo Farrow');
+    const open = jobs.find((job) => job.customerName === 'Willa Ibarra');
+    assert.equal(laguna.ad, 'LAGUNA - area ads');
+    assert.equal(laguna.adArea, 'LAGUNA');
+    assert.equal(cavite.adArea, 'CAVITE');
+    assert.equal(open.ad, '');
+    assert.equal(open.adArea, 'North');
+    await post({ action: 'add-payment', date: '2026-10-12', jobId: laguna.id, customerName: 'Mara Quill', branch: 'San Pablo', type: 'Repair', method: 'Cash', amount: '124000', returnTab: 'finance', returnGroup: 'ad' });
+    await post({ action: 'add-payment', date: '2026-10-12', jobId: cavite.id, customerName: 'Theo Farrow', branch: 'Cavite', type: 'Repair', method: 'Cash', amount: '24000', returnTab: 'finance' });
+    await post({ action: 'add-payment', date: '2026-10-12', jobId: open.id, customerName: 'Willa Ibarra', branch: 'San Pablo', type: 'Check-up fee', method: 'Cash', amount: '5000', returnTab: 'finance' });
+    await post({ action: 'add-ad', start: '2026-10-01', end: '2026-10-17', branch: 'San Pablo', amount: '1000', chats: '10', note: 'laguna test ads', returnTab: 'finance', returnGroup: 'ad' });
+    await post({ action: 'add-ad', start: '2026-10-01', end: '2026-10-17', branch: 'Cavite', amount: '500', chats: '5', note: 'cavite test ads', returnTab: 'finance' });
+
+    const finance = await (await fetch(`${s.base}/ops?tab=finance&period=all&group=ad`, { headers: { Cookie: jar } })).text();
+    assert.match(finance, /Profit by ad budget/);
+    assert.match(finance, /data-group="ad-budget"/);
+    assert.match(finance, /Untraced \(no ad\)/);
+    assert.match(finance, /₱124,000/);
+    assert.match(finance, /data-untraced="1"/);
+    assert.match(finance, /1 job not traced to an ad — tag them/);
+    assert.match(finance, /status=untraced/);
+    assert.doesNotMatch(finance, /Lead from/);
+    const form = await (await fetch(`${s.base}/ops?tab=jobs&edit=${laguna.id}`, { headers: { Cookie: jar } })).text();
+    assert.match(form, /Which ad brought them/);
+    assert.match(form, /name="adArea"/);
+    assert.match(form, /value="LAGUNA" selected/);
+    assert.doesNotMatch(form, /Lead from/);
+    const tagged = await (await fetch(`${s.base}/ops?tab=jobs&status=untraced`, { headers: { Cookie: jar } })).text();
+    assert.match(tagged, /Willa Ibarra/);
+    assert.doesNotMatch(tagged, /Mara Quill|Theo Farrow/);
+    const csv = await (await fetch(`${s.base}/ops/export?kind=finance&period=all`, { headers: { Cookie: jar } })).text();
+    assert.match(csv, /Untraced \(no ad\)/);
+    assert.match(csv, /Untraced jobs/);
+    assert.match(csv, /124000/);
+    const jobsCsv = await (await fetch(`${s.base}/ops/export?kind=jobs`, { headers: { Cookie: jar } })).text();
+    assert.match(jobsCsv, /LAGUNA - area ads/);
+    assert.match(jobsCsv, /Ad area/);
+    assert.match(jobsCsv, /,North,/);
   } finally { await s.close(); }
 });

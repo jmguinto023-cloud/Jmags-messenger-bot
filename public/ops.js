@@ -74,6 +74,35 @@ document.querySelectorAll('[data-filter]').forEach((input) => {
   });
 });
 
+function areaFromAdName(name) {
+  const text = String(name || '').toUpperCase();
+  if (text.includes('CAVITE')) return 'CAVITE';
+  if (text.includes('LAGUNA')) return 'LAGUNA';
+  if (text.includes('BATANGAS')) return 'BATANGAS';
+  return '';
+}
+
+function fillAdArea(select) {
+  const form = select.form;
+  const area = form && form.querySelector('select[name="adArea"]');
+  if (!area) return;
+  const derived = areaFromAdName(select.value);
+  if (!derived) return;
+  let option = [...area.options].find((item) => item.value === derived);
+  if (!option) {
+    option = document.createElement('option');
+    option.value = derived;
+    option.textContent = derived;
+    area.appendChild(option);
+  }
+  area.value = derived;
+}
+
+document.querySelectorAll('select[name="ad"]').forEach(fillAdArea);
+document.addEventListener('change', (event) => {
+  if (event.target && event.target.name === 'ad') fillAdArea(event.target);
+});
+
 paintDevice();
 
 if ('serviceWorker' in navigator) {

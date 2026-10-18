@@ -231,7 +231,9 @@ function createServer({ cfg, bot, log }) {
       const tab = params.get('returnTab') || params.get('tab') || 'today';
       const branch = params.get('returnBranch') || params.get('branch') || 'ALL';
       const period = params.get('returnPeriod') || params.get('period') || 'month';
-      res.writeHead(303, { Location: `/ops?tab=${encodeURIComponent(tab)}&branch=${encodeURIComponent(branch)}&period=${encodeURIComponent(period)}` });
+      const group = params.get('returnGroup') || '';
+      const groupQuery = group && group !== 'branch' ? `&group=${encodeURIComponent(group)}` : '';
+      res.writeHead(303, { Location: `/ops?tab=${encodeURIComponent(tab)}&branch=${encodeURIComponent(branch)}&period=${encodeURIComponent(period)}${groupQuery}` });
       res.end('');
     }
 
