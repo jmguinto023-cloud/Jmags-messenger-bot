@@ -815,21 +815,41 @@ test('dashboard is an installable PWA and push is skipped until VAPID keys exist
     assert.match(html, /id="password"[^>]*type="password"/);
     assert.doesNotMatch(html, /Enable notifications/);
     assert.match(html, /apple-mobile-web-app-capable/);
-    assert.match(html, /theme-color/);
+    assert.match(html, /apple-mobile-web-app-title" content="JMAG Videos"/);
+    assert.match(html, /theme-color" content="#1e1a4d"/);
+    assert.match(html, /manifest\.webmanifest\?v=2/);
+    assert.match(html, /favicon-32\.png\?v=2/);
+    assert.match(html, /favicon-16\.png\?v=2/);
+    assert.match(html, /apple-touch-icon" href="\/icons\/apple-touch-icon\.png\?v=2"/);
     const manifest = await (await fetch(`${s.base}/manifest.webmanifest`)).json();
     assert.equal(manifest.name, "JMAG's Video Review");
     assert.equal(manifest.short_name, 'JMAG Videos');
     assert.equal(manifest.display, 'standalone');
-    assert.equal(manifest.theme_color, '#10243f');
-    assert.ok(manifest.icons.some((i) => i.sizes === '192x192' && i.type === 'image/png'));
-    assert.ok(manifest.icons.some((i) => i.sizes === '512x512'));
+    assert.equal(manifest.theme_color, '#1e1a4d');
+    assert.equal(manifest.background_color, '#0e0c28');
+    for (const size of ['192x192', '512x512', '1024x1024']) {
+      const any = manifest.icons.find((i) => i.sizes === size && i.purpose === 'any');
+      const maskable = manifest.icons.find((i) => i.sizes === size && i.purpose === 'maskable');
+      assert.ok(any && any.type === 'image/png' && any.src.includes('?v=2'));
+      assert.equal(maskable.src, any.src);
+    }
+    assert.equal(manifest.icons.some((i) => String(i.purpose).includes(' ')), false);
     const sw = await (await fetch(`${s.base}/sw.js`)).text();
     assert.match(sw, /cache the app shell/i);
     assert.match(sw, /network-first for data/i);
-    const icon = Buffer.from(await (await fetch(`${s.base}/icons/icon-192.png`)).arrayBuffer());
-    assert.equal(icon.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-    const icon512 = Buffer.from(await (await fetch(`${s.base}/icons/icon-512.png`)).arrayBuffer());
-    assert.equal(icon512.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.match(sw, /jmags-video-shell-v7/);
+    const pngSize = async (path) => {
+      const buf = Buffer.from(await (await fetch(`${s.base}${path}`)).arrayBuffer());
+      assert.equal(buf.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+      return [buf.readUInt32BE(16), buf.readUInt32BE(20)];
+    };
+    assert.deepEqual(await pngSize('/icons/icon-192.png'), [192, 192]);
+    assert.deepEqual(await pngSize('/icons/icon-192.png?v=2'), [192, 192]);
+    assert.deepEqual(await pngSize('/icons/icon-512.png'), [512, 512]);
+    assert.deepEqual(await pngSize('/icons/icon-1024.png?v=2'), [1024, 1024]);
+    assert.deepEqual(await pngSize('/icons/apple-touch-icon.png'), [180, 180]);
+    assert.deepEqual(await pngSize('/icons/favicon-32.png'), [32, 32]);
+    assert.deepEqual(await pngSize('/icons/favicon-16.png'), [16, 16]);
 
     const status = await fetch(`${s.base}/dashboard/api/push-status`, { headers: { Authorization: 'Bearer adm' } });
     assert.deepEqual(await status.json(), { enabled: false, publicKey: '' });

@@ -260,6 +260,12 @@ test('import requires the admin token and the operations page stays behind the d
     const jar = await cookie(s.base);
     assert.match((await fetch(`${s.base}/dashboard/login`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=secret&next=%2Fops' })).headers.get('location'), /^\/ops$/);
     const today = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(today, /theme-color" content="#1e1a4d"/);
+    assert.match(today, /apple-mobile-web-app-title" content="JMAG Ops"/);
+    assert.match(today, /JMAG's Operations/);
+    assert.match(today, /manifest\.webmanifest\?v=2/);
+    assert.match(today, /favicon-32\.png\?v=2/);
+    assert.match(today, /apple-touch-icon" href="\/icons\/apple-touch-icon\.png\?v=2"/);
     assert.match(today, /Open jobs/);
     assert.match(today, /data-kpi="open"/);
     assert.match(today, /Under repair/);

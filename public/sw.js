@@ -7,6 +7,9 @@ const SHELL = [
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
+  '/icons/apple-touch-icon.png',
+  '/icons/favicon-32.png',
+  '/icons/favicon-16.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -77,7 +80,7 @@ self.addEventListener('push', (event) => {
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
   event.waitUntil(self.registration.showNotification(data.title || "JMAG's Video Review", {
     body: data.body || 'New video to review',
-    icon: '/icons/icon-192.png',
+    icon: '/icons/icon-192.png?v=2',
     data: { url: data.url || '/dashboard' },
   }));
 });

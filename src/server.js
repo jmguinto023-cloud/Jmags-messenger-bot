@@ -23,6 +23,10 @@ const FILES = {
   '/ops.css': ['ops.css', 'text/css; charset=utf-8'],
   '/icons/icon-192.png': ['icons/icon-192.png', 'image/png'],
   '/icons/icon-512.png': ['icons/icon-512.png', 'image/png'],
+  '/icons/icon-1024.png': ['icons/icon-1024.png', 'image/png'],
+  '/icons/apple-touch-icon.png': ['icons/apple-touch-icon.png', 'image/png'],
+  '/icons/favicon-32.png': ['icons/favicon-32.png', 'image/png'],
+  '/icons/favicon-16.png': ['icons/favicon-16.png', 'image/png'],
 };
 
 function verifySignature(rawBody, header, appSecret) {
