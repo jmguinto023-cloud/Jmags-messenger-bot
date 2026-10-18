@@ -131,10 +131,14 @@ function showToast(text) {
 // The click is not cancelled. The Business Suite control stays a real link,
 // and the browser follows that intent itself.
 document.addEventListener('click', (event) => {
-  const el = event.target.closest('[data-copy-name]');
+  const el = event.target.closest('[data-copy-name], [data-copy-text]');
   if (!el) return;
-  const name = el.getAttribute('data-copy-name') || '';
-  if (!name) return;
-  copyName(name);
-  showToast(`Nakopya ang pangalan ni ${name} — i-paste sa search ng inbox`);
+  const kind = el.getAttribute('data-copy-kind') || 'name';
+  const text = kind === 'message'
+    ? (el.getAttribute('data-copy-text') || '')
+    : (el.getAttribute('data-copy-name') || '');
+  if (!text) return;
+  copyName(text);
+  if (kind === 'message') showToast('Nakopya ang mensahe — i-paste sa search ng inbox');
+  else showToast(`Nakopya ang pangalan ni ${text} — i-paste sa search ng inbox`);
 });

@@ -64,6 +64,9 @@ npm start           # run (needs env, see .env.example)
   `POST /admin/resume?psid=` (Bearer ADMIN_TOKEN).
   `POST /admin/forget?psid=` deletes that customer's thread, follow-up state, dashboard photo/video
   cards, `conversations.jsonl` lines, and any push subscription stored for that PSID, and returns the counts.
+- `GET /` is a public page (no login) for JMAG's Appliances: home-service TV and appliance repair,
+  service areas Cavite, Laguna, and Batangas, branches in San Pablo City, Laguna and General Trias, Cavite,
+  the two shop phones, and a Messenger link to the Facebook Page. The page states that JMAG's Appliances is operated by JMAG ELECTRONIC SERVICE CENTER. The footer links to `/privacy` and `/data-deletion`.
 - `GET /privacy` and `GET /data-deletion` are public (no login). Meta's data-deletion callback is
   `POST /data-deletion-callback` (`signed_request` checked with APP_SECRET). A valid request deletes that
   user id and returns `{url, confirmation_code}`. The status is shown at `/data-deletion?code=`.
@@ -98,13 +101,16 @@ npm start           # run (needs env, see .env.example)
 - Storage: `DATA_DIR/state.json` (atomic writes); chats purged after DATA_RETENTION_DAYS of inactivity.
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
   Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
-  name (or last 4 of the PSID), Manila time, size, brand, problem, location, the photo or video, and a link to
+  name, Manila time, size, brand, problem, location, the photo or video, and a link to
   the Page inbox. On a computer and on iPhone the button is the inbox list,
   `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}`.
   Putting the thread number in `selected_item_id` redirects to facebook.com
   (`bpn_id`, `asset_id`, `nav_ref=manage_page_ap_plus_default`) and shows
   "Sorry, this content isn't available right now", so that deep link is not the button.
   The card shows the customer name and **Kopyahin ang pangalan**, which copies it for the inbox search.
+  If the profile lookup fails, the card and the push say `Customer ••` plus the last 4 digits of the PSID.
+  That label is not copied. **Kopyahin ang mensahe** copies the customer's first message instead, for the same inbox search.
+  A name the customer states in chat (`ako si`, `pangalan ko si`, `my name is`) is kept as a booking fact and used when the profile has no name.
   `GET /admin/inbox-candidates?psid=` (Bearer `ADMIN_TOKEN`) returns the PSID, Graph conversation id,
   `/inbox/{digits}/` thread number, participant ids, the Page business id, and candidate URLs
   (`latest/inbox/all`, `latest/inbox/messenger`, with and without `bpn_id`, `facebook.com/messages/t/`).

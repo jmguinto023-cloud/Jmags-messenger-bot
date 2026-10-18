@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startMock({ llmResponder } = {}) {
-  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [], conversations: [] };
+  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [], conversations: [], lookups: [] };
   const state = { llmResponder: llmResponder || (() => 'Noted po maam/sir 😊 Taga saan po sila?'), llmFail: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -60,7 +60,10 @@ function startMock({ llmResponder } = {}) {
       }
       if (req.method === 'GET') {
         const id = decodeURIComponent(url.pathname.split('/').pop() || '');
+        const fields = url.searchParams.get('fields') || '';
+        if (id && fields) calls.lookups.push({ id, fields });
         if (state.profiles && state.profiles[id]) return json(200, state.profiles[id]);
+        if (state.profileStatus) return json(state.profileStatus, { error: { message: 'profile lookup denied' } });
       }
       return json(404, { error: { message: 'mock: unknown path ' + url.pathname } });
     });
