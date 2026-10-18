@@ -82,6 +82,10 @@ function createServer({ cfg, bot, log }) {
       );
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/admin/paused') {
+      if (!authorized(cfg, req)) return send(403, 'Forbidden');
+      return sendJson(200, bot.pausedThreads());
+    }
     if (req.method === 'GET' && url.pathname === '/admin/conversations') {
       if (!authorized(cfg, req)) return send(403, 'Forbidden');
       const since = url.searchParams.get('since');

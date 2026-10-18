@@ -31,6 +31,11 @@ function loadConfig(env = process.env) {
     // Echoes from these app ids are Meta automations, not a person in Page Inbox.
     // They are logged and do not start the human pause. Empty = no ids ignored.
     pageAiAppIds: list(env.PAGE_AI_APP_IDS),
+    // Page Inbox echoes that look automated (saved/instant reply, greeting, away message,
+    // Meta AI) never start the human pause. Extra regexes: AUTOMATED_ECHO_PATTERNS, separated by "||".
+    automatedEchoPatterns: (env.AUTOMATED_ECHO_PATTERNS || '').split('||').map((x) => x.trim()).filter(Boolean),
+    // An inbox echo this soon after the customer's message is an automation, not Ivan typing.
+    automatedEchoWindowMs: num(env.AUTOMATED_ECHO_WINDOW_MS, 10000),
     needsIvanLabel: env.NEEDS_IVAN_LABEL || '', // empty = don't label on handoff; photo/video uses "Video for review"
     alertWebhookUrl: env.ALERT_WEBHOOK_URL || '',
     vapidPublicKey: env.VAPID_PUBLIC_KEY || '',
@@ -55,6 +60,8 @@ function loadConfig(env = process.env) {
     // Behaviour
     historyTurns: num(env.HISTORY_TURNS, 20),
     humanPauseHours: num(env.HUMAN_PAUSE_HOURS, 12),
+    // Safety: a human pause ends early when Ivan has not replied for this long (0 = off).
+    humanIdleResumeHours: num(env.HUMAN_IDLE_RESUME_HOURS, 2),
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 72),
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
     followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),

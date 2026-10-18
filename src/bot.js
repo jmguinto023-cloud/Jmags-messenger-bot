@@ -24,6 +24,22 @@ function isFilledUp(text) {
   return /na-?fill|filled(?: it up)?|\bdone\b|submitted|tapos na|na fill/i.test(text || '');
 }
 
+// Business Suite saved/instant replies, greetings and away messages JMAG's has set up.
+const AUTOMATED_ECHO_RE = [
+  /welcome sa jmag/i,
+  /unit\s*\/\s*brand\s*:/i,
+  /unit size\s*:/i,
+  /ask ko lang po (kung ano ang brand|mga sumusunod)/i,
+  /thanks for (contacting|messaging|reaching out)/i,
+  /we('| a)re (currently )?away|we will get back to you|we'll get back to you/i,
+];
+function isAutomatedEchoText(text, extra = []) {
+  const s = String(text || '');
+  if (!s) return false;
+  if (AUTOMATED_ECHO_RE.some((re) => re.test(s))) return true;
+  return extra.some((p) => { try { return new RegExp(p, 'i').test(s); } catch { return false; } });
+}
+
 function isCannedLine(text) {
   return text === lines.fallback || text === lines.holding || text === lines.holdingMedia || text === lines.holdingPerson;
 }
@@ -254,7 +270,7 @@ class Bot {
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.handedOff) return `handed off to Ivan (${t.handoffReason})`;
-    if (t.pausedUntil && now < t.pausedUntil) return 'paused: a human replied recently';
+    if (this.humanPaused(t, now)) return 'paused: a human replied recently';
     if (!isActiveNow(this.cfg, new Date(now))) return 'outside BOT_ACTIVE_HOURS';
     if (now - (ts || t.lastUserTs) > this.cfg.replyWindowHours * HOUR) return 'outside 24h messaging window';
     return '';
@@ -559,6 +575,7 @@ class Bot {
     if (appId && this.cfg.ignoreEchoAppIds.includes(appId)) return;
     if (this.store.seen(m.mid)) return;
     const t = this.store.thread(psid);
+    const at = Number(ev.timestamp) || this.now();
     // Meta's own inbox automation, not a person typing in Page Inbox.
     if (appId && (this.cfg.pageAiAppIds || []).includes(appId)) {
       if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
@@ -566,12 +583,83 @@ class Bot {
       this.log.info(`page AI echo for ${short(psid)} app_id=${appId} – not pausing`);
       return;
     }
-    // A person (Ivan) or another tool replied from the Page: pause the bot here.
+    // Saved reply / instant reply / greeting / away message / Meta AI from the Page Inbox app.
+    const auto = this.automatedEchoReason(t, m, at);
+    if (auto) {
+      t.lastAutoEchoAt = at;
+      if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
+      this.store.save();
+      this.log.info(`automated echo for ${short(psid)} app_id=${appId || 'none'} (${auto}) – not pausing`);
+      return;
+    }
+    // A person (Ivan) replied from the Page: pause the bot here.
     t.pausedUntil = this.now() + this.cfg.humanPauseHours * HOUR;
+    t.lastHumanEchoAt = this.now();
+    t.pauseSource = `human echo app_id=${appId || 'none'}`;
     if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
     this.cancelPending(psid);
     this.store.save();
     this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseHours}h`);
+  }
+
+  // Why a Page echo is an automation rather than Ivan typing ('' = treat as human).
+  automatedEchoReason(t, m, at) {
+    if (isAutomatedEchoText(m.text, this.cfg.automatedEchoPatterns)) return 'automated template text';
+    const win = this.cfg.automatedEchoWindowMs;
+    if (win > 0 && t.lastUserTs && at >= t.lastUserTs && at - t.lastUserTs <= win) return `sent ${Math.round((at - t.lastUserTs) / 1000)}s after the customer`;
+    if (win > 0 && t.lastAutoEchoAt && at >= t.lastAutoEchoAt && at - t.lastAutoEchoAt <= win) return 'follows an automated echo';
+    return '';
+  }
+
+  // Human pause still in force? Ends early when Ivan has gone quiet (HUMAN_IDLE_RESUME_HOURS).
+  humanPaused(t, now = this.now()) {
+    if (!t.pausedUntil || now >= t.pausedUntil) return false;
+    const idle = this.cfg.humanIdleResumeHours;
+    if (idle > 0) {
+      const last = t.lastHumanEchoAt || (t.pausedUntil - this.cfg.humanPauseHours * HOUR);
+      if (now - last > idle * HOUR) {
+        t.pausedUntil = 0; t.pauseSource = '';
+        this.store.save();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Startup: clear pauses that older code set from automated echoes (template text or an
+  // echo seconds after the customer). Returns the psids cleared.
+  clearAutomatedPauses() {
+    const cleared = [];
+    const now = this.now();
+    for (const [psid, t] of Object.entries(this.store.data.threads || {})) {
+      if (!t.pausedUntil || now >= t.pausedUntil || t.lastHumanEchoAt) continue;
+      const start = t.pausedUntil - this.cfg.humanPauseHours * HOUR;
+      const hist = t.history || [];
+      const trigger = hist.filter((h) => h.role === 'assistant' && Math.abs(h.ts - start) <= 2000);
+      if (!trigger.length) continue;
+      const users = hist.filter((h) => h.role === 'user' && h.ts <= start);
+      const lastUser = users.length ? users[users.length - 1].ts : 0;
+      const win = this.cfg.automatedEchoWindowMs;
+      const auto = trigger.every((h) => isAutomatedEchoText(h.content, this.cfg.automatedEchoPatterns)
+        || (win > 0 && lastUser && start - lastUser <= win));
+      if (!auto) continue;
+      t.pausedUntil = 0; t.pauseSource = '';
+      cleared.push(psid);
+      this.log.info(`cleared automated-echo pause for ${short(psid)}`);
+    }
+    if (cleared.length) this.store.save();
+    return cleared;
+  }
+
+  // Admin: threads the bot is currently silent in.
+  pausedThreads() {
+    const now = this.now();
+    return Object.entries(this.store.data.threads || {})
+      .filter(([, t]) => t.handedOff || (t.pausedUntil && now < t.pausedUntil))
+      .map(([psid, t]) => ({
+        psid, last4: String(psid).slice(-4), handedOff: Boolean(t.handedOff), handoffReason: t.handoffReason || '',
+        pausedUntil: t.pausedUntil ? new Date(t.pausedUntil).toISOString() : '', pauseSource: t.pauseSource || '',
+      }));
   }
 
   onThreadControl(ev) {
@@ -628,7 +716,7 @@ class Bot {
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.intakeCloseSent || t.tipsSent) return 'intake closed, waiting on the technician';
     if (t.handedOff) return 'handed off';
-    if (t.pausedUntil && now < t.pausedUntil) return 'paused for a human';
+    if (this.humanPaused(t, now)) return 'paused for a human';
     if (now - (t.lastUserTs || 0) > windowMs) return 'outside 23h messaging window';
     const last = (t.history || [])[(t.history || []).length - 1];
     if (!last || last.role !== 'assistant') return 'customer spoke last';
@@ -759,4 +847,4 @@ class Bot {
   }
 }
 
-module.exports = { Bot, isActiveNow, keywordHit };
+module.exports = { Bot, isActiveNow, keywordHit, isAutomatedEchoText };
