@@ -200,12 +200,14 @@ function createServer({ cfg, bot, log }) {
         period: u.searchParams.get('period') || 'month',
         status: u.searchParams.get('status') || '',
         edit: u.searchParams.get('edit') || '',
+        group: u.searchParams.get('group') || '',
         now: bot.now(),
         tz: cfg.timezone,
         dailyOn: cfg.dailyStatusUpdates,
         deliveryOn: cfg.deliveryNotifications,
         threads: bot.store.data.threads || {},
         reviews: bot.store.data.reviews || [],
+        bookingFormUrl: cfg.bookingFormUrl || '',
         cfg,
       };
     }
