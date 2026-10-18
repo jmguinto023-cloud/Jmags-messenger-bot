@@ -66,7 +66,7 @@ npm start           # run (needs env, see .env.example)
   cards, `conversations.jsonl` lines, and any push subscription stored for that PSID, and returns the counts.
 - `GET /` is a public page (no login) for JMAG's Appliances: home-service TV and appliance repair,
   service areas Cavite, Laguna, and Batangas, branches in San Pablo City, Laguna and General Trias, Cavite,
-  the two shop phones, and a Messenger link to the Facebook Page. The footer links to `/privacy` and `/data-deletion`.
+  the two shop phones, and a Messenger link to the Facebook Page. The page states that JMAG's Appliances is operated by JMAG ELECTRONIC SERVICE CENTER. The footer links to `/privacy` and `/data-deletion`.
 - `GET /privacy` and `GET /data-deletion` are public (no login). Meta's data-deletion callback is
   `POST /data-deletion-callback` (`signed_request` checked with APP_SECRET). A valid request deletes that
   user id and returns `{url, confirmation_code}`. The status is shown at `/data-deletion?code=`.

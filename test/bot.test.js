@@ -1656,6 +1656,7 @@ function assertLegalPage(html, otherPath) {
   assert.equal(html.includes('['), false);
   assert.doesNotMatch(html, /email/i);
   assert.match(html, /October 18, 2026/);
+  assert.match(html, /<footer>[\s\S]*JMAG's Appliances is operated by JMAG ELECTRONIC SERVICE CENTER\./);
   assert.match(html, /San Pablo City, Laguna and General Trias, Cavite, Philippines/);
   assert.match(html, /09386369374 \(Smart\)/);
   assert.match(html, /09267229506 \(Globe\)/);
@@ -1952,7 +1953,7 @@ test('homepage is public and the other routes stay put', async () => {
     assert.equal(home.status, 200);
     assert.match(home.headers.get('content-type'), /text\/html/);
     assert.match(html, /name="viewport"/);
-    assert.match(html, /JMAG's Appliances/);
+    assert.match(html, /JMAG's Appliances is operated by JMAG ELECTRONIC SERVICE CENTER\./);
     assert.match(html, /home-service TV and appliance repair/i);
     assert.match(html, /Cavite, Laguna, and Batangas/);
     assert.match(html, /San Pablo City, Laguna and General Trias, Cavite, Philippines/);
