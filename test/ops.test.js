@@ -118,11 +118,21 @@ test('money totals, job ids, warranty date, and sample replies', () => {
   assert.equal(jobBalance({ ...jobs[0], importedPaid: 1500 }, []), 3500);
 
   const noted = { status: 'Under Repair', statusNote: 'hinihintay po ang backlight' };
-  assert.equal(jobStatusText(noted), 'Hello po 😊 Yung TV niyo po ay naka-under repair na. Note ni Ivan: hinihintay po ang backlight. Babalikan po namin kayo.');
+  assert.equal(jobStatusText(noted), 'Hello po 😊 Yung TV niyo po ay naka-under repair na. Note: hinihintay po ang backlight. Babalikan po namin kayo.');
+  assert.doesNotMatch(jobStatusText(noted), /Note ni Ivan|inaayos ni Ivan/i);
   assert.equal(
-    dailyStatusText({ status: 'Under Repair', statusNote: 'Si Ivan po ay inaayos na ang backlight' }),
-    'Hello po 😊 Update lang po sa TV niyo. Under repair pa po. Si Ivan po ay inaayos na ang backlight. Babalikan po namin kayo pag tapos na.',
+    dailyStatusText({ status: 'Under Repair', statusNote: '' }),
+    'Hello po 😊 Under repair pa din po ang status ng TV niyo. Babalikan po namin kayo pag tapos na.',
   );
+  assert.equal(
+    dailyStatusText({ status: 'Under Repair', statusNote: 'hinihintay po ang piyesa (backlight)' }),
+    'Hello po 😊 Under repair pa din po ang status ng TV niyo. Note: hinihintay po ang piyesa (backlight). Babalikan po namin kayo pag tapos na.',
+  );
+  assert.equal(
+    dailyStatusText({ status: 'Under Repair', statusNote: 'Inaayos na po ng technician namin' }),
+    'Hello po 😊 Under repair pa din po ang status ng TV niyo. Note: Inaayos na po ng technician namin. Babalikan po namin kayo pag tapos na.',
+  );
+  assert.doesNotMatch(dailyStatusText({ statusNote: 'Inaayos na po ng technician namin' }), /Ivan/);
   const warranty = warrantyText({ date: '2026-10-18', warrantyEnd: '2027-01-18' });
   assert.equal(warranty, 'Hello po 😊 Nasa warranty pa po ang unit hanggang 18 Enero 2027. Pakisend lang po ng issue at video para ma-check ni Ivan. Hindi pa po ako makakapangako kung covered.');
   assert.doesNotMatch(warranty, /\blibre\b|siguradong covered|covered po ito/i);
@@ -471,7 +481,7 @@ test('daily status stays off until enabled, sends once inside 24h, and lists the
     ensureOps(s.app.store);
     s.app.store.data.ops.jobs.push({
       id: 'JO-261018-001', date: '2026-10-18', customerName: 'Liza Mercado', phone: '09170001122',
-      status: 'Under Repair', branch: 'San Pablo', psid, statusNote: 'Si Ivan po ay inaayos na ang backlight',
+      status: 'Under Repair', branch: 'San Pablo', psid, statusNote: 'hinihintay po ang piyesa (backlight)',
       warrantyEnd: '2027-01-18', price: 5000,
     });
     s.app.store.addTurn(psid, 'user', 'hello po', TEN_AM - 60 * 60 * 1000);
@@ -487,7 +497,7 @@ test('daily status stays off until enabled, sends once inside 24h, and lists the
     const sent = await s.app.bot.checkFollowups();
     void sent;
     assert.equal(s.mock.calls.messages.length, 1);
-    assert.equal(s.mock.calls.messages[0].message.text, 'Hello po 😊 Update lang po sa TV niyo. Under repair pa po. Si Ivan po ay inaayos na ang backlight. Babalikan po namin kayo pag tapos na.');
+    assert.equal(s.mock.calls.messages[0].message.text, 'Hello po 😊 Under repair pa din po ang status ng TV niyo. Note: hinihintay po ang piyesa (backlight). Babalikan po namin kayo pag tapos na.');
     assert.equal(s.mock.calls.messages[0].messaging_type, 'RESPONSE');
     await s.app.bot.maybeDailyStatus(TEN_AM);
     assert.equal(s.mock.calls.messages.length, 1);

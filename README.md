@@ -146,9 +146,10 @@ npm start           # run (needs env, see .env.example)
   and address are never sent. A problem reported again while the unit is inside warranty (job date + 3 months)
   gets the warranty end date, a request for the issue and a video, and a handoff, with no promise of coverage.
 - `DAILY_STATUS_UPDATES` defaults off. When on, Under Repair jobs with a linked chat get one short Taglish
-  update per Manila day from about 10:00 until 19:00, and only inside `REPLY_WINDOW_HOURS`. Outside that
-  window the send is skipped and Today lists **Needs text update** with the phone. Paused and handed-off chats
-  are skipped. Sample lines are in the pull request, not sent until the flag is turned on.
+  update per Manila day from about 10:00 until 19:00, and only inside `REPLY_WINDOW_HOURS`. It opens with
+  "Hello po 😊 Under repair pa din po ang status ng TV niyo." Repair work is "technician namin", not Ivan.
+  A status answer labels the shop note "Note:". Outside the reply window the send is skipped and Today lists
+  **Needs text update** with the phone. Paused and handed-off chats are skipped. Nothing is sent until the flag is turned on.
 
 ## Deploy (Render)
 `render.yaml` = Docker web service, Starter plan, Singapore, `/health` check, 1 GB disk at `/data`, `autoDeploy: false`.

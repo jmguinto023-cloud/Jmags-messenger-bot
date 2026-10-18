@@ -637,21 +637,23 @@ function longDate(ymd) {
   return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}`;
 }
 
+function noteSentence(note) {
+  const body = String(note || '').trim().replace(/^note:\s*/i, '');
+  if (!body) return '';
+  const sentence = /[.!?]$/.test(body) ? body : `${body}.`;
+  return `Note: ${sentence}`;
+}
+
 function jobStatusText(job) {
-  const note = String(job.statusNote || '').trim();
   const status = friendlyStatus(job.status);
-  if (note) {
-    const line = /[.!?]$/.test(note) ? note : `${note}.`;
-    return `Hello po 😊 Yung TV niyo po ay ${status}. Note ni Ivan: ${line} Babalikan po namin kayo.`;
-  }
+  const note = noteSentence(job.statusNote);
+  if (note) return `Hello po 😊 Yung TV niyo po ay ${status}. ${note} Babalikan po namin kayo.`;
   return `Hello po 😊 Yung TV niyo po ay ${status}. Babalikan po namin kayo pag may update.`;
 }
 
 function dailyStatusText(job) {
-  const note = String(job.statusNote || '').trim();
-  const noteLine = note ? (/\.$/.test(note) ? note : `${note}.`) : '';
-  const statusLine = job.status === 'Under Repair' ? 'Under repair pa po.' : `${friendlyStatus(job.status)}.`;
-  return `Hello po 😊 Update lang po sa TV niyo. ${statusLine}${noteLine ? ` ${noteLine}` : ''} Babalikan po namin kayo pag tapos na.`;
+  const note = noteSentence(job.statusNote);
+  return `Hello po 😊 Under repair pa din po ang status ng TV niyo.${note ? ` ${note}` : ''} Babalikan po namin kayo pag tapos na.`;
 }
 
 function warrantyEndOf(job) {
