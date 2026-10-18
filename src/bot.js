@@ -6,7 +6,7 @@ const { sanitizeOutgoing, bookingFormMessage } = lines;
 const { short } = require('./log');
 const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
-const { summarizeConversation } = require('./summary');
+const { summarizeConversation, firstCustomerSnippet, customerLabel } = require('./summary');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
 const {
@@ -330,12 +330,15 @@ class Bot {
       this.log.warn('label failed (optional)', e.message);
     }
     const snippet = String((t.history || []).filter((h) => h.role === 'user').at(-1)?.content || '').slice(0, 200);
+    const firstMessage = firstCustomerSnippet(t.history);
     const when = new Date(this.now()).toISOString();
     const summary = summarizeConversation(t.history);
     let customerName = '';
     try { customerName = await this.graph.userName(psid); } catch { customerName = ''; }
     const convo = await this.graph.findConversation(psid);
     if (!customerName && convo && convo.name) customerName = convo.name;
+    if (!customerName && summary.name) customerName = summary.name;
+    const shown = customerLabel(customerName, psid);
     for (const m of items) {
       const type = m.type === 'image' ? 'photo' : m.type;
       this.store.addReview({
@@ -345,6 +348,7 @@ class Bot {
         psidHash: psidHash(psid),
         psidLast4: String(psid).slice(-4),
         customerName,
+        firstMessage,
         summary,
         status: 'new',
         type,
@@ -361,7 +365,7 @@ class Bot {
         try {
           await this.push.notify({
             title: type === 'video' ? 'New video to review' : 'New photo to review',
-            body: `…${String(psid).slice(-4)} sent a ${type}`,
+            body: `${shown} sent a ${type}`,
             url: '/dashboard',
           });
         } catch (e) { this.log.warn('push notify failed', e.message); }
@@ -764,16 +768,25 @@ class Bot {
       const needsName = !String(row.customerName || '').trim();
       if (!needsId && !needsName) continue;
       const found = await this.graph.findConversation(row.psid);
-      if (!found) continue;
-      if (needsId && found.id) {
-        row.conversationId = found.id;
-        row.conversationLink = found.link || '';
-        row.conversationUpdatedTime = found.updatedTime || '';
-        changed = true;
+      if (found) {
+        if (needsId && found.id) {
+          row.conversationId = found.id;
+          row.conversationLink = found.link || '';
+          row.conversationUpdatedTime = found.updatedTime || '';
+          changed = true;
+        }
+        if (needsName && found.name) {
+          row.customerName = found.name;
+          changed = true;
+        }
       }
-      if (needsName && found.name) {
-        row.customerName = found.name;
-        changed = true;
+      if (!String(row.customerName || '').trim()) {
+        const thread = this.store.data.threads[row.psid];
+        const chatName = thread && summarizeConversation(thread.history).name;
+        if (chatName) {
+          row.customerName = chatName;
+          changed = true;
+        }
       }
     }
     if (changed) this.store.save();

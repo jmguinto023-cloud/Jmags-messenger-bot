@@ -133,7 +133,8 @@ class Graph {
     this.businessCache = { at: Date.now(), value };
     return value;
   }
-  // Best-effort public name. Missing permission or a failed lookup just returns ''.
+  // Best-effort public name. Missing permission (often HTTP 400 until Advanced Access)
+  // or a failed lookup just returns ''. Only the name field is requested. A photo is not.
   async userName(psid) {
     try {
       const json = await this.call('GET', encodeURIComponent(psid), { params: { fields: 'name' } });

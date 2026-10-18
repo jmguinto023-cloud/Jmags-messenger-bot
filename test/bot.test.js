@@ -13,7 +13,7 @@ const { parseSignedRequest } = require('../src/signed-request');
 const { parseHandoff, normalizeTurns } = require('../src/llm');
 const { sanitizeOutgoing } = require('../src/messages');
 const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
-const { summarizeConversation } = require('../src/summary');
+const { summarizeConversation, customerLabel } = require('../src/summary');
 const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
 const { visibleHistory, asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
@@ -1656,6 +1656,7 @@ function assertLegalPage(html, otherPath) {
   assert.equal(html.includes('['), false);
   assert.doesNotMatch(html, /email/i);
   assert.match(html, /October 18, 2026/);
+  assert.match(html, /<footer>[\s\S]*JMAG's Appliances is operated by JMAG ELECTRONIC SERVICE CENTER\./);
   assert.match(html, /San Pablo City, Laguna and General Trias, Cavite, Philippines/);
   assert.match(html, /09386369374 \(Smart\)/);
   assert.match(html, /09267229506 \(Globe\)/);
@@ -1942,4 +1943,113 @@ test('isAutomatedEchoText matches saved-reply templates and custom patterns only
   assert.equal(isAutomatedEchoText('Maraming salamat po.'), false);
   assert.equal(isAutomatedEchoText('Salamat sa pag message sa JMAG', ['pag message sa jmag']), true);
   assert.equal(isAutomatedEchoText('', []), false);
+});
+
+test('homepage is public and the other routes stay put', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  try {
+    const home = await fetch(`${s.base}/`);
+    const html = await home.text();
+    assert.equal(home.status, 200);
+    assert.match(home.headers.get('content-type'), /text\/html/);
+    assert.match(html, /name="viewport"/);
+    assert.match(html, /JMAG's Appliances is operated by JMAG ELECTRONIC SERVICE CENTER\./);
+    assert.match(html, /home-service TV and appliance repair/i);
+    assert.match(html, /Cavite, Laguna, and Batangas/);
+    assert.match(html, /San Pablo City, Laguna and General Trias, Cavite, Philippines/);
+    assert.match(html, /09386369374 \(Smart\)/);
+    assert.match(html, /09267229506 \(Globe\)/);
+    assert.match(html, /Message us on Messenger/);
+    assert.match(html, /https:\/\/m\.me\/102622881557025/);
+    assert.match(html, /href="\/privacy"/);
+    assert.match(html, /href="\/data-deletion"/);
+    assert.match(html, /<footer>/);
+    assert.equal(html.includes('['), false);
+    assert.doesNotMatch(html, /email/i);
+    assert.doesNotMatch(html, /₱|\bprice\b|\bpeso\b/i);
+    assert.doesNotMatch(html, /type="password"/);
+
+    const health = await fetch(`${s.base}/health`);
+    assert.equal(health.status, 200);
+    assert.match(health.headers.get('content-type'), /json/);
+    assert.equal((await health.json()).ok, true);
+    const dash = await fetch(`${s.base}/dashboard`);
+    assert.equal(dash.status, 200);
+    assert.match(await dash.text(), /Log in/);
+    assert.equal((await fetch(`${s.base}/webhook`)).status, 403);
+    assert.equal((await fetch(`${s.base}/admin/paused`)).status, 403);
+    assert.equal((await fetch(`${s.base}/admin/paused`, { headers: { Authorization: 'Bearer adm' } })).status, 200);
+    const raw = JSON.stringify({ object: 'page', entry: [] });
+    const hook = await fetch(`${s.base}/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: raw });
+    assert.equal(hook.status, 401);
+  } finally { await s.close(); }
+});
+
+test('profile lookup requests name only, not a profile picture', async () => {
+  const s = await setup();
+  s.mock.state.profiles = { 'pic-1001': { name: 'Liza Ramos' } };
+  try {
+    await s.post(msg('pic-1001', { attachments: [{ type: 'image', payload: { url: 'https://cdn.example/pic.jpg' } }] }));
+    const mine = s.mock.calls.lookups.filter((c) => c.id === 'pic-1001');
+    assert.ok(mine.some((c) => c.fields === 'name'));
+    assert.equal(mine.some((c) => /profile_pic/.test(c.fields)), false);
+    assert.equal(s.mock.calls.lookups.some((c) => /profile_pic/.test(c.fields)), false);
+    assert.equal(fs.readFileSync(path.join(__dirname, '../src/graph.js'), 'utf8').includes('profile_pic'), false);
+    assert.equal(fs.readFileSync(path.join(__dirname, '../public/privacy.html'), 'utf8').includes('profile picture'), false);
+  } finally { await s.close(); }
+});
+
+test('a missing name shows Customer plus the last 4 digits, and the copy button uses the first message', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret' });
+  s.mock.state.profileStatus = 400;
+  const sent = [];
+  s.app.store.writeSubscriptions([{ endpoint: 'https://push.example/s', keys: { p256dh: 'a', auth: 'b' } }]);
+  s.app.cfg.vapidPublicKey = 'pub';
+  s.app.cfg.vapidPrivateKey = 'priv';
+  s.app.push._client = { sendNotification: async (_sub, body) => { sent.push(JSON.parse(body)); } };
+  try {
+    await s.post(msg('blank-4412', { text: 'sira po yung tv namin' }));
+    await s.post(msg('blank-4412', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/blank.mp4' } }] }));
+    const row = s.app.store.data.reviews.find((r) => r.psid === 'blank-4412');
+    assert.equal(row.customerName, '');
+    assert.equal(row.firstMessage, 'sira po yung tv namin');
+    assert.equal(sent[0].body, 'Customer ••4412 sent a video');
+    const { cookie } = await dashCookie(s.base);
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.match(html, /Customer ••4412/);
+    assert.equal(html.includes('Kopyahin ang pangalan'), false);
+    assert.match(html, /Kopyahin ang mensahe/);
+    assert.match(html, /data-copy-text="sira po yung tv namin"/);
+    assert.equal(html.includes('data-copy-name='), false);
+    assert.match(fs.readFileSync(path.join(__dirname, '../public/dashboard.js'), 'utf8'), /Nakopya ang mensahe/);
+
+    s.app.store.addTurn('blank-4412', 'user', 'ako po si Pedro Santos', Date.now());
+    const again = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.equal(s.app.store.data.reviews.find((r) => r.psid === 'blank-4412').customerName, 'Pedro Santos');
+    assert.match(again, /Pedro Santos/);
+    assert.match(again, /data-copy-name="Pedro Santos"/);
+    assert.match(again, /Kopyahin ang pangalan/);
+    assert.equal(again.includes('Customer ••4412'), false);
+  } finally { await s.close(); }
+});
+
+test('a name the customer already gave is preferred over the blank profile', async () => {
+  const s = await setup();
+  s.mock.state.profileStatus = 400;
+  try {
+    await s.post(msg('said-2200', { text: 'pangalan ko si Ana Reyes, Samsung 32 inch sa Laguna' }));
+    await s.post(msg('said-2200', { attachments: [{ type: 'image', payload: { url: 'https://cdn.example/ana.jpg' } }] }));
+    const row = s.app.store.data.reviews.find((r) => r.psid === 'said-2200');
+    assert.equal(row.customerName, 'Ana Reyes');
+    assert.equal(row.summary.name, 'Ana Reyes');
+    assert.equal(row.summary.brand, 'Samsung');
+    const history = [
+      { role: 'assistant', content: 'Ako si Ivan ng shop' },
+      { role: 'user', content: 'my name is Luis Gomez. TCL 43 inch.' },
+    ];
+    assert.equal(summarizeConversation(history).name, 'Luis Gomez');
+    assert.equal(summarizeConversation([{ role: 'assistant', content: 'ako si Ivan' }]).name, '');
+    assert.equal(customerLabel('', '99887766'), 'Customer ••7766');
+    assert.equal(customerLabel('Ana Reyes', '2200'), 'Ana Reyes');
+  } finally { await s.close(); }
 });
