@@ -7,6 +7,7 @@ const { short } = require('./log');
 const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
 const { summarizeConversation, firstCustomerSnippet, customerLabel } = require('./summary');
+const { quietDeferUntil, videoFollowupText } = require('./video-followup');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
 const {
@@ -22,6 +23,12 @@ function isBookingIntentHandoff(reason) {
 
 function isFilledUp(text) {
   return /na-?fill|filled(?: it up)?|\bdone\b|submitted|tapos na|na fill/i.test(text || '');
+}
+
+// These stops mean we chose not to message. The generic follow-up must not send instead.
+function videoFollowupHoldsGeneric(t) {
+  return t.videoFollowupStopped === 'quiet hours past the 24h window'
+    || t.videoFollowupStopped === 'outside 24h messaging window';
 }
 
 // Business Suite saved/instant replies, greetings and away messages JMAG's has set up.
@@ -110,6 +117,8 @@ class Bot {
     this.inflight = new Set();
     this.rev = new Map(); // bumps when a new customer message should be included in the reply
     this.repliedRev = new Map(); // last revision we already answered
+    this.dashInflight = new Map(); // psid -> { text, promise } so a double-tap sends once
+    this.dashRecent = new Map(); // psid -> { text, at } short repeat window after a dashboard send
   }
 
   // Entry point for a verified webhook body. Never throws.
@@ -181,6 +190,13 @@ class Bot {
     this.store.addTurn(psid, 'user', logText, ts);
 
     const t = this.store.thread(psid);
+    // A new customer message ends a closed video follow-up, so a later silence
+    // can use the normal quiet-customer nudge again.
+    if (t.videoFollowupStopped && !(t.videoReplyAt && ts > t.videoReplyAt)) {
+      t.videoFollowupStopped = '';
+      this.store.save();
+    }
+    if (t.videoReplyAt && ts > t.videoReplyAt) this.stopVideoFollowup(psid, 'customer replied');
     if (note) {
       t.mediaNotes = t.mediaNotes || [];
       t.mediaNotes.push(note);
@@ -194,9 +210,12 @@ class Bot {
       t.awaitingVideo = false;
     }
     if (isStandby) {
+      t.standby = true;
+      this.stopVideoFollowup(psid, 'standby, another app owns the thread');
       await this.publishPendingMedia(psid, { quiet: true });
       return this.onStandby(psid, t);
     }
+    t.standby = false;
     if (t.bookingFormSent && isFilledUp(text)) {
       t.bookingDone = true;
       this.store.save();
@@ -403,6 +422,7 @@ class Bot {
       updateIntake(t, '', Boolean((t.pendingMedia || []).length) || t.problemViaVideo);
 
       const hadMedia = Boolean((t.pendingMedia || []).length);
+      const hadVideo = (t.pendingMedia || []).some((m) => m.type === 'video');
       const attachmentNote = t.attachmentNote || '';
       t.attachmentNote = '';
       await this.flagPendingMedia(psid);
@@ -415,7 +435,7 @@ class Bot {
       const latestUser = latestUserText(t);
       if (asksCheckupFee(latestUser)) {
         this.repliedRev.set(psid, rev);
-        if (hadMedia) await this.sendMediaAck(psid, CHECKUP_FEE_PLAIN, true);
+        if (hadMedia) await this.sendMediaAck(psid, CHECKUP_FEE_PLAIN, true, { armVideo: hadVideo });
         else await this.send(psid, CHECKUP_FEE_PLAIN);
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
@@ -427,20 +447,20 @@ class Bot {
         t.awaitingVideo = false;
         if (hadMedia) t.lastMediaAckAt = this.now();
         this.repliedRev.set(psid, rev);
-        await this.send(psid, CLOSE_LINE);
+        await this.send(psid, CLOSE_LINE, { armVideo: hadVideo });
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
       }
 
       if (reviewPending(t) && asksReviewStatus(latestUser)) {
         this.repliedRev.set(psid, rev);
-        await this.send(psid, PENDING_REVIEW_STATUS);
+        await this.send(psid, PENDING_REVIEW_STATUS, { armVideo: hadVideo });
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
       }
       if (reviewPending(t) && isUnclearDuringReview(latestUser)) {
         this.repliedRev.set(psid, rev);
-        await this.send(psid, REVIEW_CLARIFY);
+        await this.send(psid, REVIEW_CLARIFY, { armVideo: hadVideo });
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
       }
@@ -463,7 +483,7 @@ class Bot {
         if (hadMedia) {
           this.log.error(`LLM failed for media from ${short(psid)} (staying in chat):`, e.message);
           this.repliedRev.set(psid, rev);
-          await this.sendMediaAck(psid, lines.mediaAck, hadMedia);
+          await this.sendMediaAck(psid, lines.mediaAck, hadMedia, { armVideo: hadVideo });
           return;
         }
         const status = Number(e.status) || 0;
@@ -494,9 +514,9 @@ class Bot {
       this.repliedRev.set(psid, rev);
       // A photo or video never passes the thread. A keyword in the caption already handed off above.
       if (hadMedia && !t.intakeCloseSent) {
-        await this.sendMediaAck(psid, guarded, true);
+        await this.sendMediaAck(psid, guarded, true, { armVideo: hadVideo });
       } else if (hadMedia) {
-        await this.send(psid, guarded);
+        await this.send(psid, guarded, { armVideo: hadVideo });
         t.awaitingVideo = false;
       } else if (guarded === CLOSE_LINE || (t.intakeClosed && t.intakeCloseSent && guarded === CLOSE_LINE)) {
         await this.send(psid, guarded);
@@ -514,14 +534,14 @@ class Bot {
   }
 
   // One technician acknowledgement per short burst of attachments, not one per file.
-  async sendMediaAck(psid, text, hadMedia) {
+  async sendMediaAck(psid, text, hadMedia, opts = {}) {
     const t = this.store.thread(psid);
     const windowMs = Math.max(this.cfg.batchWindowMs || 0, 60 * 1000);
     const recent = t.lastMediaAckAt && this.now() - t.lastMediaAckAt < windowMs;
     const body = recent ? sanitizeOutgoing(text) : mediaReply(text);
     if (hadMedia && !recent) t.lastMediaAckAt = this.now();
     t.awaitingVideo = false;
-    await this.send(psid, body || lines.mediaAck);
+    await this.send(psid, body || lines.mediaAck, opts);
     t.awaitingVideo = false;
   }
 
@@ -531,7 +551,9 @@ class Bot {
     await this.graph.sendText(psid, clean);
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
-    if (t.problemViaVideo || t.intakeClosed || opts.tips) t.awaitingVideo = false;
+    if (opts.videoFollowup) {
+      // This nudge talks about the video they already sent. It is not a request for another one.
+    } else if (t.problemViaVideo || t.intakeClosed || opts.tips) t.awaitingVideo = false;
     else if (/\bvideo\b/i.test(clean)) t.awaitingVideo = true;
     // Canned fallback/holding lines are not part of the chat the model sees,
     // or the next reply continues them ("Pasensya na po... Nandito pa po ako").
@@ -541,6 +563,7 @@ class Bot {
       handoffReason: t.handoffReason || '',
     });
     this.log.info(`replied to ${short(psid)} (${clean.length} chars)`);
+    if (opts.armVideo) this.armVideoFollowup(psid);
     if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
   }
 
@@ -555,10 +578,62 @@ class Bot {
     await this.send(psid, tips, { tips: true });
   }
 
+  // Ivan typed this on the video dashboard. One RESPONSE send, then the same
+  // pause a human inbox reply would set. The echo of our own app is ignored.
+  async replyFromDashboard(reviewId, text) {
+    const clean = sanitizeOutgoing(text);
+    if (!clean) return { ok: false, status: 400, error: 'Walang laman.' };
+    if (clean.length > 2000) return { ok: false, status: 400, error: 'Masyadong mahaba. Max 2000 characters.' };
+    const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
+    if (!row || !row.psid) return { ok: false, status: 404, error: 'Hindi makita ang chat.' };
+    const psid = row.psid;
+    const recent = this.dashRecent.get(psid);
+    if (recent && recent.text === clean && this.now() - recent.at < 3000) {
+      return { ok: true, status: 200, duplicate: true };
+    }
+    const inflight = this.dashInflight.get(psid);
+    if (inflight && inflight.text === clean) return inflight.promise;
+    if (inflight) return { ok: false, status: 409, error: 'Sandali lang, may pinapadala pa.' };
+    const t = this.store.thread(psid);
+    const last = t.lastUserTs || 0;
+    if (!last || this.now() - last > this.cfg.replyWindowHours * HOUR) {
+      this.log.info(`dashboard reply skipped for ${short(psid)}: outside 24h`);
+      return { ok: false, status: 409, error: 'Lampas na sa 24 oras, i-reply sa Business Suite' };
+    }
+    const promise = this.deliverDashboardReply(psid, clean);
+    this.dashInflight.set(psid, { text: clean, promise });
+    try {
+      return await promise;
+    } finally {
+      const cur = this.dashInflight.get(psid);
+      if (cur && cur.promise === promise) this.dashInflight.delete(psid);
+    }
+  }
+
+  async deliverDashboardReply(psid, clean) {
+    const sent = await this.graph.sendPageText(psid, clean);
+    const mid = sent && sent.message_id;
+    if (mid) this.store.seen(mid);
+    const now = this.now();
+    const t = this.store.thread(psid);
+    t.pausedUntil = now + this.cfg.humanPauseHours * HOUR;
+    t.lastHumanEchoAt = now;
+    t.pauseSource = 'dashboard reply';
+    this.stopVideoFollowup(psid, 'Ivan replied from the dashboard');
+    this.cancelPending(psid);
+    this.store.addTurn(psid, 'assistant', clean, now, { via: 'ivan' });
+    this.store.markIvanReplied(psid, now);
+    this.dashRecent.set(psid, { text: clean, at: now });
+    this.store.save();
+    this.log.info(`dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseHours}h`);
+    return { ok: true, status: 200 };
+  }
+
   async handoff(psid, reason, holdingText) {
     const t = this.store.thread(psid);
     if (t.handedOff) return;
     t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = reason; t.passedByBot = true;
+    this.stopVideoFollowup(psid, 'handed to Ivan');
     this.store.save();
     this.log.info(`HANDOFF ${short(psid)}: ${reason}`);
     try { await this.send(psid, holdingText); } catch (e) { this.log.error('holding line failed', e.message); }
@@ -575,7 +650,10 @@ class Bot {
     if (!psid) return;
     const m = ev.message;
     const appId = m.app_id !== undefined && m.app_id !== null ? String(m.app_id) : '';
-    if (appId && appId === this.cfg.appId) return; // our own reply
+    // Our own Send API call, including a reply Ivan typed on the dashboard.
+    // That path already paused the bot and stored the line. Ignoring the echo
+    // keeps it from being counted a second time.
+    if (appId && appId === this.cfg.appId) return;
     if (appId && this.cfg.ignoreEchoAppIds.includes(appId)) return;
     if (this.store.seen(m.mid)) return;
     const t = this.store.thread(psid);
@@ -600,7 +678,8 @@ class Bot {
     t.pausedUntil = this.now() + this.cfg.humanPauseHours * HOUR;
     t.lastHumanEchoAt = this.now();
     t.pauseSource = `human echo app_id=${appId || 'none'}`;
-    if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
+    this.stopVideoFollowup(psid, 'paused for a human');
+    if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now(), { via: 'ivan' });
     this.cancelPending(psid);
     this.store.save();
     this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseHours}h`);
@@ -677,10 +756,113 @@ class Bot {
       this.log.info(`thread control returned to bot for ${short(psid)} – auto-reply resumed`);
     } else if (newOwner) {
       t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = t.handoffReason || `control moved to app ${newOwner}`;
+      this.stopVideoFollowup(psid, 'handed to Ivan');
       this.cancelPending(psid);
       this.log.info(`thread control moved to ${newOwner} for ${short(psid)} – bot silent`);
     }
     this.store.save();
+  }
+
+  videoFollowupMax() {
+    return this.cfg.videoFollowup2Minutes > 0 ? 2 : 1;
+  }
+
+  videoFollowupDueAt(t) {
+    const count = t.videoFollowupCount || 0;
+    const first = (t.videoReplyAt || 0) + this.cfg.videoFollowupMinutes * 60 * 1000;
+    const due = count === 0
+      ? first
+      : (t.videoFollowupAt || t.videoReplyAt || 0) + this.cfg.videoFollowup2Minutes * 60 * 1000;
+    return t.videoFollowupNotBefore > due ? t.videoFollowupNotBefore : due;
+  }
+
+  armVideoFollowup(psid) {
+    const t = this.store.thread(psid);
+    if (t.handedOff || t.standby) return;
+    t.videoReplyAt = this.now();
+    t.videoFollowupCount = 0;
+    t.videoFollowupAt = 0;
+    t.videoFollowupStopped = '';
+    t.videoFollowupNotBefore = 0;
+    this.store.save();
+    this.log.info(`video follow-up scheduled for ${short(psid)} in ${this.cfg.videoFollowupMinutes}m`);
+  }
+
+  stopVideoFollowup(psid, reason) {
+    const t = this.store.thread(psid);
+    if (!t.videoReplyAt) return;
+    t.videoReplyAt = 0;
+    t.videoFollowupStopped = reason;
+    this.store.save();
+    this.log.info(`video follow-up skipped for ${short(psid)}: ${reason}`);
+  }
+
+  async maybeVideoFollowUp(psid, t, now) {
+    if (!t.videoReplyAt) return;
+    if ((t.videoFollowupCount || 0) >= this.videoFollowupMax()) return;
+    if (t.videoFollowupPending) return;
+    if (now < this.videoFollowupDueAt(t)) return;
+
+    const windowMs = this.cfg.replyWindowHours * HOUR;
+    const lastUser = t.lastUserTs || 0;
+    const tz = this.cfg.timezone || 'Asia/Manila';
+    let skip = '';
+    if (!this.cfg.botEnabled) skip = 'BOT_ENABLED is off';
+    else if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) skip = 'not in BOT_TEST_PSIDS allowlist';
+    else if (t.handedOff) skip = 'handed to Ivan';
+    else if (t.standby) skip = 'standby, another app owns the thread';
+    else if (this.humanPaused(t, now)) skip = 'paused for a human';
+    else if (lastUser > t.videoReplyAt) skip = 'customer replied';
+    else if (!lastUser || now - lastUser > windowMs) skip = 'outside 24h messaging window';
+    else {
+      const last = (t.history || [])[(t.history || []).length - 1];
+      if (!last || last.role !== 'assistant') skip = 'customer spoke last';
+    }
+    if (skip) {
+      this.stopVideoFollowup(psid, skip);
+      return;
+    }
+
+    const quietUntil = quietDeferUntil(now, tz);
+    if (quietUntil > now) {
+      if (quietUntil - lastUser > windowMs) {
+        this.stopVideoFollowup(psid, 'quiet hours past the 24h window');
+        return;
+      }
+      if (t.videoFollowupNotBefore !== quietUntil) {
+        t.videoFollowupNotBefore = quietUntil;
+        this.store.save();
+        this.log.info(`video follow-up deferred for ${short(psid)} until 07:00 Asia/Manila`);
+      }
+      return;
+    }
+
+    t.videoFollowupPending = true;
+    this.store.save();
+    try {
+      const fresh = this.store.thread(psid);
+      if (!fresh.videoReplyAt || !this.cfg.botEnabled || fresh.handedOff || fresh.standby || this.humanPaused(fresh, this.now())) {
+        this.log.info(`video follow-up skipped for ${short(psid)}: state changed`);
+        return;
+      }
+      if ((fresh.lastUserTs || 0) > fresh.videoReplyAt) {
+        this.stopVideoFollowup(psid, 'customer replied');
+        return;
+      }
+      const second = (fresh.videoFollowupCount || 0) >= 1;
+      await this.send(psid, videoFollowupText(fresh, { second }), { videoFollowup: true });
+      fresh.videoFollowupCount = (fresh.videoFollowupCount || 0) + 1;
+      fresh.videoFollowupAt = this.now();
+      fresh.videoFollowupNotBefore = 0;
+      this.store.save();
+      this.log.info(`video follow-up ${fresh.videoFollowupCount} sent to ${short(psid)}`);
+    } catch (e) {
+      this.log.error(`video follow-up failed for ${short(psid)}:`, e.message);
+    } finally {
+      const row = this.store.thread(psid);
+      row.videoFollowupPending = false;
+      this.store.save();
+    }
   }
 
   // Quiet-customer follow-up. One short LLM line, then at most one more about 24h later,
@@ -698,14 +880,15 @@ class Bot {
     this._followRunning = true;
     try {
       const max = this.cfg.followupMax;
-      if (!max || max <= 0) return;
       const afterMs = this.cfg.followupAfterMin * 60 * 1000;
       const day = 24 * HOUR;
       const windowMs = 23 * HOUR;
       const now = this.now();
       for (const [psid, t] of Object.entries(this.store.data.threads)) {
-        try { await this.maybeFollowUp(psid, t, { now, max, afterMs, day, windowMs }); }
-        catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
+        try {
+          await this.maybeVideoFollowUp(psid, t, now);
+          if (max > 0) await this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
+        } catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
       }
     } finally {
       this._followRunning = false;
@@ -720,6 +903,10 @@ class Bot {
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.intakeCloseSent || t.tipsSent) return 'intake closed, waiting on the technician';
     if (t.handedOff) return 'handed off';
+    if (t.videoReplyAt) return 'video follow-up still open';
+    // Giving up because 7 AM (or now) is outside Meta's window must not fall
+    // through to the generic nudge, which has no quiet hours.
+    if (videoFollowupHoldsGeneric(t)) return 'video follow-up closed without a send';
     if (this.humanPaused(t, now)) return 'paused for a human';
     if (now - (t.lastUserTs || 0) > windowMs) return 'outside 23h messaging window';
     const last = (t.history || [])[(t.history || []).length - 1];

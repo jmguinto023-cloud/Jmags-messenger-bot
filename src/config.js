@@ -66,6 +66,9 @@ function loadConfig(env = process.env) {
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
     followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
     followupMax: num(env.FOLLOWUP_MAX, 2),
+    // After a video reply, one nudge, then an optional gentler one. 0 disables the second.
+    videoFollowupMinutes: num(env.VIDEO_FOLLOWUP_MINUTES, 30),
+    videoFollowup2Minutes: num(env.VIDEO_FOLLOWUP2_MINUTES, 240),
     replyWindowHours: num(env.REPLY_WINDOW_HOURS, 23.5), // stay safely inside Meta's 24h window
     handoffKeywords: env.HANDOFF_KEYWORDS
       ? list(env.HANDOFF_KEYWORDS)

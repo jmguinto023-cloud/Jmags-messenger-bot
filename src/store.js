@@ -29,7 +29,10 @@ class Store {
       this.data.seenMids ||= [];
       this.data.reviews ||= [];
       this.data.deletionCodes ||= {};
-      for (const t of Object.values(this.data.threads)) t.followupPending = false;
+      for (const t of Object.values(this.data.threads)) {
+        t.followupPending = false;
+        t.videoFollowupPending = false;
+      }
     } catch (e) {
       console.error('Store load failed, starting empty:', e.message);
     }
@@ -39,6 +42,7 @@ class Store {
       history: [], lastUserTs: 0, handedOff: false, handoffAt: 0, handoffReason: '',
       pausedUntil: 0, fallbackCount: 0, passedByBot: false,
       followupCount: 0, lastFollowupAt: 0, followupPending: false, awaitingVideo: false,
+      videoReplyAt: 0, videoFollowupCount: 0, videoFollowupAt: 0, videoFollowupPending: false,
       bookingFormSent: false, bookingDone: false, pendingMedia: [], attachmentNote: '',
       mediaNotes: [], tipsSent: false, problemViaVideo: false,
     });
@@ -47,7 +51,9 @@ class Store {
   addTurn(psid, role, content, ts = Date.now(), opts = {}) {
     const t = this.thread(psid);
     if (opts.history !== false) {
-      t.history.push({ role, content, ts });
+      const turn = { role, content, ts };
+      if (opts.via) turn.via = opts.via;
+      t.history.push(turn);
       const max = this.historyTurns * 2; // a "turn" = customer + reply
       if (t.history.length > max) t.history.splice(0, t.history.length - max);
     }
@@ -123,6 +129,15 @@ class Store {
     this.save();
     return true;
   }
+  markIvanReplied(psid, now = Date.now()) {
+    const when = new Date(now).toISOString();
+    let n = 0;
+    for (const row of this.data.reviews || []) {
+      if (row.psid === psid) { row.ivanRepliedAt = when; n += 1; }
+    }
+    if (n) this.save();
+    return n;
+  }
   readSubscriptions() {
     try {
       if (!fs.existsSync(this.subsFile)) return [];
@@ -186,7 +201,7 @@ class Store {
     const key = String(psid || '').trim();
     const hash = key ? psidHash(key) : '';
     const thread = key ? this.data.threads[key] : null;
-    const followups = thread && (thread.followupCount || thread.followupPending || thread.lastFollowupAt) ? 1 : 0;
+    const followups = thread && (thread.followupCount || thread.followupPending || thread.lastFollowupAt || thread.videoReplyAt || thread.videoFollowupCount) ? 1 : 0;
     const threads = thread ? 1 : 0;
     if (thread) delete this.data.threads[key];
     this.data.reviews ||= [];

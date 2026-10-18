@@ -42,6 +42,10 @@ services:
         sync: false
       - key: FOLLOWUP_MAX
         sync: false
+      - key: VIDEO_FOLLOWUP_MINUTES
+        sync: false
+      - key: VIDEO_FOLLOWUP2_MINUTES
+        sync: false
       - key: DATA_RETENTION_DAYS
         sync: false
       - key: BOOKING_FORM_URL
