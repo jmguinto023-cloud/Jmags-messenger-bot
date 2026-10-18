@@ -7,6 +7,9 @@ const { chatCustomerName } = require('./summary');
 const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delivery', 'Completed', 'Cancelled'];
 const TECHS = ['JM', 'Joshua', 'Unassigned'];
 const BRANCHES = ['San Pablo', 'Cavite'];
+const AD_AREAS = ['CAVITE', 'LAGUNA', 'BATANGAS'];
+const KNOWN_ADS = ['CAVITE - area ads', 'Cavite Page ad', 'LAGUNA - area ads', 'BATANGAS - area ads', 'Not from an ad'];
+const BOOSTED_BUDGET = 'Boosted posts';
 const PAY_TYPES = ['Check-up fee', 'Repair', 'Parts', 'Other'];
 const METHODS = ['Cash', 'GCash', 'Maya', 'Bank transfer'];
 const TABS = ['today', 'jobs', 'customers', 'money', 'finance', 'parts'];
@@ -169,7 +172,7 @@ function blankJob(partial = {}) {
     id: '', date: '', doneDate: '', visitDate: '', visitTime: '',
     customerName: '', phone: '', city: '', address: '', landmark: '', mapLink: '',
     unitType: 'TV', brand: '', size: '', issue: '',
-    technician: 'Unassigned', branch: '', adArea: '', leadSource: '',
+    technician: 'Unassigned', branch: '', ad: '', adArea: '', leadSource: '',
     price: 0, travelFee: 0, importedPaid: 0,
     status: 'Inquiry', statusNote: '', notes: '',
     partsUsed: '', partsCost: 0, psid: '',
@@ -205,6 +208,7 @@ function jobFromCsv(row) {
     issue: pick(h, 'issue'),
     technician: canon(pick(h, 'technician') || 'Unassigned', TECHS) || 'Unassigned',
     branch: canonBranch(pick(h, 'branch')),
+    ad: pick(h, 'ad'),
     adArea: pick(h, 'ad area'),
     leadSource: pick(h, 'lead source'),
     price: money(pick(h, 'quote')),
@@ -337,6 +341,11 @@ function upsertJobs(ops, incoming) {
       createdAt: prev ? prev.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+    // A blank Ad or Ad area cell must not wipe a value already stored on the job.
+    if (prev) {
+      if (!raw.ad) job.ad = prev.ad || '';
+      if (!raw.adArea) job.adArea = prev.adArea || '';
+    }
     if (prev) Object.assign(prev, job);
     else ops.jobs.push(job);
     n += 1;
@@ -797,6 +806,119 @@ function financeReport(ops, { period = 'month', branch = 'ALL', now = Date.now()
   };
 }
 
+function isBoosted(value) {
+  return /^boosted posts?$/i.test(String(value || '').trim());
+}
+
+function areaFromAd(name) {
+  const text = String(name || '').trim();
+  if (/^cavite page ad$/i.test(text)) return 'CAVITE';
+  if (isBoosted(text)) return BOOSTED_BUDGET;
+  const upper = text.toUpperCase();
+  for (const area of AD_AREAS) {
+    if (upper.includes(area)) return area;
+  }
+  return '';
+}
+
+function adBudgetOf(record) {
+  if (!record) return '';
+  if (isBoosted(record.adArea)) return BOOSTED_BUDGET;
+  const fromArea = areaFromAd(record.adArea);
+  if (fromArea === 'CAVITE') return 'Cavite';
+  if (fromArea === 'LAGUNA' || fromArea === 'BATANGAS') return 'San Pablo';
+  if (isBoosted(record.ad)) return BOOSTED_BUDGET;
+  const fromAd = areaFromAd(record.ad);
+  if (fromAd === 'CAVITE') return 'Cavite';
+  if (fromAd === 'LAGUNA' || fromAd === 'BATANGAS') return 'San Pablo';
+  if (/san pablo/i.test(`${record.adArea || ''} ${record.ad || ''}`)) return 'San Pablo';
+  return '';
+}
+
+function adSpendBudget(branch) {
+  if (isBoosted(branch)) return BOOSTED_BUDGET;
+  return canonBranch(branch) === 'Cavite' ? 'Cavite' : 'San Pablo';
+}
+
+function adBudgetReport(ops, { period = 'month', branch = 'ALL', now = Date.now(), tz = 'Asia/Manila' } = {}) {
+  const range = periodRange(period, now, tz);
+  const jobs = filterBranch(ops.jobs, branch);
+  const byId = new Map(jobs.map((job) => [job.id, job]));
+  const keys = ['Cavite', 'San Pablo', BOOSTED_BUDGET, 'Untraced'];
+  const buckets = Object.fromEntries(keys.map((key) => [key, { collected: 0, adSpend: 0, expenses: 0, parts: 0, jobs: 0 }]));
+  const seen = new Set();
+  const countJob = (job) => {
+    if (!job || !job.id || seen.has(job.id)) return;
+    seen.add(job.id);
+    buckets[adBudgetOf(job) || 'Untraced'].jobs += 1;
+  };
+  for (const job of jobs) {
+    if (!inRange(job.date, range)) continue;
+    buckets[adBudgetOf(job) || 'Untraced'].parts += Number(job.partsCost || 0);
+    countJob(job);
+  }
+  const payments = filterBranch(ops.payments, branch).filter((row) => inRange(row.date, range));
+  for (const pay of payments) {
+    const job = byId.get(pay.jobId);
+    buckets[adBudgetOf(job) || 'Untraced'].collected += Number(pay.amount || 0);
+    countJob(job);
+  }
+  for (const ad of filterBranch(ops.ads, branch).filter((row) => adOverlaps(row, range))) {
+    buckets[adSpendBudget(ad.branch)].adSpend += Number(ad.amount || 0);
+  }
+  for (const exp of filterBranch(ops.expenses, branch).filter((row) => inRange(row.date, range))) {
+    const linked = exp.jobId ? byId.get(exp.jobId) : null;
+    const fromJob = linked ? adBudgetOf(linked) : '';
+    const shop = canonBranch(exp.branch);
+    const key = fromJob || (isBoosted(exp.branch) ? BOOSTED_BUDGET : (shop === 'Cavite' || shop === 'San Pablo' ? shop : 'Untraced'));
+    buckets[key].expenses += Number(exp.amount || 0);
+  }
+  const groups = {};
+  let rawCosts = 0;
+  let collected = 0;
+  let adSpend = 0;
+  let jobsInPeriod = 0;
+  for (const key of keys) {
+    const row = buckets[key];
+    const raw = row.adSpend + row.expenses + row.parts;
+    rawCosts += raw;
+    const costs = roundPeso(raw);
+    groups[key] = { collected: row.collected, adSpend: row.adSpend, costs, profit: row.collected - costs, jobs: row.jobs };
+    collected += row.collected;
+    adSpend += row.adSpend;
+    jobsInPeriod += row.jobs;
+  }
+  const costs = roundPeso(rawCosts);
+  const shops = ['Cavite', 'San Pablo'];
+  const cross = {};
+  for (const budget of keys) {
+    cross[budget] = {};
+    for (const shop of shops) cross[budget][shop] = { jobs: 0, collected: 0 };
+  }
+  const crossSeen = new Set();
+  const countCross = (job) => {
+    if (!job || !job.id || crossSeen.has(job.id)) return;
+    crossSeen.add(job.id);
+    const shop = canonBranch(job.branch) === 'Cavite' ? 'Cavite' : 'San Pablo';
+    cross[adBudgetOf(job) || 'Untraced'][shop].jobs += 1;
+  };
+  for (const job of jobs) {
+    if (inRange(job.date, range)) countCross(job);
+  }
+  for (const pay of payments) {
+    const job = byId.get(pay.jobId);
+    const shop = canonBranch((job && job.branch) || pay.branch) === 'Cavite' ? 'Cavite' : 'San Pablo';
+    cross[adBudgetOf(job) || 'Untraced'][shop].collected += Number(pay.amount || 0);
+    countCross(job);
+  }
+  return {
+    groups,
+    total: { collected, adSpend, costs, profit: collected - costs, jobs: jobsInPeriod },
+    cross,
+    untraced: jobs.filter((job) => !adBudgetOf(job)).length,
+  };
+}
+
 function lowStock(parts, branch) {
   return filterBranch(parts, branch).filter((p) => p.reorder || Number(p.stock) <= 0);
 }
@@ -871,13 +993,14 @@ function buildView(store, opts) {
   let statusFilter = '';
   if (tab === 'jobs' && !rawStatus) statusFilter = 'Open';
   else if (rawStatus === 'All') statusFilter = '';
-  else if (rawStatus === 'Open' || rawStatus === 'warranty' || rawStatus === 'ad') statusFilter = rawStatus;
+  else if (rawStatus === 'Open' || rawStatus === 'warranty' || rawStatus === 'ad' || rawStatus === 'untraced') statusFilter = rawStatus;
   else if (STATUSES.includes(rawStatus)) statusFilter = rawStatus;
   const visibleJobs = jobs.filter((j) => {
     if (!statusFilter) return true;
     if (statusFilter === 'Open') return openJob(j);
     if (statusFilter === 'warranty') return Boolean(j.warrantyEnd) && j.warrantyEnd >= today && j.status !== 'Cancelled';
     if (statusFilter === 'ad') return !String(j.adArea || '').trim();
+    if (statusFilter === 'untraced') return !adBudgetOf(j);
     return j.status === statusFilter;
   })
     .slice()
@@ -918,6 +1041,7 @@ function buildView(store, opts) {
     customers: customerRows(ops, branch),
     money: moneyReport(ops, { period, branch, now, tz }),
     finance: financeReport(ops, { period, branch, now, tz }),
+    adBudget: adBudgetReport(ops, { period, branch, now, tz }),
     financeByBranch: {
       Cavite: financeReport(ops, { period, branch: 'Cavite', now, tz }),
       'San Pablo': financeReport(ops, { period, branch: 'San Pablo', now, tz }),
@@ -929,6 +1053,7 @@ function buildView(store, opts) {
       Open: jobs.filter(openJob).length,
       warranty: jobs.filter((j) => j.warrantyEnd && j.warrantyEnd >= today && j.status !== 'Cancelled').length,
       ad: jobs.filter((j) => !String(j.adArea || '').trim()).length,
+      untraced: jobs.filter((j) => !adBudgetOf(j)).length,
       All: jobs.length,
     }, Object.fromEntries(STATUSES.map((status) => [status, jobs.filter((j) => j.status === status).length]))),
     parts: filterBranch(ops.parts, branch),
@@ -938,6 +1063,15 @@ function buildView(store, opts) {
 
 function field(params, key) {
   return String(params.get(key) || '').trim();
+}
+
+function postedAd(params, prev) {
+  const ad = params.has('ad') ? field(params, 'ad') : ((prev && prev.ad) || '');
+  let adArea = params.has('adArea') ? field(params, 'adArea') : ((prev && prev.adArea) || '');
+  if (adArea === 'Not checked yet') adArea = '';
+  const derived = areaFromAd(ad);
+  if (derived) adArea = derived;
+  return { ad, adArea };
 }
 
 function applyAction(store, params, now, tz = 'Asia/Manila') {
@@ -952,6 +1086,7 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
     if (!id) return { ok: false, error: 'Job id required' };
     const prev = ops.jobs.find((j) => j.id === id);
     const wasDelivery = Boolean(prev && prev.status === 'For Delivery');
+    const picked = postedAd(params, prev);
     const job = withWarranty(blankJob({
       ...(prev || {}),
       id,
@@ -971,7 +1106,8 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
       issue: field(params, 'issue'),
       technician: TECHS.includes(field(params, 'technician')) ? field(params, 'technician') : 'Unassigned',
       branch: canonBranch(field(params, 'branch')),
-      adArea: field(params, 'adArea') === 'Not checked yet' ? '' : field(params, 'adArea'),
+      ad: picked.ad,
+      adArea: picked.adArea,
       leadSource: field(params, 'leadSource'),
       subdivision: field(params, 'subdivision'),
       province: field(params, 'province'),
@@ -1041,6 +1177,7 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
     if (action === 'dismiss-booking') booking.status = 'dismissed';
     else {
       const date = booking.visitDate || today;
+      const picked = postedAd(params, booking);
       const job = withWarranty(blankJob({
         id: nextJobId(ops.jobs, date),
         date: today,
@@ -1056,7 +1193,8 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
         size: booking.size,
         issue: booking.issue,
         branch: booking.branch,
-        adArea: (field(params, 'adArea') === 'Not checked yet' ? '' : field(params, 'adArea')) || booking.adArea || '',
+        ad: picked.ad,
+        adArea: picked.adArea,
         leadSource: field(params, 'leadSource') || booking.leadSource || '',
         price: booking.price,
         status: booking.visitDate ? 'Scheduled' : 'Inquiry',
@@ -1297,12 +1435,13 @@ function exportCsv(store, kind, opts) {
   const view = buildView(store, opts);
   if (kind === 'jobs') {
     return toCsv(
-      ['Job ID', 'Date received', 'Visit date', 'Visit time', 'Customer name', 'Contact', 'Area/City', 'Address', 'Landmark', 'Brand/Model', 'Size', 'Issue', 'Quote', 'Balance', 'Status', 'Technician', 'Branch', 'Warranty end', 'Status note'],
+      ['Job ID', 'Date received', 'Visit date', 'Visit time', 'Customer name', 'Contact', 'Area/City', 'Address', 'Landmark', 'Brand/Model', 'Size', 'Issue', 'Quote', 'Balance', 'Status', 'Technician', 'Branch', 'Ad', 'Ad area', 'Warranty end', 'Status note'],
       view.jobs.map((j) => ({
         'Job ID': j.id, 'Date received': j.date, 'Visit date': j.visitDate, 'Visit time': j.visitTime,
         'Customer name': j.customerName, Contact: j.phone, 'Area/City': j.city, Address: j.address,
         Landmark: j.landmark, 'Brand/Model': j.brand, Size: j.size, Issue: j.issue, Quote: j.price,
         Balance: j.balance, Status: j.status, Technician: j.technician, Branch: j.branch,
+        Ad: j.ad || '', 'Ad area': j.adArea || '',
         'Warranty end': j.warrantyEnd, 'Status note': j.statusNote,
       })),
     );
@@ -1333,17 +1472,29 @@ function exportCsv(store, kind, opts) {
   const ads = fin.ads.map((a) => ({
     Section: 'ad', Label: a.note, Start: a.start, End: a.end, Branch: a.branch, Amount: a.amount, Chats: a.chats,
   }));
-  return toCsv(['Section', 'Label', 'Start', 'End', 'Branch', 'Amount', 'Chats', 'Value'], [...summary, ...ads]);
+  const budget = view.adBudget || { groups: {}, untraced: 0 };
+  const budgetRows = ['Cavite', 'San Pablo', BOOSTED_BUDGET, 'Untraced'].flatMap((key) => {
+    const row = (budget.groups && budget.groups[key]) || {};
+    const label = key === 'Untraced' ? 'Untraced (no ad)' : key;
+    return [
+      { Section: 'ad-budget', Label: 'Collected', Branch: label, Amount: row.collected || 0, Value: row.jobs || 0 },
+      { Section: 'ad-budget', Label: 'Costs', Branch: label, Amount: row.costs || 0 },
+      { Section: 'ad-budget', Label: 'Profit', Branch: label, Amount: row.profit || 0 },
+    ];
+  });
+  budgetRows.push({ Section: 'ad-budget', Label: 'Untraced jobs', Branch: 'Untraced (no ad)', Value: budget.untraced || 0 });
+  return toCsv(['Section', 'Label', 'Start', 'End', 'Branch', 'Amount', 'Chats', 'Value'], [...summary, ...ads, ...budgetRows]);
 }
 
 module.exports = {
-  STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, TABS,
+  STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, TABS, AD_AREAS, KNOWN_ADS,
+  areaFromAd, adBudgetOf,
   ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE, DELIVERY_NOTICE, DELIVERY_STATUS,
   emptyOps, ensureOps, manilaStamp, addMonths, addDays, parseBranch, branchLabel,
   parseCsv, parseJobsCsv, parsePaymentsCsv, parseAdsCsv,
   nextJobId, jobBalance, jobPaid, phoneKey, namesMatch, extractPhone,
   importOps, buildView, applyAction, linkReviewToJob, noteSuggestion, linkCustomer,
-  moneyReport, financeReport, duplicatePayments, customerRows,
+  moneyReport, financeReport, adBudgetReport, duplicatePayments, customerRows,
   asksJobStatus, asksWarrantyProblem, jobStatusText, dailyStatusText, warrantyText,
   inWarranty, warrantyEndOf, suggestionFor, jobByPsid, matchIdentity, nameGuess,
   directory, exportCsv, longDate, friendlyStatus,

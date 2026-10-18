@@ -1,6 +1,6 @@
 'use strict';
 // JMAG's Operations, laid out like the shop dashboard: light cards, green actions, bottom nav.
-const { STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, branchLabel } = require('./ops');
+const { STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, KNOWN_ADS, adBudgetOf, branchLabel } = require('./ops');
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -45,7 +45,10 @@ function href(view, extra) {
 }
 
 function hidden(view) {
-  return `<input type="hidden" name="returnBranch" value="${esc(branchLabel(view.branch))}"><input type="hidden" name="returnTab" value="${esc(view.tab)}"><input type="hidden" name="returnPeriod" value="${esc(view.period)}">`;
+  const group = view.group && view.group !== 'branch'
+    ? `<input type="hidden" name="returnGroup" value="${esc(view.group)}">`
+    : '';
+  return `<input type="hidden" name="returnBranch" value="${esc(branchLabel(view.branch))}"><input type="hidden" name="returnTab" value="${esc(view.tab)}"><input type="hidden" name="returnPeriod" value="${esc(view.period)}">${group}`;
 }
 
 function options(list, selected, placeholder) {
@@ -55,10 +58,17 @@ function options(list, selected, placeholder) {
 
 function adOptions(selected, extras) {
   const current = !selected || selected === 'Not checked yet' ? '' : selected;
-  const list = ['', 'Cavite ads', 'San Pablo ads', 'Boosted post', 'Not from an ad'];
+  const list = ['', ...KNOWN_ADS];
   for (const extra of extras || []) {
     if (extra && extra !== 'Not checked yet' && !list.includes(extra)) list.push(extra);
   }
+  if (current && !list.includes(current)) list.push(current);
+  return list.map((item) => `<option value="${esc(item)}"${item === current ? ' selected' : ''}>${esc(item || 'Not checked yet')}</option>`).join('');
+}
+
+function areaOptions(selected) {
+  const current = !selected || selected === 'Not checked yet' ? '' : selected;
+  const list = ['', 'CAVITE', 'LAGUNA', 'BATANGAS', 'Boosted posts'];
   if (current && !list.includes(current)) list.push(current);
   return list.map((item) => `<option value="${esc(item)}"${item === current ? ' selected' : ''}>${esc(item || 'Not checked yet')}</option>`).join('');
 }
@@ -281,7 +291,8 @@ function bookingCard(b, view) {
       <div><span class="who">${esc(b.name)}</span> <span class="pill orange">New</span> ${branchPill(b.branch)} <span class="pill dashed">? NOT SET · ask customer</span></div>
       <div>
         <form method="post" action="/ops/action">${hidden(view)}<input type="hidden" name="action" value="convert-booking"><input type="hidden" name="id" value="${esc(b.id)}">
-          <label class="field"><span>Ad area</span><select name="adArea">${adOptions(b.adArea, view.jobs.map((j) => j.adArea))}</select></label>
+          <label class="field"><span>Which ad brought them</span><select name="ad">${adOptions(b.ad, view.jobs.map((j) => j.ad))}</select></label>
+          <label class="field"><span>Ad area</span><select name="adArea">${areaOptions(b.adArea)}</select></label>
           <button class="btn green" type="submit">Create job</button>
         </form>
         <form method="post" action="/ops/action">${hidden(view)}<input type="hidden" name="action" value="dismiss-booking"><input type="hidden" name="id" value="${esc(b.id)}"><button class="btn red" type="submit">Dismiss</button></form>
@@ -423,7 +434,7 @@ function jobFields(job, view) {
     const label = `${r.customerName || 'Customer'} ••${r.psidLast4 || String(r.psid || '').slice(-4)}`;
     return `<option value="${esc(r.id)}"${selected}>${esc(label)}</option>`;
   })).join('');
-  const ads = [j.adArea];
+  const ads = [j.ad];
   const line = j.id && j.visitDate
     ? `${ordinal((lineMap(view.jobs).get(j.id) || {}).n || 1)} in line · ${j.branch || 'San Pablo'} (${(lineMap(view.jobs).get(j.id) || {}).ahead || 0} ahead)`
     : 'Place in line';
@@ -467,8 +478,9 @@ function jobFields(job, view) {
     ${field('Date received', `<input type="date" name="date" value="${esc(j.date || view.today)}">`)}
     ${field('Service type', `<select name="serviceType">${options(SERVICE_TYPES, j.serviceType || 'Not set yet (ask the customer)')}</select>`)}
     ${field('How they found us', `<select name="leadSource">${options(LEAD_SOURCES, j.leadSource || 'Facebook')}</select>`)}
-    ${field('Which ad brought them — required for Facebook (check the Messenger chat)', `<select name="adArea">${adOptions(j.adArea, ads)}</select>`)}
-    <p class="hint">Ad area — which ad budget brought them (fills in from the ad; change it if needed)</p>
+    ${field('Which ad brought them — required for Facebook (check the Messenger chat)', `<select name="ad">${adOptions(j.ad, ads)}</select>`)}
+    ${field('Ad area', `<select name="adArea">${areaOptions(j.adArea)}</select>`)}
+    <p class="hint">Ad area fills in from the ad name: CAVITE, LAGUNA, or BATANGAS. Cavite Page ad uses the Cavite budget. LAGUNA and BATANGAS use the San Pablo budget. Boosted posts is its own budget and is not counted on either branch. Edit the area when there is no ad.</p>
     <div class="grid two">
       ${field('Repair total (₱)', `<input name="price" inputmode="decimal" value="${esc(j.price || '')}" placeholder="Includes the ₱1,000 check-up">`)}
       ${field('Date completed', `<input type="date" name="doneDate" value="${esc(j.doneDate || '')}">`)}
@@ -511,7 +523,7 @@ function jobCard(job, view, nextId) {
     ${mapLinks(job)}
     <p>${esc(job.unitType || 'TV')} · <b class="linkish">${esc([job.brand, job.size].filter(Boolean).join(' '))}</b> — ${esc(job.issue || '')}</p>
     <p class="ok">${esc(shortDate(job.visitDate))} ${esc(job.visitTime)} · ${esc(job.technician || 'Unassigned')} · ${esc(job.branch || '')}</p>
-    <p class="${job.adArea ? 'meta' : 'warn'}">Ad area: ${esc(job.adArea || 'Not checked yet')}</p>
+    <p class="${job.adArea ? 'meta' : 'warn'}">Ad area: ${esc(job.adArea || 'Not checked yet')}${job.ad ? ` · ${esc(job.ad)}` : ''}</p>
     <p class="meta">Warranty ${esc(job.warrantyEnd || '')}${job.psid ? ` · Messenger ••${esc(String(job.psid).slice(-4))}` : ''}</p>
     ${job.statusNote ? `<p class="meta">${esc(job.statusNote)}</p>` : ''}
     ${balance > 0 ? `<div class="unpaid"><div><strong>${peso(job.price)}</strong> <span class="meta">Not fully paid · ${peso(balance)} balance</span></div></div>` : ''}
@@ -533,6 +545,7 @@ function jobsTab(view) {
     ...STATUSES.map((status) => [status, status]),
     ['warranty', 'Under warranty'],
     ['ad', 'Ad area: Not checked yet'],
+    ['untraced', 'No ad budget'],
     ['All', 'All'],
   ].map(([id, label]) => {
     const on = (id === 'All' ? view.statusFilter === '' : view.statusFilter === id) ? ' on' : '';
@@ -693,6 +706,52 @@ function financeCell(view, label, cavite, pablo, total, extra) {
   return `<tr><td>${label}${extra || ''}</td><td>${cavite}</td><td>${pablo}</td><td>${total}</td></tr>`;
 }
 
+function budgetRow(view, key) {
+  return (view.adBudget && view.adBudget.groups && view.adBudget.groups[key]) || { collected: 0, costs: 0, profit: 0, jobs: 0, adSpend: 0 };
+}
+
+function adBudgetFunnel(view) {
+  const order = [['Cavite', 'Cavite'], ['San Pablo', 'San Pablo'], ['Boosted posts', 'Boosted posts'], ['Untraced', 'Untraced (no ad)']];
+  const total = (view.adBudget && view.adBudget.total) || { collected: 0, costs: 0, profit: 0, jobs: 0, adSpend: 0 };
+  const cells = (pick) => order.map(([key]) => {
+    const cls = key === 'Untraced' ? ' class="cream"' : '';
+    return `<td${cls} data-budget="${esc(key)}">${pick(budgetRow(view, key))}</td>`;
+  }).join('') + `<td>${pick(total)}</td>`;
+  const count = view.adBudget ? view.adBudget.untraced : 0;
+  return `<div class="table-wrap"><table class="funnel" data-group="ad-budget">
+    <tr><td></td><td>Cavite <span class="subline">Cavite ads</span></td><td>San Pablo <span class="subline">Laguna + Batangas</span></td><td>Boosted posts <span class="subline">Not on either branch</span></td><td class="cream">Untraced (no ad)</td><td>Total</td></tr>
+    <tr><td>Ad spend</td>${cells((row) => peso(row.adSpend))}</tr>
+    <tr><td>Collected</td>${cells((row) => peso(row.collected))}</tr>
+    <tr><td>Costs</td>${cells((row) => peso(row.costs))}</tr>
+    <tr class="mint"><td>Profit</td>${cells((row) => peso(row.profit))}</tr>
+    <tr><td>Jobs</td>${cells((row) => num(row.jobs))}</tr>
+  </table></div>${untracedLink(view, count)}`;
+}
+
+function untracedLink(view, count) {
+  const n = Number(count) || 0;
+  return `<p class="callout" data-untraced="${esc(n)}"><a href="${href(view, { tab: 'jobs', status: 'untraced' })}">${n} job${n === 1 ? '' : 's'} not traced to an ad — tag them</a></p>`;
+}
+
+function crossBudget(view) {
+  const cross = (view.adBudget && view.adBudget.cross) || {};
+  const budgets = [['Cavite', 'Cavite'], ['San Pablo', 'San Pablo'], ['Boosted posts', 'Boosted posts'], ['Untraced', 'Untraced (no ad)']];
+  const shops = ['Cavite', 'San Pablo'];
+  const rows = budgets.map(([key, label]) => {
+    const values = shops.map((shop) => (cross[key] && cross[key][shop]) || { jobs: 0, collected: 0 });
+    const jobs = values.reduce((sum, row) => sum + row.jobs, 0);
+    const collected = values.reduce((sum, row) => sum + row.collected, 0);
+    const tds = shops.map((shop) => {
+      const row = (cross[key] && cross[key][shop]) || { jobs: 0, collected: 0 };
+      const cls = key === 'Untraced' ? ' class="cream"' : '';
+      return `<td${cls}>${row.jobs} job${row.jobs === 1 ? '' : 's'} / ${peso(row.collected)}</td>`;
+    }).join('');
+    return `<tr><td>${esc(label)}</td>${tds}<td>${jobs} job${jobs === 1 ? '' : 's'} / ${peso(collected)}</td></tr>`;
+  }).join('');
+  return `<section class="card"><h2>Cross-branch: ad budget × branch that did the job</h2>
+    <div class="table-wrap"><table class="table"><thead><tr><th>Ad budget</th><th>Cavite branch</th><th>San Pablo branch</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
 function financeTab(view) {
   const f = view.finance;
   const by = view.financeByBranch || { Cavite: f, 'San Pablo': f };
@@ -734,9 +793,14 @@ function financeTab(view) {
       <button class="text-btn danger" type="submit">Delete</button></form></td>
   </tr>`).join('');
   const areas = new Map();
+  const areaKey = (job) => {
+    if (job && job.ad) return job.ad;
+    if (job && job.adArea) return job.adArea;
+    return 'Untraced (no ad)';
+  };
   for (const job of view.jobs) {
-    const key = job.adArea || 'Not checked yet';
-    const row = areas.get(key) || { jobs: 0, done: 0, cancelled: 0, collected: 0 };
+    const key = areaKey(job);
+    const row = areas.get(key) || { jobs: 0, done: 0, cancelled: 0, collected: 0, budget: adBudgetOf(job) || 'Untraced (no ad)' };
     row.jobs += 1;
     if (job.status === 'Completed') row.done += 1;
     if (job.status === 'Cancelled') row.cancelled += 1;
@@ -744,12 +808,12 @@ function financeTab(view) {
   }
   for (const pay of view.money.payments) {
     const job = view.jobs.find((j) => j.id === pay.jobId);
-    const key = (job && job.adArea) || 'Not checked yet';
-    const row = areas.get(key) || { jobs: 0, done: 0, cancelled: 0, collected: 0 };
+    const key = areaKey(job);
+    const row = areas.get(key) || { jobs: 0, done: 0, cancelled: 0, collected: 0, budget: adBudgetOf(job) || 'Untraced (no ad)' };
     row.collected += Number(pay.amount || 0);
     areas.set(key, row);
   }
-  const adRows = [...areas.entries()].map(([name, row]) => `<tr class="${name === 'Not checked yet' ? 'cream' : ''}"><td>${esc(name)}</td><td>${row.jobs}</td><td>${row.done}</td><td>${row.cancelled}</td><td>${peso(row.collected)}</td></tr>`).join('');
+  const adRows = [...areas.entries()].map(([name, row]) => `<tr class="${name === 'Untraced (no ad)' ? 'cream' : ''}"><td>${esc(name)}</td><td>${esc(row.budget)}</td><td>${row.jobs}</td><td>${row.done}</td><td>${row.cancelled}</td><td>${peso(row.collected)}</td></tr>`).join('');
   const checks = [];
   for (const job of view.jobs) {
     const pays = view.money.payments.filter((p) => p.jobId === job.id);
@@ -767,9 +831,11 @@ function financeTab(view) {
     <nav class="chips">${periodChips(view, 'finance')}</nav>
     <p class="eyebrow">Group by</p>
     <nav class="chips">
-      <a class="${view.group === 'ad' ? '' : 'on'}" href="${href(view, { tab: 'finance', group: 'branch' })}">Branch that did the job</a>
-      <a class="${view.group === 'ad' ? 'on' : ''}" href="${href(view, { tab: 'finance', group: 'ad' })}">Ad budget that brought the customer</a>
+      <a class="${view.group === 'ad' ? '' : 'on'}" href="${href(view, { tab: 'finance', group: 'branch' })}">Profit by branch that did the job</a>
+      <a class="${view.group === 'ad' ? 'on' : ''}" href="${href(view, { tab: 'finance', group: 'ad' })}">Profit by ad budget</a>
     </nav>
+    ${view.group === 'ad' ? adBudgetFunnel(view) : ''}
+    <div class="table-wrap"${view.group === 'ad' ? ' hidden' : ''}>
     <table class="funnel">
       ${financeCell(view, 'Ad spend', moneyText(show('Cavite', cSpend)), moneyText(show('San Pablo', sSpend)), moneyText(tSpend))}
       <tr><td>Chats <span class="subline">Cost per chat</span></td><td data-kpi="chats">${countText(cChats)}<span class="subline">${c.costPerChat == null ? '—' : peso(c.costPerChat)}</span></td><td>${countText(sChats)}<span class="subline">${s.costPerChat == null ? '—' : peso(s.costPerChat)}</span></td><td>${countText(tChats)}</td></tr>
@@ -781,17 +847,19 @@ function financeTab(view) {
       <tr><td>Expenses</td><td>${cExp == null ? '—' : `− ${peso(cExp)}`}</td><td>${sExp == null ? '—' : `− ${peso(sExp)}`}</td><td>− ${peso(tExp)}</td></tr>
       <tr><td>Other income <span class="subline" data-kpi="other-income">Kept from cancelled jobs</span></td><td>+ ${moneyText(show('Cavite', cOther))}</td><td>+ ${moneyText(show('San Pablo', sOther))}</td><td>+ ${moneyText(tOther)}</td></tr>
       <tr class="mint"><td>Real profit <span class="subline">Profit margin</span></td><td>${profitCell('Cavite', view.money.perBranch.Cavite.profit)}</td><td>${profitCell('San Pablo', view.money.perBranch['San Pablo'].profit)}</td><td>${peso(view.money.profit)} <span class="subline">${margin}%</span></td></tr>
-    </table>
+    </table></div>
+    ${view.group === 'ad' ? '' : untracedLink(view, view.adBudget ? view.adBudget.untraced : 0)}
     ${(view.money.expenses || []).length ? '' : '<p class="callout">No expenses recorded for this period, so profit is too high until they are entered (Money tab → + Add expense).</p>'}
-    <details class="card"><summary>How these numbers are counted</summary><p class="explain">Ad spend and chats come from the ad spend log. Bookings are schedule forms that were not dismissed. Money collected is payments in the period. Real profit is collections minus ad spend, expenses, and parts cost.</p></details>
+    <details class="card"><summary>How these numbers are counted</summary><p class="explain">Ad spend and chats come from the ad spend log. Bookings are schedule forms that were not dismissed. Money collected is payments in the period. Real profit is collections minus ad spend, expenses, and parts cost. Profit by ad budget uses the ad area on each job: LAGUNA and BATANGAS count on the San Pablo budget, and CAVITE, including Cavite Page ad, counts on the Cavite budget. Boosted posts is a separate budget and is not counted on either branch. Jobs with no matching ad stay in Untraced (no ad).</p></details>
+    ${crossBudget(view)}
     <section class="card">
       <h2>Profit by ad</h2>
-      <table class="table"><thead><tr><th>Which ad brought them</th><th>Jobs</th><th>Completed</th><th>Cancelled</th><th>Collected</th></tr></thead><tbody>${adRows}</tbody></table>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Which ad brought them</th><th>Ad budget</th><th>Jobs</th><th>Completed</th><th>Cancelled</th><th>Collected</th></tr></thead><tbody>${adRows}</tbody></table></div>
     </section>
     <section class="card">
       <header><h2>Ad spend log</h2><button class="btn green" type="button" data-open="ad-form">+ Add ad spend</button></header>
       <p><a class="ghost" href="/ops/export?kind=finance&amp;branch=${esc(view.branchLabel)}&amp;period=${esc(view.period)}">⤓ Export CSV</a></p>
-      <table class="table"><thead><tr><th>Period</th><th>Branch</th><th>Amount</th><th>Chats</th><th>Cost/chat</th><th>Note</th><th></th></tr></thead><tbody>${ads}</tbody></table>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Period</th><th>Branch</th><th>Amount</th><th>Chats</th><th>Cost/chat</th><th>Note</th><th></th></tr></thead><tbody>${ads}</tbody></table></div>
     </section>
     <section class="card">
       <header><h2>Other income</h2><button class="btn green" type="button" data-open="income-form">+ Add income</button></header>
@@ -808,7 +876,7 @@ function financeTab(view) {
         ${field('Period start *', `<input type="date" name="start" value="${esc(view.today)}" required>`)}
         ${field('Period end *', `<input type="date" name="end" value="${esc(view.today)}" required>`)}
       </div>
-      ${field('Branch / ad budget', `<select name="branch">${options(BRANCHES, 'San Pablo')}</select>`)}
+      ${field('Branch / ad budget', `<select name="branch">${options([...BRANCHES, 'Boosted posts'], 'San Pablo')}</select>`)}
       ${field('Amount spent (₱) *', '<input name="amount" inputmode="decimal" required>')}
       ${field('Chats (messaging conversations)', '<input name="chats" inputmode="numeric">')}
       ${field('Note', '<input name="note" placeholder="e.g. JUNE MESSAGING (Laguna) + Sony 65 post">')}
