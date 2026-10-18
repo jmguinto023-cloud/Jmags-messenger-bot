@@ -167,14 +167,15 @@ function shell(body) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#eef2ef">
+  <meta name="theme-color" content="#1e1a4d">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="JMAG Ops">
   <title>JMAG's Operations</title>
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icons/icon-192.png" type="image/png">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest?v=2">
+  <link rel="icon" href="/icons/favicon-32.png?v=2" sizes="32x32" type="image/png">
+  <link rel="icon" href="/icons/favicon-16.png?v=2" sizes="16x16" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/ops.css">
