@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startMock({ llmResponder } = {}) {
-  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [] };
+  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [], conversations: [] };
   const state = { llmResponder: llmResponder || (() => 'Noted po maam/sir 😊 Taga saan po sila?'), llmFail: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -44,6 +44,17 @@ function startMock({ llmResponder } = {}) {
         return json(200, { id: 'label123' });
       }
       if (url.pathname.endsWith('/label')) { calls.labels.push({ ...body, path: url.pathname }); return json(200, { success: true }); }
+      if (url.pathname.endsWith('/conversations') && req.method === 'GET') {
+        const userId = url.searchParams.get('user_id');
+        calls.conversations.push({
+          user_id: userId,
+          platform: url.searchParams.get('platform'),
+          fields: url.searchParams.get('fields'),
+        });
+        if (state.conversationFail) return json(400, { error: { message: state.conversationFail } });
+        const row = state.conversations && state.conversations[userId];
+        return json(200, { data: row ? [row] : [] });
+      }
       if (req.method === 'GET') {
         const id = decodeURIComponent(url.pathname.split('/').pop() || '');
         if (state.profiles && state.profiles[id]) return json(200, state.profiles[id]);

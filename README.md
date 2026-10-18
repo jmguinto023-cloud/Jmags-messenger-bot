@@ -64,7 +64,13 @@ npm start           # run (needs env, see .env.example)
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
   Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
   name (or last 4 of the PSID), Manila time, size, brand, problem, location, the photo or video, and a link to
-  Business Suite. Mark reviewed drops it from the New count. The page refreshes every 30 seconds.
+  that customer's Business Suite thread:
+  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}&selected_item_id={PSID}&mailbox_id={PAGE_ID}&thread_type=FB_MESSAGE`.
+  `selected_item_id` is the customer's PSID. The Graph thread id (`t_...`) and `link` come from
+  `GET /{page-id}/conversations?platform=messenger&user_id={PSID}&fields=id,link,updated_time` and are cached.
+  If that call fails, the button falls back to the inbox list (`asset_id` only). When Graph returns a `link`,
+  the card also has "Open in Messenger app". `m.me` is not used: it opens a visitor chat with the Page, not the Page's thread.
+  Mark reviewed drops it from the New count. The page refreshes every 30 seconds.
   The shell is cached by the service worker; the review list is network-first.
   New photos and videos can send a Web Push if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set.
   Generate a pair with `npx web-push generate-vapid-keys` and put both values in the host env (never commit
