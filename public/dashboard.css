@@ -69,6 +69,22 @@ button.ghost { background: transparent; color: var(--ink); border: 1px solid var
   margin-top: 12px;
 }
 .card h2 { margin: 0 0 6px; font-size: 1rem; }
+.who { font-size: 1.35rem; }
+#toast {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: none;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f4f7fb;
+  color: #10243f;
+  font-weight: 700;
+}
+#toast.show { display: block; }
 .meta { color: var(--muted); font-size: 0.85rem; }
 .debug { word-break: break-all; font-size: 0.75rem; }
 a { color: var(--amber); }

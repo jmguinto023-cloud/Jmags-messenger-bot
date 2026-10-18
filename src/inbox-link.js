@@ -11,14 +11,14 @@
 // Graph's conversation.link. If that path is missing and the Graph id is t_ plus
 // digits, those digits are the same id. A non-numeric t_ id is not placed in the URL.
 //
-// Phones: an https://business.facebook.com link stays in Samsung Internet and other
-// non-Chrome browsers, and a standalone PWA will not hand it to the app. An
-// intent://business.facebook.com/... URL is also unwrapped back into that website.
-// Android therefore uses a launcher intent for package com.facebook.pages.app
-// (Meta Business Suite, confirmed by assetlinks.json). It does not embed
-// business.facebook.com. No documented fb:// or fbpages:// route opens one Page
-// thread in that app, so the intent does not pretend to. If the app is missing,
-// browser_fallback_url is the Page inbox link only (never the broken mobile site).
+// Phones: an https://business.facebook.com link stays in the browser. An
+// intent://business.facebook.com/...?selected_item_id=...#Intent;scheme=https
+// URL is unwrapped by Samsung Internet back into that website, with or without
+// browser_fallback_url, and the mobile thread pane then shows "Something went wrong".
+// https://www.facebook.com/{page}/inbox/{thread}/ opens the personal Facebook feed
+// (logged in as the person, not the Page). Neither is shown as a phone button.
+// Android uses a launcher intent for package com.facebook.pages.app only.
+// There is no documented fb:// or fbpages:// route for one Page thread.
 // https://m.me/{page} opens a visitor chat with the Page, so it is not used.
 
 const BUSINESS_SUITE_PACKAGE = 'com.facebook.pages.app';
@@ -78,19 +78,10 @@ function messengerThreadHref(link, conversationId, pageId) {
   return `https://www.facebook.com/messages/t/${encodeURIComponent(item)}`;
 }
 
-// Launch the installed Business Suite app. Fallback, when present, is the Page
-// inbox link — not business.facebook.com, which mobile browsers fail to open.
-function androidSuiteIntent(fallbackUrl) {
-  const parts = [
-    'action=android.intent.action.MAIN',
-    'category=android.intent.category.LAUNCHER',
-    `package=${BUSINESS_SUITE_PACKAGE}`,
-  ];
-  const fallback = String(fallbackUrl || '');
-  if (fallback && !fallback.includes('business.facebook.com')) {
-    parts.push(`S.browser_fallback_url=${encodeURIComponent(fallback)}`);
-  }
-  return `intent:#Intent;${parts.join(';')};end`;
+// Launch the installed Business Suite app. No browser_fallback_url: the only
+// fallback we had was the facebook.com inbox link, and that opens the personal feed.
+function androidSuiteIntent() {
+  return `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${BUSINESS_SUITE_PACKAGE};end`;
 }
 
 function inboxLinks(pageId, row) {
@@ -100,7 +91,7 @@ function inboxLinks(pageId, row) {
   return {
     itemId,
     suite,
-    android: androidSuiteIntent(messenger),
+    android: androidSuiteIntent(),
     messenger,
   };
 }
