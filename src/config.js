@@ -28,6 +28,9 @@ function loadConfig(env = process.env) {
     graphVersion: env.GRAPH_API_VERSION || 'v26.0',
     pageInboxAppId: String(env.PAGE_INBOX_APP_ID || '263902037430900'),
     ignoreEchoAppIds: list(env.IGNORE_ECHO_APP_IDS),
+    // Echoes from these app ids are Meta automations, not a person in Page Inbox.
+    // They are logged and do not start the human pause. Empty = no ids ignored.
+    pageAiAppIds: list(env.PAGE_AI_APP_IDS),
     needsIvanLabel: env.NEEDS_IVAN_LABEL || '', // empty = don't label on handoff; photo/video uses "Video for review"
     alertWebhookUrl: env.ALERT_WEBHOOK_URL || '',
     vapidPublicKey: env.VAPID_PUBLIC_KEY || '',

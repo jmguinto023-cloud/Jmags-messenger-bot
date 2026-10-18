@@ -15,6 +15,7 @@ const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
 const { summarizeConversation } = require('../src/summary');
 const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
+const { visibleHistory, asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
 const {
   genericInboxUrl, businessSuiteThreadUrl, messengerAppHref, inboxLinks, threadItemId,
   candidateInboxUrls, inboxClientKind, primaryInboxHref, BUSINESS_SUITE_PACKAGE,
@@ -1483,5 +1484,166 @@ test('admin inbox candidates lists every id and URL for a PSID', async () => {
     const again = await fetch(`${s.base}/admin/inbox-candidates?psid=cust-7771`, { headers: { Authorization: 'Bearer adm' } });
     assert.equal(again.status, 200);
     assert.equal(s.mock.calls.conversations.length, 1);
+  } finally { await s.close(); }
+});
+
+test('a pending video review does not repeat a stale cancel, and an unclear line stays on the video', async () => {
+  const s = await setup();
+  const old = Date.now() - 2 * 3600e3;
+  s.mock.state.llmResponder = (body) => {
+    const last = body.messages.filter((m) => m.role === 'user').at(-1).content;
+    if (/nagcancel|cancel/i.test(last)) {
+      return 'Kayo po mismo nagsabi ng "Huwag muna" at "Cancel" kaya kinancel po namin yung booking niyo nung Oct 17, 9am.';
+    }
+    return 'Opo, si Ivan na po ang titingin.';
+  };
+  try {
+    s.app.store.addTurn('rev1', 'user', 'Huwag muna. Cancel yung booking nung Oct 17, 9am.', old);
+    s.app.store.addTurn('rev1', 'assistant', 'Sige po, cancelled na po yung booking niyo.', old + 1000);
+    await s.post(msg('rev1', {
+      text: 'Samsung 55 inch',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/rev.mp4' } }],
+    }, Date.now()));
+    const before = s.mock.calls.llm.length;
+    for (const text of ['Ok na ba?', 'Kamusta na?', 'Wala pa ba?', 'Ano na?']) {
+      await s.post(msg('rev1', { text }));
+    }
+    assert.equal(s.mock.calls.llm.length, before);
+    const replies = s.mock.calls.messages.slice(-4).map((m) => m.message.text);
+    assert.equal(replies.length, 4);
+    for (const text of replies) {
+      assert.equal(text, PENDING_REVIEW_STATUS);
+      assert.match(text, /09386369374/);
+      assert.match(text, /09267229506/);
+      assert.doesNotMatch(text, /cancel|booking|Oct 17|kayo po mismo/i);
+    }
+    await s.post(msg('rev1', { text: 'Saan part patingin' }));
+    const clarify = s.mock.calls.messages.at(-1).message.text;
+    assert.match(clarify, /video na nire-review ni Ivan/);
+    assert.doesNotMatch(clarify, /location namin|TV po ba/i);
+    assert.equal(s.mock.calls.llm.length, before);
+
+    await s.post(msg('rev1', { text: 'Sigurado po ba?' }));
+    const hidden = s.mock.calls.llm.at(-1).body.messages.map((m) => m.content).join('\n');
+    assert.doesNotMatch(hidden, /Oct 17/);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /cancel|kayo po mismo/i);
+
+    await s.post(msg('rev1', { text: 'Bakit nagcancel?' }));
+    const shown = s.mock.calls.llm.at(-1).body.messages.map((m) => m.content).join('\n');
+    assert.match(shown, /Oct 17/);
+    const blamed = s.mock.calls.messages.at(-1).message.text;
+    assert.doesNotMatch(blamed, /kayo po mismo/i);
+    assert.match(blamed, /nagre-review pa ng video/);
+    assert.match(blamed, /all-in price soon/);
+  } finally { await s.close(); }
+});
+
+test('booking facts from before the latest video are hidden even inside 12 hours', () => {
+  const now = Date.now();
+  const history = [
+    { role: 'user', content: 'Cancel yung booking Oct 17. Taga Binan, Samsung 55 inch, 3 taon.', ts: now - 3600e3 },
+    { role: 'assistant', content: 'Sige po, cancelled na.', ts: now - 3500e3 },
+    { role: 'user', content: 'Samsung 55 inch\n[Customer sent a video at 10:00 - RECEIVED]', ts: now - 1000 },
+    { role: 'user', content: 'Ok na ba?', ts: now },
+  ];
+  const visible = visibleHistory(history, now, { pendingReview: true });
+  const blob = visible.map((h) => h.content).join('\n');
+  assert.doesNotMatch(blob, /Oct 17|cancelled|Binan/);
+  assert.match(blob, /Customer sent a video/);
+  assert.match(blob, /Ok na ba/);
+  assert.equal(asksReviewStatus('Ok na ba?'), true);
+  assert.equal(asksReviewStatus('Ok na ba yung video nareview na?'), false);
+  const brought = visibleHistory(history, now, { pendingReview: true, keepOldTopic: true });
+  assert.match(brought.map((h) => h.content).join('\n'), /Oct 17/);
+});
+
+test('PAGE_AI_APP_IDS echoes are logged and do not pause the bot', async () => {
+  const s = await setup({ PAGE_AI_APP_IDS: '263902037430900', LOG_LEVEL: 'info' });
+  const logged = [];
+  const orig = console.log;
+  console.log = (...a) => logged.push(a.map(String).join(' '));
+  try {
+    await s.post(echo('ai1', '263902037430900', 'Opo cancelled na po yung booking.'));
+    await s.post(msg('ai1', { text: 'hello po' }));
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.app.store.thread('ai1').pausedUntil, 0);
+    assert.ok(logged.some((l) => /page AI echo/.test(l) && /app_id=263902037430900/.test(l) && /not pausing/.test(l)));
+    await s.post(echo('ai2', '555666', 'ako na po'));
+    await s.post(msg('ai2', { text: 'hello po' }));
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.ok(s.app.store.thread('ai2').pausedUntil > Date.now() + 11 * 3600e3);
+    assert.ok(logged.some((l) => /human reply detected/.test(l) && /app_id=555666/.test(l) && /paused/.test(l)));
+    assert.deepEqual(loadConfig({}).pageAiAppIds, []);
+  } finally {
+    console.log = orig;
+    await s.close();
+  }
+});
+
+test('standby and paused videos are saved and pushed without a reply', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm', DASHBOARD_PASSWORD: 'secret' });
+  const sent = [];
+  s.app.store.writeSubscriptions([{ endpoint: 'https://push.example/s', keys: { p256dh: 'a', auth: 'b' } }]);
+  s.app.cfg.vapidPublicKey = 'pub';
+  s.app.cfg.vapidPrivateKey = 'priv';
+  s.app.push._client = { sendNotification: async (_sub, body) => { sent.push(JSON.parse(body)); } };
+  const video = {
+    object: 'page',
+    entry: [{
+      id: PAGE,
+      time: Date.now(),
+      standby: [{
+        sender: { id: 'stand-vid' },
+        recipient: { id: PAGE },
+        timestamp: Date.now(),
+        message: {
+          mid: 'mid.stand.1',
+          attachments: [{ type: 'video', payload: { url: 'https://cdn.example/stand.mp4' } }],
+        },
+      }],
+    }],
+  };
+  try {
+    await s.post(video);
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.app.store.data.reviews.length, 1);
+    assert.equal(s.app.store.data.reviews[0].type, 'video');
+    assert.equal(s.app.store.data.reviews[0].url, 'https://cdn.example/stand.mp4');
+    assert.equal(s.app.store.data.reviews[0].mid, 'mid.stand.1');
+    assert.equal(s.app.store.data.reviews[0].quietNote, 'bot not replying, standby/paused');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].title, /video/i);
+    assert.equal(sent[0].url, '/dashboard');
+    assert.match(sent[0].body, /sent a video/);
+    s.app.store.data.seenMids = [];
+    await s.post(video);
+    assert.equal(s.app.store.data.reviews.length, 1);
+    assert.equal(sent.length, 1);
+    assert.equal(s.mock.calls.messages.length, 0);
+
+    await s.post(echo('pause-vid', '111222', 'ako na po'));
+    await s.post(msg('pause-vid', { attachments: [{ type: 'image', payload: { url: 'https://cdn.example/pause.jpg' } }] }));
+    assert.equal(s.mock.calls.messages.length, 0);
+    const photo = s.app.store.data.reviews.find((r) => r.url === 'https://cdn.example/pause.jpg');
+    assert.ok(photo);
+    assert.equal(photo.type, 'photo');
+    assert.equal(photo.quietNote, 'bot not replying, standby/paused');
+    assert.equal(sent.length, 2);
+    assert.match(sent[1].title, /photo/i);
+
+    await s.post(msg('else-1', {
+      text: 'ref po ito hindi tv',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/else.mp4' } }],
+    }));
+    const other = s.app.store.data.reviews.find((r) => r.url === 'https://cdn.example/else.mp4');
+    assert.ok(other);
+    assert.equal(other.quietNote, undefined);
+    assert.ok(s.mock.calls.messages.length >= 1);
+    assert.equal(sent.length, 3);
+
+    const { cookie } = await dashCookie(s.base);
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.match(html, /bot not replying, standby\/paused/);
+    assert.equal(html.includes('stand-vid'), false);
   } finally { await s.close(); }
 });

@@ -9,6 +9,10 @@ const { candidateInboxUrls } = require('./inbox-link');
 const { summarizeConversation } = require('./summary');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
+const {
+  reviewPending, asksReviewStatus, isUnclearDuringReview, mentionsOldBooking,
+  visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply,
+} = require('./recency');
 const crypto = require('node:crypto');
 
 // Model sometimes emits [HANDOFF: Customer ready to book] instead of the form.
@@ -140,7 +144,7 @@ class Bot {
       for (const a of ev.message.attachments || []) {
         if (a.type === 'image' && a.payload && a.payload.sticker_id) { text = text || '👍'; continue; }
         if (a.type === 'image' || a.type === 'video') {
-          media.push({ type: a.type, url: (a.payload && a.payload.url) || '' });
+          media.push({ type: a.type, url: (a.payload && a.payload.url) || '', mid: (ev.message && ev.message.mid) || '' });
         } else if (a.type === 'audio' || a.type === 'file') {
           forceReason = forceReason || `customer sent ${a.type}`;
         } else if (!text) text = `[customer sent a ${a.type}]`;
@@ -168,11 +172,14 @@ class Bot {
       t.problemViaVideo = true;
       t.awaitingVideo = false;
     }
-    if (isStandby) return this.onStandby(psid, t);
     if (media.length) {
       t.pendingMedia = [...(t.pendingMedia || []), ...media];
       t.attachmentNote = note;
       t.awaitingVideo = false;
+    }
+    if (isStandby) {
+      await this.publishPendingMedia(psid, { quiet: true });
+      return this.onStandby(psid, t);
     }
     if (t.bookingFormSent && isFilledUp(text)) {
       t.bookingDone = true;
@@ -193,6 +200,7 @@ class Bot {
     }
     const block = this.blockReason(psid, t, ts);
     if (block) {
+      if (/paused:|handed off/i.test(block)) await this.publishPendingMedia(psid, { quiet: true });
       t.pendingMedia = []; t.attachmentNote = '';
       this.log.info(`no reply to ${short(psid)}: ${block}`);
       return;
@@ -282,11 +290,20 @@ class Bot {
   }
 
   async flagPendingMedia(psid) {
+    return this.publishPendingMedia(psid, { quiet: false });
+  }
+
+  // Save photo/video cards and push, including when the bot must stay silent.
+  // The same message mid is stored once.
+  async publishPendingMedia(psid, { quiet = false } = {}) {
     const t = this.store.thread(psid);
-    const items = t.pendingMedia || [];
+    const queued = t.pendingMedia || [];
     t.pendingMedia = [];
-    if (!items.length) return;
+    if (!queued.length) return;
+    const seenMid = new Set((this.store.data.reviews || []).map((r) => r.mid).filter(Boolean));
+    const items = queued.filter((m) => !m.mid || !seenMid.has(m.mid));
     this.store.save();
+    if (!items.length) return;
     for (const m of items) {
       this.log.warn(`video/photo for Ivan ${short(psid)} type=${m.type} url=${m.url || '(none)'}`);
     }
@@ -320,6 +337,8 @@ class Bot {
         conversationId: convo?.id || '',
         conversationLink: convo?.link || '',
         conversationUpdatedTime: convo?.updatedTime || '',
+        mid: m.mid || '',
+        ...(quiet ? { quietNote: 'bot not replying, standby/paused' } : {}),
       }, this.now());
       await this.alertWebhook(psid, { type, url: m.url || '' }, snippet, when);
       if (this.push) {
@@ -393,10 +412,27 @@ class Bot {
         return;
       }
 
+      if (reviewPending(t) && asksReviewStatus(latestUser)) {
+        this.repliedRev.set(psid, rev);
+        await this.send(psid, PENDING_REVIEW_STATUS);
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
+      if (reviewPending(t) && isUnclearDuringReview(latestUser)) {
+        this.repliedRev.set(psid, rev);
+        await this.send(psid, REVIEW_CLARIFY);
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
+
       this.graph.typingOn(psid).catch((e) => this.log.warn('typing_on failed', e.message));
       let raw;
+      const modelHistory = visibleHistory(t.history, this.now(), {
+        keepOldTopic: mentionsOldBooking(latestUser),
+        pendingReview: reviewPending(t),
+      });
       try {
-        raw = await this.llm.reply(t.history, {
+        raw = await this.llm.reply(modelHistory, {
           nowText: this.nowText(),
           attachmentNote,
           intakeNote: intakeContext(t),
@@ -430,7 +466,11 @@ class Bot {
       t.fallbackCount = 0;
       const { text, handoff, reason } = parseHandoff(raw);
       if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
-      const guarded = applyCustomerGuard(t, applyReplyGuard(t, text), latestUserText(t));
+      const guarded = guardStaleReply(
+        t,
+        applyCustomerGuard(t, applyReplyGuard(t, text), latestUserText(t)),
+        latestUserText(t),
+      );
       this.repliedRev.set(psid, rev);
       // A photo or video never passes the thread. A keyword in the caption already handed off above.
       if (hadMedia && !t.intakeCloseSent) {
@@ -518,13 +558,20 @@ class Bot {
     if (appId && appId === this.cfg.appId) return; // our own reply
     if (appId && this.cfg.ignoreEchoAppIds.includes(appId)) return;
     if (this.store.seen(m.mid)) return;
-    // A person (Ivan) or another tool replied from the Page: pause the bot here.
     const t = this.store.thread(psid);
+    // Meta's own inbox automation, not a person typing in Page Inbox.
+    if (appId && (this.cfg.pageAiAppIds || []).includes(appId)) {
+      if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
+      this.store.save();
+      this.log.info(`page AI echo for ${short(psid)} app_id=${appId} – not pausing`);
+      return;
+    }
+    // A person (Ivan) or another tool replied from the Page: pause the bot here.
     t.pausedUntil = this.now() + this.cfg.humanPauseHours * HOUR;
     if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
     this.cancelPending(psid);
     this.store.save();
-    this.log.info(`human reply detected for ${short(psid)} (app_id ${appId || 'none'}) – bot paused ${this.cfg.humanPauseHours}h`);
+    this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseHours}h`);
   }
 
   onThreadControl(ev) {
@@ -600,7 +647,8 @@ class Bot {
     t.followupPending = true;
     this.store.save();
     try {
-      const raw = await this.llm.followUp(t.history, { nowText: this.nowText(), videoMissing: Boolean(t.awaitingVideo) });
+      const followHistory = visibleHistory(t.history, this.now(), { pendingReview: reviewPending(t) });
+      const raw = await this.llm.followUp(followHistory, { nowText: this.nowText(), videoMissing: Boolean(t.awaitingVideo) });
       const { text } = parseHandoff(raw);
       if (!sanitizeOutgoing(text)) return;
       const fresh = this.store.thread(psid);

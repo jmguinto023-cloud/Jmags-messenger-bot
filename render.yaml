@@ -50,6 +50,9 @@ services:
         sync: false
       - key: IGNORE_ECHO_APP_IDS
         sync: false
+      # Empty until the Meta automation app id is confirmed. Does not pause the bot.
+      - key: PAGE_AI_APP_IDS
+        sync: false
       - key: LOG_LEVEL
         sync: false
       - key: VERIFY_TOKEN
