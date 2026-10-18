@@ -867,8 +867,19 @@ function buildView(store, opts) {
     const date = addDays(today, -i);
     chart.push({ date, amount: sumAmount(payments.filter((p) => p.date === date)) });
   }
-  const statusFilter = STATUSES.includes(opts.status) ? opts.status : '';
-  const visibleJobs = (statusFilter ? jobs.filter((j) => j.status === statusFilter) : jobs)
+  const rawStatus = String(opts.status || '');
+  let statusFilter = '';
+  if (tab === 'jobs' && !rawStatus) statusFilter = 'Open';
+  else if (rawStatus === 'All') statusFilter = '';
+  else if (rawStatus === 'Open' || rawStatus === 'warranty' || rawStatus === 'ad') statusFilter = rawStatus;
+  else if (STATUSES.includes(rawStatus)) statusFilter = rawStatus;
+  const visibleJobs = jobs.filter((j) => {
+    if (!statusFilter) return true;
+    if (statusFilter === 'Open') return openJob(j);
+    if (statusFilter === 'warranty') return Boolean(j.warrantyEnd) && j.warrantyEnd >= today && j.status !== 'Cancelled';
+    if (statusFilter === 'ad') return !String(j.adArea || '').trim();
+    return j.status === statusFilter;
+  })
     .slice()
     .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)));
   const editing = opts.edit ? ops.jobs.find((j) => j.id === opts.edit) || null : null;
@@ -878,6 +889,7 @@ function buildView(store, opts) {
     deliveryOn: Boolean(opts.deliveryOn),
     kpis: {
       open: jobs.filter(openJob).length,
+      inquiries: jobs.filter((j) => j.status === 'Inquiry').length,
       underRepair: jobs.filter((j) => j.status === 'Under Repair').length,
       forDelivery: jobs.filter((j) => j.status === 'For Delivery').length,
       visitsToday: visitsToday.length,
@@ -906,6 +918,19 @@ function buildView(store, opts) {
     customers: customerRows(ops, branch),
     money: moneyReport(ops, { period, branch, now, tz }),
     finance: financeReport(ops, { period, branch, now, tz }),
+    financeByBranch: {
+      Cavite: financeReport(ops, { period, branch: 'Cavite', now, tz }),
+      'San Pablo': financeReport(ops, { period, branch: 'San Pablo', now, tz }),
+    },
+    now,
+    group: opts.group === 'ad' ? 'ad' : 'branch',
+    bookingFormUrl: opts.bookingFormUrl || '',
+    chipCounts: Object.assign({
+      Open: jobs.filter(openJob).length,
+      warranty: jobs.filter((j) => j.warrantyEnd && j.warrantyEnd >= today && j.status !== 'Cancelled').length,
+      ad: jobs.filter((j) => !String(j.adArea || '').trim()).length,
+      All: jobs.length,
+    }, Object.fromEntries(STATUSES.map((status) => [status, jobs.filter((j) => j.status === status).length]))),
     parts: filterBranch(ops.parts, branch),
     reviews: opts.reviews || [],
   };
@@ -946,7 +971,11 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
       issue: field(params, 'issue'),
       technician: TECHS.includes(field(params, 'technician')) ? field(params, 'technician') : 'Unassigned',
       branch: canonBranch(field(params, 'branch')),
-      adArea: field(params, 'adArea'),
+      adArea: field(params, 'adArea') === 'Not checked yet' ? '' : field(params, 'adArea'),
+      leadSource: field(params, 'leadSource'),
+      subdivision: field(params, 'subdivision'),
+      province: field(params, 'province'),
+      serviceType: field(params, 'serviceType'),
       price: money(field(params, 'price')),
       travelFee: money(field(params, 'travelFee')),
       status: STATUSES.includes(field(params, 'status')) ? field(params, 'status') : 'Inquiry',
@@ -1027,6 +1056,8 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
         size: booking.size,
         issue: booking.issue,
         branch: booking.branch,
+        adArea: (field(params, 'adArea') === 'Not checked yet' ? '' : field(params, 'adArea')) || booking.adArea || '',
+        leadSource: field(params, 'leadSource') || booking.leadSource || '',
         price: booking.price,
         status: booking.visitDate ? 'Scheduled' : 'Inquiry',
         createdAt: new Date(now).toISOString(),
@@ -1061,6 +1092,9 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
       branch: canonBranch(field(params, 'branch')),
       amount: money(field(params, 'amount')),
       note: field(params, 'note'),
+      category: field(params, 'category'),
+      jobId: field(params, 'jobId'),
+      spentBy: field(params, 'spentBy') || 'Owner',
     });
     store.save();
     return { ok: true };
@@ -1093,13 +1127,21 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
   if (action === 'add-part' || action === 'update-part') {
     const id = action === 'update-part' ? field(params, 'id') : nextSeq(ops.parts, 'P');
     const prev = ops.parts.find((p) => p.id === id);
+    const reorderAt = field(params, 'reorderAt') === ''
+      ? (prev && prev.reorderAt != null ? prev.reorderAt : 0)
+      : money(field(params, 'reorderAt'));
+    const stock = money(field(params, 'stock'));
     const part = {
+      ...(prev || {}),
       id,
       name: field(params, 'name'),
       branch: canonBranch(field(params, 'branch')),
       cost: money(field(params, 'cost')),
-      stock: money(field(params, 'stock')),
-      reorder: field(params, 'reorder') === 'on' || field(params, 'reorder') === '1' || Number(field(params, 'stock')) <= 0,
+      stock,
+      reorderAt,
+      fits: field(params, 'fits') || (prev && prev.fits) || '',
+      sellPrice: field(params, 'sellPrice') === '' ? Number((prev && prev.sellPrice) || 0) : money(field(params, 'sellPrice')),
+      reorder: field(params, 'reorder') === 'on' || field(params, 'reorder') === '1' || stock <= Number(reorderAt || 0) || stock <= 0,
     };
     if (!part.name) return { ok: false, error: 'Part name required' };
     if (prev) Object.assign(prev, part);
@@ -1122,6 +1164,61 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
       return { ok: true };
     }
     return linkReviewToJob(store, reviewId, job.id);
+  }
+
+  if (action === 'delete-payment' || action === 'update-payment') {
+    const amount = money(field(params, 'amount'));
+    const wasType = field(params, 'wasType') || field(params, 'type');
+    const idx = ops.payments.findIndex((p) => p.date === field(params, 'date')
+      && (p.jobId || '') === field(params, 'jobId')
+      && (p.customerName || '') === field(params, 'customerName')
+      && Number(p.amount) === amount
+      && (p.method || '') === field(params, 'method')
+      && (p.note || '') === field(params, 'note')
+      && (p.type || '') === wasType
+      && (p.branch || '') === canonBranch(field(params, 'branch')));
+    if (idx < 0) return { ok: false, error: 'Hindi makita ang payment.' };
+    if (action === 'delete-payment') ops.payments.splice(idx, 1);
+    else if (PAY_TYPES.includes(field(params, 'type'))) ops.payments[idx].type = field(params, 'type');
+    store.save();
+    return { ok: true };
+  }
+
+  if (action === 'delete-expense') {
+    const amount = money(field(params, 'amount'));
+    const idx = ops.expenses.findIndex((e) => e.date === field(params, 'date')
+      && canonBranch(e.branch) === canonBranch(field(params, 'branch'))
+      && Number(e.amount) === amount
+      && (e.note || '') === field(params, 'note'));
+    if (idx < 0) return { ok: false, error: 'Hindi makita ang expense.' };
+    ops.expenses.splice(idx, 1);
+    store.save();
+    return { ok: true };
+  }
+
+  if (action === 'delete-ad') {
+    const amount = money(field(params, 'amount'));
+    const idx = ops.ads.findIndex((a) => (a.start || '') === field(params, 'start')
+      && (a.end || '') === field(params, 'end')
+      && canonBranch(a.branch) === canonBranch(field(params, 'branch'))
+      && Number(a.amount) === amount
+      && (a.note || '') === field(params, 'note'));
+    if (idx < 0) return { ok: false, error: 'Hindi makita ang ad spend.' };
+    ops.ads.splice(idx, 1);
+    store.save();
+    return { ok: true };
+  }
+
+  if (action === 'delete-income') {
+    const amount = money(field(params, 'amount'));
+    const idx = ops.otherIncome.findIndex((e) => e.date === field(params, 'date')
+      && canonBranch(e.branch) === canonBranch(field(params, 'branch'))
+      && Number(e.amount) === amount
+      && (e.note || '') === field(params, 'note'));
+    if (idx < 0) return { ok: false, error: 'Hindi makita ang income.' };
+    ops.otherIncome.splice(idx, 1);
+    store.save();
+    return { ok: true };
   }
 
   return { ok: false, error: 'Unknown action' };
