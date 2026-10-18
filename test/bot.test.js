@@ -772,6 +772,9 @@ test('dashboard is an installable PWA and push is skipped until VAPID keys exist
     assert.equal(page.status, 200);
     assert.match(html, /rel="manifest"/);
     assert.match(html, /Log in/);
+    assert.match(html, /id="toggle-password"/);
+    assert.match(html, /aria-label="Ipakita\/Itago ang password"/);
+    assert.match(html, /id="password"[^>]*type="password"/);
     assert.doesNotMatch(html, /Enable notifications/);
     assert.match(html, /apple-mobile-web-app-capable/);
     assert.match(html, /theme-color/);

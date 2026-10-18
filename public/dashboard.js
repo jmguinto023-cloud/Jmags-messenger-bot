@@ -1,4 +1,14 @@
 'use strict';
+const password = document.getElementById('password');
+const peek = document.getElementById('toggle-password');
+if (password && peek) {
+  peek.addEventListener('click', () => {
+    const show = password.type === 'password';
+    password.type = show ? 'text' : 'password';
+    peek.setAttribute('aria-pressed', show ? 'true' : 'false');
+  });
+}
+
 const statusEl = document.getElementById('status');
 const button = document.getElementById('enable-notifications');
 
