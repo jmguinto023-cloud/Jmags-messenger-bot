@@ -117,6 +117,8 @@ class Bot {
     this.inflight = new Set();
     this.rev = new Map(); // bumps when a new customer message should be included in the reply
     this.repliedRev = new Map(); // last revision we already answered
+    this.dashInflight = new Map(); // psid -> { text, promise } so a double-tap sends once
+    this.dashRecent = new Map(); // psid -> { text, at } short repeat window after a dashboard send
   }
 
   // Entry point for a verified webhook body. Never throws.
@@ -572,6 +574,57 @@ class Bot {
     await this.send(psid, tips, { tips: true });
   }
 
+  // Ivan typed this on the video dashboard. One RESPONSE send, then the same
+  // pause a human inbox reply would set. The echo of our own app is ignored.
+  async replyFromDashboard(reviewId, text) {
+    const clean = sanitizeOutgoing(text);
+    if (!clean) return { ok: false, status: 400, error: 'Walang laman.' };
+    if (clean.length > 2000) return { ok: false, status: 400, error: 'Masyadong mahaba. Max 2000 characters.' };
+    const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
+    if (!row || !row.psid) return { ok: false, status: 404, error: 'Hindi makita ang chat.' };
+    const psid = row.psid;
+    const recent = this.dashRecent.get(psid);
+    if (recent && recent.text === clean && this.now() - recent.at < 3000) {
+      return { ok: true, status: 200, duplicate: true };
+    }
+    const inflight = this.dashInflight.get(psid);
+    if (inflight && inflight.text === clean) return inflight.promise;
+    if (inflight) return { ok: false, status: 409, error: 'Sandali lang, may pinapadala pa.' };
+    const t = this.store.thread(psid);
+    const last = t.lastUserTs || 0;
+    if (!last || this.now() - last > this.cfg.replyWindowHours * HOUR) {
+      this.log.info(`dashboard reply skipped for ${short(psid)}: outside 24h`);
+      return { ok: false, status: 409, error: 'Lampas na sa 24 oras, i-reply sa Business Suite' };
+    }
+    const promise = this.deliverDashboardReply(psid, clean);
+    this.dashInflight.set(psid, { text: clean, promise });
+    try {
+      return await promise;
+    } finally {
+      const cur = this.dashInflight.get(psid);
+      if (cur && cur.promise === promise) this.dashInflight.delete(psid);
+    }
+  }
+
+  async deliverDashboardReply(psid, clean) {
+    const sent = await this.graph.sendPageText(psid, clean);
+    const mid = sent && sent.message_id;
+    if (mid) this.store.seen(mid);
+    const now = this.now();
+    const t = this.store.thread(psid);
+    t.pausedUntil = now + this.cfg.humanPauseHours * HOUR;
+    t.lastHumanEchoAt = now;
+    t.pauseSource = 'dashboard reply';
+    this.stopVideoFollowup(psid, 'Ivan replied from the dashboard');
+    this.cancelPending(psid);
+    this.store.addTurn(psid, 'assistant', clean, now, { via: 'ivan' });
+    this.store.markIvanReplied(psid, now);
+    this.dashRecent.set(psid, { text: clean, at: now });
+    this.store.save();
+    this.log.info(`dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseHours}h`);
+    return { ok: true, status: 200 };
+  }
+
   async handoff(psid, reason, holdingText) {
     const t = this.store.thread(psid);
     if (t.handedOff) return;
@@ -593,7 +646,10 @@ class Bot {
     if (!psid) return;
     const m = ev.message;
     const appId = m.app_id !== undefined && m.app_id !== null ? String(m.app_id) : '';
-    if (appId && appId === this.cfg.appId) return; // our own reply
+    // Our own Send API call, including a reply Ivan typed on the dashboard.
+    // That path already paused the bot and stored the line. Ignoring the echo
+    // keeps it from being counted a second time.
+    if (appId && appId === this.cfg.appId) return;
     if (appId && this.cfg.ignoreEchoAppIds.includes(appId)) return;
     if (this.store.seen(m.mid)) return;
     const t = this.store.thread(psid);
@@ -619,7 +675,7 @@ class Bot {
     t.lastHumanEchoAt = this.now();
     t.pauseSource = `human echo app_id=${appId || 'none'}`;
     this.stopVideoFollowup(psid, 'paused for a human');
-    if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
+    if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now(), { via: 'ivan' });
     this.cancelPending(psid);
     this.store.save();
     this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseHours}h`);

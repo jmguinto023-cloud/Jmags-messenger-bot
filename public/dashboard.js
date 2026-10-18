@@ -64,39 +64,130 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
 }
 
-// Same rules as inboxClientKind / primaryInboxHref in src/inbox-link.js.
-// Desktop keeps the https Business Suite link. Android opens the Business Suite
-// app by package. The facebook.com inbox link is hidden on a phone.
-function inboxClientKind() {
+function isPhone() {
   const ua = navigator.userAgent || '';
-  if (/Android/i.test(ua)) return 'android';
-  if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+  if (/Android|iPhone|iPad|iPod/i.test(ua)) return true;
+  try { return window.matchMedia('(pointer: coarse)').matches; } catch (e) { return false; }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderMessages(messages) {
+  if (!messages || !messages.length) return '<p class="meta empty-thread">Wala pang mensahe.</p>';
+  return `<ol class="thread">${messages.map((m) => {
+    const cls = m.role === 'user' ? 'from-customer' : 'from-us';
+    return `<li class="${cls}"><span class="who-line">${esc(m.who)} · ${esc(m.time)}</span><p>${esc(m.text)}</p></li>`;
+  }).join('')}</ol>`;
+}
+
+function applyCard(article, card) {
+  const wrap = article.querySelector('.thread-wrap');
+  if (wrap) wrap.innerHTML = renderMessages(card.messages);
+  let pill = article.querySelector('.pill.ivan');
+  if (card.ivanReplied && !pill) {
+    const h = article.querySelector('h2');
+    if (h) {
+      pill = document.createElement('span');
+      pill.className = 'pill ivan';
+      pill.textContent = 'Sinagot ni Ivan';
+      h.appendChild(document.createTextNode(' '));
+      h.appendChild(pill);
+    }
+  }
+  const box = article.querySelector('textarea');
+  const btn = article.querySelector('.send-reply');
+  const note = article.querySelector('.send-note');
+  if (!card.windowOpen) {
+    if (box) box.disabled = true;
+    if (btn) btn.disabled = true;
+    if (note && note.dataset.hold !== '1') note.textContent = 'Lampas na sa 24 oras, i-reply sa Business Suite';
+  } else if (article.dataset.sending !== '1') {
+    if (box) box.disabled = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function refreshThreads() {
+  if (document.visibilityState === 'hidden') return;
+  const cards = document.querySelectorAll('article[data-review-id]');
+  if (!cards.length) return;
+  let data;
   try {
-    if (window.matchMedia('(pointer: coarse)').matches) return 'coarse';
-  } catch (e) { /* matchMedia can throw in old webviews */ }
-  return '';
+    const res = await fetch('/dashboard/api/threads');
+    if (!res.ok) return;
+    data = await res.json();
+  } catch (e) { return; }
+  const known = new Set();
+  cards.forEach((article) => {
+    const id = article.getAttribute('data-review-id');
+    known.add(id);
+    const card = (data.cards || []).find((c) => c.id === id);
+    if (card) applyCard(article, card);
+  });
+  const missing = (data.ids || []).some((id) => !known.has(id));
+  const dirty = [...document.querySelectorAll('.reply textarea')].some((t) => t.value.trim());
+  if (missing && !dirty) window.location.reload();
 }
 
-function applyMobileInboxLinks() {
-  const kind = inboxClientKind();
-  if (!kind) return;
-  document.querySelectorAll('a.inbox-primary').forEach((a) => {
-    const android = a.getAttribute('data-android-href') || '';
-    const ios = a.getAttribute('data-ios-href') || '';
-    const suite = a.getAttribute('href') || '';
-    let next = suite;
-    if (kind === 'android') next = android || suite;
-    else if (kind === 'ios') next = ios || suite;
-    if (next) a.setAttribute('href', next);
-  });
-  // facebook.com/{page}/inbox/{thread} opens the personal feed, not the Page chat.
-  document.querySelectorAll('a.personal-inbox').forEach((a) => {
-    const p = a.closest('p');
-    if (p) p.hidden = true;
+const replyCards = document.querySelectorAll('article[data-review-id]');
+if (replyCards.length) {
+  setInterval(refreshThreads, 15000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshThreads();
   });
 }
 
-applyMobileInboxLinks();
+async function sendReply(article) {
+  if (!article || article.dataset.sending === '1') return;
+  const box = article.querySelector('textarea');
+  const btn = article.querySelector('.send-reply');
+  const note = article.querySelector('.send-note');
+  const text = box ? box.value : '';
+  if (!text.trim()) {
+    if (note) note.textContent = 'Walang laman.';
+    return;
+  }
+  article.dataset.sending = '1';
+  if (btn) btn.disabled = true;
+  if (note) { note.dataset.hold = '1'; note.textContent = 'Ipinapadala…'; }
+  try {
+    const res = await fetch('/dashboard/api/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: article.getAttribute('data-review-id'), text }),
+    });
+    let body = {};
+    try { body = await res.json(); } catch (e) { body = {}; }
+    if (res.ok && body.ok) {
+      if (box) box.value = '';
+      if (note) note.textContent = 'Naipadala.';
+      await refreshThreads();
+    } else if (note) {
+      note.textContent = body.error || 'Hindi naipadala. Subukan ulit.';
+    }
+  } catch (e) {
+    if (note) note.textContent = 'Hindi naipadala. Subukan ulit.';
+  } finally {
+    article.dataset.sending = '';
+    if (btn && box && !box.disabled) btn.disabled = false;
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const btn = event.target.closest('.send-reply');
+  if (!btn) return;
+  sendReply(btn.closest('article'));
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || isPhone()) return;
+  const box = event.target.closest && event.target.closest('.reply textarea');
+  if (!box) return;
+  event.preventDefault();
+  sendReply(box.closest('article'));
+});
 
 function copyName(name) {
   let ok = false;

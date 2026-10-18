@@ -1157,10 +1157,15 @@ test('dashboard login lists videos without the full PSID and marks them reviewed
     assert.match(html, /<video/);
     assert.match(html, />Open</);
     assert.match(html, /Messenger links can expire/);
-    assert.match(html, /Open chat in Business Suite/);
+    assert.match(html, /<textarea/);
+    assert.match(html, />Send</);
+    assert.match(html, /Buksan ang Inbox/);
+    assert.match(html, /Huling mensahe/);
     assert.match(html, new RegExp(`asset_id=${PAGE}`));
     assert.doesNotMatch(html, /selected_item_id/);
     assert.doesNotMatch(html, /Open in Messenger/);
+    assert.doesNotMatch(html, /Open chat in Business Suite/);
+    assert.doesNotMatch(html, /intent:#Intent/);
     assert.match(html, /Mark reviewed/);
     assert.match(html, /1 new/);
     assert.equal(html.includes('cust-7771'), false);
@@ -1265,27 +1270,29 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.ok(urls.includes('https://www.facebook.com/messages/t/9988'));
   assert.ok(urls.includes('https://www.facebook.com/messages/t/cust-7771'));
   const js = fs.readFileSync(path.join(__dirname, '../public/dashboard.js'), 'utf8');
-  assert.match(js, /Android/);
-  assert.match(js, /iPhone\|iPad\|iPod/);
+  assert.match(js, /Android\|iPhone\|iPad\|iPod/);
   assert.match(js, /pointer:\s*coarse/);
-  assert.match(js, /data-android-href/);
-  assert.match(js, /personal-inbox/);
-  assert.doesNotMatch(js, /data-messenger-href/);
+  assert.match(js, /send-reply/);
+  assert.match(js, /15000/);
+  assert.match(js, /visibilityState/);
+  assert.match(js, /Enter/);
+  assert.doesNotMatch(js, /data-android-href/);
+  assert.doesNotMatch(js, /personal-inbox/);
+  assert.doesNotMatch(js, /selected_item_id/);
   assert.match(js, /Nakopya ang pangalan ni /);
   assert.match(js, /i-paste sa search ng inbox/);
   assert.match(js, /data-copy-name/);
-  assert.doesNotMatch(js, /preventDefault/);
   assert.match(js, /controllerchange/);
   assert.match(js, /location\.reload/);
   const sw = fs.readFileSync(path.join(__dirname, '../public/sw.js'), 'utf8');
-  assert.match(sw, /jmags-video-shell-v5/);
+  assert.match(sw, /jmags-video-shell-v6/);
   assert.match(sw, /skipWaiting/);
   assert.match(sw, /clients\.claim/);
   assert.match(sw, /network-first for data/);
   assert.match(sw, /\/dashboard\.js/);
 });
 
-test('a stored conversation deep-links Business Suite and the Messenger app', async () => {
+test('a stored conversation keeps the name copy and the plain inbox link', async () => {
   const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm' });
   s.mock.state.profiles = { 'cust-7771': { name: 'Maria Cruz' } };
   s.mock.state.conversations = {
@@ -1316,31 +1323,31 @@ test('a stored conversation deep-links Business Suite and the Messenger app', as
 
     const { cookie } = await dashCookie(s.base);
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
-    const links = inboxLinks(PAGE, s.app.store.data.reviews[0]);
-    const href = links.suite.replaceAll('&', '&amp;');
-    assert.match(html, /Open chat in Business Suite/);
+    const href = genericInboxUrl(PAGE).replaceAll('&', '&amp;');
+    assert.match(html, /Buksan ang Inbox/);
     assert.ok(html.includes(`href="${href}"`));
     assert.equal(html.includes('selected_item_id'), false);
     assert.equal(html.includes('cust-7771'), false);
     assert.match(html, /Kopyahin ang pangalan/);
     assert.match(html, /data-copy-name="Maria Cruz"/);
-    assert.ok(html.includes(`data-android-href="${links.android.replaceAll('&', '&amp;')}"`));
-    assert.match(html, new RegExp(`package=${BUSINESS_SUITE_PACKAGE}`));
-    assert.match(html, /Open in Messenger/);
-    assert.ok(html.includes(`https://www.facebook.com/${PAGE}/inbox/555001/`));
-    assert.match(html, /thread id: 555001/);
+    assert.match(html, /<textarea/);
+    assert.match(html, />Send</);
+    assert.doesNotMatch(html, /intent:#Intent/);
+    assert.doesNotMatch(html, /Open in Messenger/);
+    assert.doesNotMatch(html, /Open chat in Business Suite/);
+    assert.doesNotMatch(html, new RegExp(`facebook\\.com/${PAGE}/inbox/555001`));
     assert.equal(s.mock.calls.conversations.length, 1);
     const phoneUa = 'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/120.0.0.0 Mobile Safari/537.36';
     const phone = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie, 'User-Agent': phoneUa } })).text();
-    assert.match(phone, /<a class="inbox-primary" href="intent:#Intent;action=android\.intent\.action\.MAIN;category=android\.intent\.category\.LAUNCHER;package=com\.facebook\.pages\.app;/);
-    assert.doesNotMatch(phone, /<a class="inbox-primary" href="https:\/\/business\.facebook\.com/);
-    assert.match(phone, /thread id: 555001/);
+    assert.match(phone, /Buksan ang Inbox/);
+    assert.match(phone, new RegExp(`href="${href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+    assert.doesNotMatch(phone, /intent:#Intent/);
     assert.match(phone, /Maria Cruz/);
     assert.match(phone, /Kopyahin ang pangalan/);
     assert.match(phone, /data-copy-name="Maria Cruz"/);
     assert.equal(phone.includes('Open in Messenger'), false);
     assert.doesNotMatch(phone, /class="personal-inbox"/);
-    assert.match(phone, new RegExp(`messenger: https://www.facebook.com/${PAGE}/inbox/555001/`));
+    assert.doesNotMatch(phone, new RegExp(`facebook\\.com/${PAGE}/inbox/555001`));
     const rows = await (await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } })).json();
     assert.equal(JSON.stringify(rows).includes('cust-7771'), false);
     assert.equal(rows[0].conversationId, 't_9988');
@@ -1362,7 +1369,8 @@ test('a Graph conversation error keeps the generic inbox link', async () => {
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
     assert.equal(html.includes('selected_item_id'), false);
     assert.equal(html.includes('Open in Messenger'), false);
-    assert.match(html, /thread id: not found/);
+    assert.doesNotMatch(html, /thread id:/);
+    assert.match(html, /Buksan ang Inbox/);
     assert.ok(html.includes(`https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}`));
     assert.equal(s.app.store.data.reviews[0].conversationId, '');
     assert.ok(logged.some((l) => /conversation lookup failed/.test(l) && /boom/.test(l)));
@@ -1397,9 +1405,12 @@ test('a missing profile name is taken from the conversation participants', async
     assert.match(phone, /Juan Dela Cruz/);
     assert.match(phone, /data-copy-name="Juan Dela Cruz"/);
     assert.match(phone, /Kopyahin ang pangalan/);
+    assert.match(phone, /Buksan ang Inbox/);
     assert.equal(phone.includes('Open in Messenger'), false);
+    assert.doesNotMatch(phone, /intent:#Intent/);
     const desk = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
-    assert.match(desk, /Open in Messenger/);
+    assert.match(desk, /Buksan ang Inbox/);
+    assert.doesNotMatch(desk, /Open in Messenger/);
     assert.match(desk, /Kopyahin ang pangalan/);
     assert.match(desk, /data-copy-name="Juan Dela Cruz"/);
   } finally { await s.close(); }
@@ -1428,7 +1439,8 @@ test('the dashboard fills a missing conversation id on first load', async () => 
     const href = genericInboxUrl(PAGE).replaceAll('&', '&amp;');
     assert.ok(html.includes(`href="${href}"`));
     assert.equal(html.includes('selected_item_id'), false);
-    assert.match(html, /Open in Messenger/);
+    assert.match(html, /Buksan ang Inbox/);
+    assert.doesNotMatch(html, /Open in Messenger/);
     assert.equal(html.includes('lazy-9001'), false);
     assert.equal(s.app.store.data.reviews[0].conversationId, 't_4242');
     assert.equal(s.app.store.data.reviews[0].conversationLink, `/${PAGE}/inbox/777/`);
@@ -2151,4 +2163,122 @@ test('a photo does not schedule a video follow-up', async () => {
     await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.length, n);
   } finally { await s.close(); }
+});
+
+test('dashboard reply sends inside 24h, pauses the bot, and ignores a double-tap or our own echo', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm', LOG_LEVEL: 'info' });
+  const logged = [];
+  const orig = console.log;
+  console.log = (...a) => logged.push(a.map(String).join(' '));
+  const now = NOON;
+  s.app.bot.now = () => now;
+  const price = '8500 po all in';
+  try {
+    await s.post(msg('dash-reply', {
+      text: 'Samsung 55 inch walang display taga Binan',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/reply-box.mp4' } }],
+    }, now));
+    const review = s.app.store.data.reviews[0];
+    assert.ok(review.videoReplyAt === undefined);
+    assert.ok(s.app.store.thread('dash-reply').videoReplyAt);
+    const { cookie } = await dashCookie(s.base);
+    const replyUrl = `${s.base}/dashboard/api/reply`;
+    const threadsUrl = `${s.base}/dashboard/api/threads`;
+    const payload = JSON.stringify({ id: review.id, text: price });
+    const denied = await fetch(replyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await fetch(threadsUrl)).status, 403);
+    assert.equal(s.mock.calls.messages.some((m) => m.message && m.message.text === price), false);
+
+    const late = s.app.store.thread('dash-reply');
+    const savedLast = late.lastUserTs;
+    late.lastUserTs = now - 25 * 3600 * 1000;
+    const closed = await fetch(replyUrl, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: payload,
+    });
+    assert.equal(closed.status, 409);
+    assert.equal((await closed.json()).error, 'Lampas na sa 24 oras, i-reply sa Business Suite');
+    assert.equal(s.mock.calls.messages.some((m) => m.message && m.message.text === price), false);
+    assert.equal(late.pausedUntil, 0);
+    late.lastUserTs = savedLast;
+
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+    const [a, b] = await Promise.all([
+      fetch(replyUrl, { method: 'POST', headers, body: payload }),
+      fetch(replyUrl, { method: 'POST', headers, body: payload }),
+    ]);
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    const sent = s.mock.calls.messages.filter((m) => m.message && m.message.text === price);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].messaging_type, 'RESPONSE');
+    assert.equal(sent[0].tag, undefined);
+    assert.equal(sent[0].recipient.id, 'dash-reply');
+    assert.equal(sent[0].message.metadata, 'jmags-ivan');
+    const again = await fetch(replyUrl, { method: 'POST', headers, body: payload });
+    assert.equal(again.status, 200);
+    assert.equal((await again.json()).duplicate, true);
+    assert.equal(s.mock.calls.messages.filter((m) => m.message && m.message.text === price).length, 1);
+
+    const t = s.app.store.thread('dash-reply');
+    assert.equal(t.videoReplyAt, 0);
+    assert.equal(t.pauseSource, 'dashboard reply');
+    assert.equal(t.pausedUntil, now + 12 * 3600 * 1000);
+    assert.equal(t.lastHumanEchoAt, now);
+    assert.equal(s.app.bot.humanPaused(t, now), true);
+    assert.equal(s.app.bot.humanPaused(t, now + (2 * 3600 * 1000) + 1000), false);
+    t.pausedUntil = now + 12 * 3600 * 1000;
+    t.lastHumanEchoAt = now;
+    t.pauseSource = 'dashboard reply';
+    const ivanLines = t.history.filter((h) => h.content === price);
+    assert.equal(ivanLines.length, 1);
+    assert.equal(ivanLines[0].via, 'ivan');
+    assert.equal(review.ivanRepliedAt, new Date(now).toISOString());
+    assert.ok(logged.some((l) => /dashboard reply to/.test(l) && /paused/.test(l)));
+    assert.ok(logged.some((l) => /video follow-up skipped/.test(l) && /Ivan replied from the dashboard/.test(l)));
+
+    const echoMid = s.app.store.data.seenMids.at(-1);
+    await s.post({
+      object: 'page',
+      entry: [{ id: PAGE, time: now, messaging: [{ sender: { id: PAGE }, recipient: { id: 'dash-reply' }, timestamp: now, message: { is_echo: true, mid: echoMid, text: price, app_id: APP } }] }],
+    });
+    await s.post({
+      object: 'page',
+      entry: [{ id: PAGE, time: now, messaging: [{ sender: { id: PAGE }, recipient: { id: 'dash-reply' }, timestamp: now, message: { is_echo: true, mid: echoMid, text: price } }] }],
+    });
+    assert.equal(s.app.store.thread('dash-reply').history.filter((h) => h.content === price).length, 1);
+    assert.equal(s.app.store.thread('dash-reply').pauseSource, 'dashboard reply');
+
+    await s.post(msg('dash-reply', { text: 'sige po bukas' }, now + 1000));
+    const threads = await (await fetch(threadsUrl, { headers: { Cookie: cookie } })).json();
+    assert.equal(JSON.stringify(threads).includes('dash-reply'), false);
+    const card = threads.cards.find((c) => c.id === review.id);
+    assert.equal(card.ivanReplied, true);
+    assert.ok(card.messages.some((m) => m.who === 'Customer' && /sige po bukas/.test(m.text)));
+    assert.ok(card.messages.some((m) => m.who === 'Ivan' && m.text === price));
+    assert.ok(card.messages.length <= 10);
+
+    const huge = await fetch(replyUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: review.id, text: 'x'.repeat(2001) }),
+    });
+    assert.equal(huge.status, 400);
+    assert.match((await huge.json()).error, /2000/);
+    assert.equal(s.mock.calls.messages.filter((m) => m.message && m.message.text && m.message.text.length > 2000).length, 0);
+
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.match(html, /Sinagot ni Ivan/);
+    assert.match(html, /sige po bukas/);
+    assert.match(html, /8500 po all in/);
+  } finally {
+    console.log = orig;
+    await s.close();
+  }
 });

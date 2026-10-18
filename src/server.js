@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { passwordOk, readCookie, validSession, sessionCookie, clearCookie } = require('./dash-session');
-const { loginPage, listPage, publicReview } = require('./dashboard-page');
+const { loginPage, listPage, publicReview, threadsPayload } = require('./dashboard-page');
 const { parseSignedRequest } = require('./signed-request');
 
 const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
@@ -58,12 +58,11 @@ function createServer({ cfg, bot, log }) {
 
     if (req.method === 'GET' && url.pathname === '/dashboard') {
       if (!validSession(cfg, readCookie(req))) return send(200, loginPage(), 'text/html; charset=utf-8');
-      const ua = req.headers['user-agent'];
       bot.hydrateReviewConversations().then(() => {
-        send(200, listPage(cfg, bot.store.data.reviews || [], ua), 'text/html; charset=utf-8');
+        send(200, dashboardHtml(), 'text/html; charset=utf-8');
       }, (e) => {
         log.warn('conversation hydrate failed', e.message);
-        send(200, listPage(cfg, bot.store.data.reviews || [], ua), 'text/html; charset=utf-8');
+        send(200, dashboardHtml(), 'text/html; charset=utf-8');
       });
       return;
     }
@@ -97,6 +96,11 @@ function createServer({ cfg, bot, log }) {
       if (!dashOk(cfg, req)) return send(403, 'Forbidden');
       return sendJson(200, (bot.store.data.reviews || []).map(publicReview));
     }
+    if (req.method === 'GET' && url.pathname === '/dashboard/api/threads') {
+      if (!dashOk(cfg, req)) return send(403, 'Forbidden');
+      const windowMs = cfg.replyWindowHours * 3600 * 1000;
+      return sendJson(200, threadsPayload(bot.store.data.reviews || [], bot.store.data.threads || {}, bot.now(), windowMs));
+    }
     if (req.method === 'GET' && url.pathname === '/dashboard/api/push-status') {
       if (!dashOk(cfg, req)) return send(403, 'Forbidden');
       const enabled = Boolean(bot.push && bot.push.configured());
@@ -114,7 +118,7 @@ function createServer({ cfg, bot, log }) {
       return send(403, 'Forbidden');
     }
 
-    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed');
+    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply');
     if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || dashPost)) {
       const chunks = [];
       let size = 0;
@@ -124,6 +128,7 @@ function createServer({ cfg, bot, log }) {
         if (url.pathname === '/dashboard/login') return dashboardLogin(req, raw);
         if (url.pathname === '/dashboard/logout') return dashboardLogout();
         if (url.pathname === '/dashboard/reviewed') return dashboardReviewed(req, raw);
+        if (url.pathname === '/dashboard/api/reply') return dashboardReply(req, raw);
         if (url.pathname === '/dashboard/api/subscribe') return subscribe(req, raw);
         if (url.pathname === '/data-deletion-callback') return dataDeletionCallback(raw);
         if (url.pathname.startsWith('/admin/')) return admin(url, req, raw);
@@ -152,6 +157,25 @@ function createServer({ cfg, bot, log }) {
     function dashboardLogout() {
       res.writeHead(303, { Location: '/dashboard', 'Set-Cookie': clearCookie() });
       res.end('');
+    }
+
+    function dashboardHtml() {
+      return listPage(cfg, bot.store.data.reviews || [], bot.store.data.threads || {}, bot.now());
+    }
+
+    function dashboardReply(rq, raw) {
+      if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
+      let body;
+      try { body = JSON.parse(raw.toString('utf8')); } catch { return sendJson(400, { ok: false, error: 'Bad JSON' }); }
+      const id = String((body && body.id) || '').trim();
+      if (!id) return sendJson(400, { ok: false, error: 'id required' });
+      bot.replyFromDashboard(id, body.text).then(
+        (result) => sendJson(result.status || 400, { ok: Boolean(result.ok), error: result.error || '', duplicate: Boolean(result.duplicate) }),
+        (e) => {
+          log.error('dashboard reply failed', e.message);
+          sendJson(502, { ok: false, error: 'Hindi naipadala. Subukan ulit.' });
+        },
+      );
     }
 
     function dashboardReviewed(rq, raw) {

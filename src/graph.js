@@ -69,6 +69,14 @@ class Graph {
     }
     return results;
   }
+  // One Messenger text, messaging_type RESPONSE. No HUMAN_AGENT tag. Max 2000 characters.
+  async sendPageText(psid, text) {
+    const c = String(text || '');
+    if (c.length > 2000) throw new Error('Messenger text limit is 2000 characters');
+    return this.call('POST', `${this.pageNode()}/messages`, {
+      body: { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: c, metadata: 'jmags-ivan' } },
+    });
+  }
   passThreadControl(psid, targetAppId, metadata = '') {
     return this.call('POST', `${this.pageNode()}/pass_thread_control`, {
       body: { recipient: { id: psid }, target_app_id: targetAppId, metadata: metadata.slice(0, 1000) },
