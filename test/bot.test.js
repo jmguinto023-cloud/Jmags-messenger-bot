@@ -15,6 +15,7 @@ const { sanitizeOutgoing } = require('../src/messages');
 const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
 const { summarizeConversation, customerLabel } = require('../src/summary');
 const { videoFollowupText, quietDeferUntil } = require('../src/video-followup');
+const { activeNow, statusLine, nextOpenAt } = require('../src/schedule');
 const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
 const { visibleHistory, asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
@@ -2393,4 +2394,125 @@ test('dashboard reply sends inside 24h, pauses the bot, and ignores a double-tap
     console.log = orig;
     await s.close();
   }
+});
+
+test('BOT_SCHEDULE replies only inside the Manila window and stays quiet outside it', async () => {
+  const cfg = { botEnabled: true, schedule: '22:00-07:00', timezone: 'Asia/Manila' };
+  const noon = Date.parse('2026-10-19T04:00:00Z'); // 12:00 PHT
+  const night = Date.parse('2026-10-18T15:00:00Z'); // 23:00 PHT
+  assert.equal(activeNow(cfg, new Date(noon)), false);
+  assert.equal(activeNow(cfg, new Date(night)), true);
+  assert.equal(activeNow(cfg, new Date('2026-10-18T22:59:00Z')), true); // 06:59 PHT
+  assert.equal(activeNow(cfg, new Date('2026-10-18T23:00:00Z')), false); // 07:00 PHT
+  assert.equal(activeNow({ ...cfg, schedule: '' }, new Date(noon)), true);
+  assert.equal(activeNow({ ...cfg, schedule: '   ' }, new Date(noon)), true);
+  assert.equal(activeNow({ ...cfg, botEnabled: false }, new Date(night)), false);
+  assert.equal(activeNow({ botEnabled: true, schedule: '99:00-10:00', timezone: 'Asia/Manila' }, new Date(night)), false);
+  assert.equal(statusLine(cfg, noon), 'OFF now, turns on at 10:00 PM');
+  assert.equal(statusLine(cfg, night), 'Bot: ON (schedule 10PM–7AM)');
+  assert.equal(statusLine({ botEnabled: true, schedule: '', timezone: 'Asia/Manila' }, noon), 'Bot: ON');
+  assert.equal(statusLine({ botEnabled: false, schedule: '22:00-07:00', timezone: 'Asia/Manila' }, night), 'Bot: OFF');
+  assert.equal(statusLine({ botEnabled: true, schedule: '09:00-17:00', timezone: 'Asia/Manila' }, Date.parse('2026-10-19T10:00:00Z')), 'OFF now, turns on at 9:00 AM');
+  assert.equal(nextOpenAt(cfg, noon), Date.parse('2026-10-19T14:00:00Z'));
+  assert.equal(loadConfig({}).schedule, '');
+  assert.equal(loadConfig({ BOT_SCHEDULE: '22:00-07:00' }).schedule, '22:00-07:00');
+
+  const s = await setup({ BOT_SCHEDULE: '22:00-07:00' });
+  let now = noon;
+  s.app.bot.now = () => now;
+  try {
+    const health = await (await fetch(`${s.base}/health`)).json();
+    assert.equal(health.ok, true);
+    assert.equal(health.botEnabled, true);
+    assert.equal(health.schedule, '22:00-07:00');
+    assert.equal(health.activeNow, false);
+    assert.equal((await fetch(`${s.base}/dashboard`)).status, 200);
+    await s.post(msg('day', { text: 'hm po sa tanghali' }, now));
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.match(s.app.store.thread('day').history.map((h) => h.content).join('\n'), /hm po sa tanghali/);
+
+    now = night;
+    assert.equal((await (await fetch(`${s.base}/health`)).json()).activeNow, true);
+    await s.post(msg('night', { text: 'hm po gabi' }, now));
+    assert.equal(s.mock.calls.messages.length, 1);
+
+    s.app.cfg.botEnabled = false;
+    now = night + 60 * 1000;
+    await s.post(msg('forced', { text: 'hello po' }, now));
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal((await (await fetch(`${s.base}/health`)).json()).activeNow, false);
+  } finally { await s.close(); }
+});
+
+test('a reply timer started inside BOT_SCHEDULE does not send after the window closes', async () => {
+  const s = await setup({ BOT_SCHEDULE: '22:00-07:00', BATCH_WINDOW_MS: '80' });
+  let now = Date.parse('2026-10-18T22:59:00Z'); // 06:59 PHT
+  s.app.bot.now = () => now;
+  try {
+    const raw = JSON.stringify(msg('edge', { text: 'hm po bago mag-seven' }, now));
+    const pending = fetch(`${s.base}/webhook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Hub-Signature-256': 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex'),
+      },
+      body: raw,
+    });
+    await new Promise((r) => setTimeout(r, 15));
+    now = Date.parse('2026-10-18T23:01:00Z'); // 07:01 PHT
+    await pending;
+    await s.app.bot.idle();
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.match(s.app.store.thread('edge').history.map((h) => h.content).join('\n'), /hm po bago mag-seven/);
+  } finally { await s.close(); }
+});
+
+test('follow-ups scheduled inside BOT_SCHEDULE wait until the window opens again', async () => {
+  const s = await setup({ BOT_SCHEDULE: '22:00-07:00', FOLLOWUP_AFTER_MIN: '120' });
+  let now = Date.parse('2026-10-18T15:00:00Z'); // 23:00 PHT
+  s.app.bot.now = () => now;
+  s.mock.state.llmResponder = () => 'May slot pa po this week sir.';
+  const t = s.app.store.thread('quiet');
+  t.history = [
+    { role: 'user', content: 'hm po', ts: now },
+    { role: 'assistant', content: 'Taga saan po?', ts: now },
+  ];
+  t.lastUserTs = now;
+  try {
+    now = Date.parse('2026-10-18T23:30:00Z'); // 07:30 PHT, outside
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(t.followupCount || 0, 0);
+    now = Date.parse('2026-10-19T14:00:00Z'); // 22:00 PHT, still inside 23h
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.app.store.thread('quiet').followupCount, 1);
+  } finally { await s.close(); }
+});
+
+test('video follow-ups stay inside BOT_SCHEDULE and can send during the night window', async () => {
+  const s = await setup({ BOT_SCHEDULE: '22:00-07:00' });
+  let now = Date.parse('2026-10-18T14:30:00Z'); // 22:30 PHT
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('nightvid', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/night.mp4' } }] }, now));
+    const before = s.mock.calls.messages.length;
+    now = Date.parse('2026-10-18T15:00:00Z'); // 23:00 PHT, quiet hours, still inside the schedule
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.slice(before).filter((m) => /Na-review na po ba/.test(m.message.text)).length, 1);
+
+    now = Date.parse('2026-10-18T22:40:00Z'); // 06:40 PHT
+    await s.post(msg('early', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/early.mp4' } }] }, now));
+    const mid = s.mock.calls.messages.length;
+    now = Date.parse('2026-10-18T23:10:00Z'); // 07:10 PHT, outside
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, mid);
+    assert.ok(s.app.store.thread('early').videoReplyAt);
+    assert.equal(s.app.store.thread('early').videoFollowupNotBefore, Date.parse('2026-10-19T14:00:00Z'));
+    now = Date.parse('2026-10-19T14:00:00Z'); // 22:00 PHT
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'early' && /Na-review na po ba/.test(m.message.text)).length, 1);
+  } finally { await s.close(); }
 });

@@ -208,6 +208,7 @@ function header(view) {
     </nav>
     <span class="live"><i></i> Live</span>
     <button class="refresh" type="button" data-refresh aria-label="Refresh">↻</button>
+    <p class="bot-status"><i class="${String(view.botStatus || '').startsWith('Bot: ON') ? 'on' : ''}"></i>${esc(view.botStatus || 'Bot: OFF')}</p>
   </div></header>`;
 }
 

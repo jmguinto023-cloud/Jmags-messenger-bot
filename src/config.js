@@ -56,6 +56,9 @@ function loadConfig(env = process.env) {
     testPsids: list(env.BOT_TEST_PSIDS),
     activeHours: env.BOT_ACTIVE_HOURS || '', // e.g. "18:00-08:00" (empty = 24/7)
     alwaysOnDays: list(env.BOT_ALWAYS_ON_DAYS).map((d) => d.toLowerCase().slice(0, 3)), // e.g. "sat,sun"
+    // Reply window that replaces an outside cron. Empty = on whenever BOT_ENABLED is on.
+    // "22:00-07:00" is Asia/Manila and may cross midnight. Outside it, no auto replies or follow-ups.
+    schedule: String(env.BOT_SCHEDULE || '').trim(),
     timezone: env.BOT_TIMEZONE || 'Asia/Manila',
     // Behaviour
     historyTurns: num(env.HISTORY_TURNS, 20),

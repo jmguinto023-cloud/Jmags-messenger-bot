@@ -10,6 +10,7 @@ const { loginPage, listPage, publicReview, threadsPayload } = require('./dashboa
 const { parseSignedRequest } = require('./signed-request');
 const { buildView, applyAction, exportCsv, importOps, linkReviewToJob } = require('./ops');
 const { opsPage } = require('./ops-page');
+const { activeNow } = require('./schedule');
 
 const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
 
@@ -52,7 +53,14 @@ function createServer({ cfg, bot, log }) {
     const sendJson = (code, obj) => send(code, JSON.stringify(obj), 'application/json; charset=utf-8');
 
     if (req.method === 'GET' && url.pathname === '/health') {
-      return sendJson(200, { ok: true, botEnabled: cfg.botEnabled, testMode: cfg.testPsids.length > 0 });
+      const now = new Date(bot.now());
+      return sendJson(200, {
+        ok: true,
+        botEnabled: cfg.botEnabled,
+        testMode: cfg.testPsids.length > 0,
+        schedule: cfg.schedule || '',
+        activeNow: activeNow(cfg, now),
+      });
     }
 
     if (req.method === 'GET' && url.pathname === '/') {

@@ -68,6 +68,9 @@ a { color: var(--green); }
 .branches a.on.cv { background: var(--orange-deep); }
 .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: block; }
+.bot-status { flex: 1 0 100%; display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.3; min-width: 0; }
+.bot-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); display: block; flex: 0 0 auto; }
+.bot-status i.on { background: var(--green); }
 .refresh {
   min-width: 34px; min-height: 34px; padding: 0 8px; border: 1px solid var(--line); background: #fff; border-radius: 8px;
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;

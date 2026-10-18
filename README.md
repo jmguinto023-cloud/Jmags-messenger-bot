@@ -82,7 +82,11 @@ npm start           # run (needs env, see .env.example)
   Nothing is sent when the thread is handed off, paused for a human, the bot is disabled, the PSID is outside
   BOT_TEST_PSIDS, or the customer already sent the booking form and said they filled it in.
   Blank BOT_ACTIVE_HOURS means the bot is always on (the process logs `hours=24/7`). Follow-ups are not
-  limited by those hours. The check runs in-process every minute and the counters live in `/data`, so a
+  limited by those hours. BOT_SCHEDULE is separate: when it is set (for example `22:00-07:00` in
+  Asia/Manila, including a window that crosses midnight), auto replies and follow-ups run only inside
+  that window. Outside it the bot still records messages, and a follow-up that was scheduled inside the
+  window waits instead of sending. An empty BOT_SCHEDULE leaves replies on whenever BOT_ENABLED is on.
+  BOT_ENABLED=false is always off. The check runs in-process every minute and the counters live in `/data`, so a
   restart does not send a second copy.
 - After the standard reply to a customer video, if they send nothing more, a separate follow-up goes out
   VIDEO_FOLLOWUP_MINUTES later (default 30). A second, gentler one goes out VIDEO_FOLLOWUP2_MINUTES after the first
@@ -96,8 +100,9 @@ npm start           # run (needs env, see .env.example)
 - Each turn is appended to `DATA_DIR/conversations.jsonl` (timestamp, sha256 prefix and last 4 of the PSID,
   role, text, handoff reason). Lines older than 60 days are dropped. `GET /admin/conversations?since=ISO`
   with `Authorization: Bearer ADMIN_TOKEN` returns them as JSON.
-- Safety: BOT_ENABLED (default false), BOT_TEST_PSIDS allowlist, BOT_ACTIVE_HOURS / BOT_ALWAYS_ON_DAYS (Asia/Manila).
-  An empty BOT_ACTIVE_HOURS is 24/7.
+- Safety: BOT_ENABLED (default false), BOT_TEST_PSIDS allowlist, BOT_ACTIVE_HOURS / BOT_ALWAYS_ON_DAYS (Asia/Manila),
+  and BOT_SCHEDULE. An empty BOT_ACTIVE_HOURS is 24/7. An empty BOT_SCHEDULE does not add another limit.
+  `GET /health` reports `schedule` and `activeNow`.
 - Storage: `DATA_DIR/state.json` (atomic writes); chats purged after DATA_RETENTION_DAYS of inactivity.
   Job orders, payments, parts, and ad spend live in the same file (`data.ops`) and are not purged with chats.
   `render.yaml` mounts a 1 GB disk at `/data` and sets `DATA_DIR=/data`, so this file survives restarts and deploys when that disk is attached to the service. The container disk by itself is ephemeral. There is no Postgres.
