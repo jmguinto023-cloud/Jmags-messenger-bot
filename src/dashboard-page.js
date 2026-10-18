@@ -90,7 +90,7 @@ function reviewCard(row, pageId, ua) {
     messengerHref: links.messenger,
   });
   const named = String(row.customerName || '').trim();
-  const copyAttr = phone && named ? ` data-copy-name="${esc(named)}"` : '';
+  const copyAttr = named ? ` data-copy-name="${esc(named)}"` : '';
   const thread = links.itemId ? `thread id: ${links.itemId}` : 'thread id: not found';
   const debug = [thread, `button: ${href}`];
   if (links.messenger) debug.push(`messenger: ${links.messenger}`);
@@ -107,7 +107,7 @@ function reviewCard(row, pageId, ua) {
   const button = status === 'New'
     ? `<form method="post" action="/dashboard/reviewed"><input type="hidden" name="id" value="${esc(row.id)}"><button type="submit">Mark reviewed</button></form>`
     : '';
-  const copyButton = phone && named
+  const copyButton = named
     ? `<p><button type="button" class="ghost copy-name" data-copy-name="${esc(named)}">Kopyahin ang pangalan</button></p>`
     : '';
   return `<article class="card">

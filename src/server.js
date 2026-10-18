@@ -64,6 +64,16 @@ function createServer({ cfg, bot, log }) {
       return sendFile(res, file, type);
     }
 
+    if (req.method === 'GET' && url.pathname === '/admin/inbox-candidates') {
+      if (!authorized(cfg, req)) return send(403, 'Forbidden');
+      const psid = String(url.searchParams.get('psid') || '').trim();
+      if (!psid) return send(400, 'psid required');
+      bot.inboxCandidates(psid).then(
+        (body) => sendJson(200, body),
+        (e) => sendJson(500, { error: e.message }),
+      );
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/admin/conversations') {
       if (!authorized(cfg, req)) return send(403, 'Forbidden');
       const since = url.searchParams.get('since');

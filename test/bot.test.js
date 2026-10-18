@@ -17,7 +17,7 @@ const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
 const {
   genericInboxUrl, businessSuiteThreadUrl, messengerAppHref, inboxLinks, threadItemId,
-  inboxClientKind, primaryInboxHref, BUSINESS_SUITE_PACKAGE,
+  candidateInboxUrls, inboxClientKind, primaryInboxHref, BUSINESS_SUITE_PACKAGE,
 } = require('../src/inbox-link');
 
 const SECRET = 'test_app_secret';
@@ -1202,7 +1202,8 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
     conversationId: 't_9988',
     conversationLink: `/${PAGE}/inbox/555001/`,
   });
-  assert.equal(links.suite, deep);
+  assert.equal(links.suite, genericInboxUrl(PAGE));
+  assert.equal(links.suite.includes('selected_item_id'), false);
   assert.equal(links.messenger, `https://www.facebook.com/${PAGE}/inbox/555001/`);
   assert.equal(JSON.stringify(links).includes('cust-7771'), false);
   assert.equal(links.suite.includes('t_9988'), false);
@@ -1227,6 +1228,37 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.equal(primaryInboxHref({ kind: 'ios', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.suite);
   assert.equal(primaryInboxHref({ kind: 'coarse', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.messenger);
   assert.equal(primaryInboxHref({ kind: '', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.suite);
+  const built = candidateInboxUrls({
+    pageId: PAGE,
+    businessId: '588481615147194',
+    psid: 'cust-7771',
+    conversationId: 't_9988',
+    link: `/${PAGE}/inbox/555001/`,
+    participants: [
+      { id: PAGE, name: "JMAG's Appliances" },
+      { id: 'cust-7771', name: 'Maria Cruz' },
+      { id: '999888777', name: 'Other' },
+    ],
+  });
+  assert.equal(built.ids.psid, 'cust-7771');
+  assert.equal(built.ids.conversationId, 't_9988');
+  assert.equal(built.ids.threadDigitsFromLink, '555001');
+  assert.equal(built.ids.threadDigitsFromConversationId, '9988');
+  assert.equal(built.ids.participantIds.some((p) => p.id === PAGE), true);
+  const urls = built.urls.map((u) => u.url);
+  assert.ok(urls.includes(genericInboxUrl(PAGE)));
+  assert.ok(urls.includes(deep));
+  assert.ok(urls.includes(businessSuiteThreadUrl(PAGE, 'cust-7771')));
+  assert.ok(urls.includes(businessSuiteThreadUrl(PAGE, '9988')));
+  assert.ok(urls.includes(businessSuiteThreadUrl(PAGE, 't_9988')));
+  assert.ok(urls.includes(businessSuiteThreadUrl(PAGE, '999888777')));
+  assert.equal(urls.some((u) => u.includes(`selected_item_id=${PAGE}`)), false);
+  assert.ok(urls.some((u) => u.startsWith('https://business.facebook.com/latest/inbox/messenger?') && u.includes('selected_item_id=cust-7771')));
+  assert.ok(urls.some((u) => u.startsWith('https://www.facebook.com/latest/inbox/messenger?') && u.includes('selected_item_id=555001')));
+  assert.ok(urls.some((u) => u.includes('bpn_id=588481615147194') && u.includes('nav_ref=manage_page_ap_plus_default') && u.includes('selected_item_id=cust-7771')));
+  assert.ok(urls.includes(`https://www.facebook.com/${PAGE}/inbox/555001/`));
+  assert.ok(urls.includes('https://www.facebook.com/messages/t/9988'));
+  assert.ok(urls.includes('https://www.facebook.com/messages/t/cust-7771'));
   const js = fs.readFileSync(path.join(__dirname, '../public/dashboard.js'), 'utf8');
   assert.match(js, /Android/);
   assert.match(js, /iPhone\|iPad\|iPod/);
@@ -1283,9 +1315,10 @@ test('a stored conversation deep-links Business Suite and the Messenger app', as
     const href = links.suite.replaceAll('&', '&amp;');
     assert.match(html, /Open chat in Business Suite/);
     assert.ok(html.includes(`href="${href}"`));
-    assert.ok(html.includes('selected_item_id=555001'));
-    assert.equal(html.includes('selected_item_id=cust-7771'), false);
+    assert.equal(html.includes('selected_item_id'), false);
     assert.equal(html.includes('cust-7771'), false);
+    assert.match(html, /Kopyahin ang pangalan/);
+    assert.match(html, /data-copy-name="Maria Cruz"/);
     assert.ok(html.includes(`data-android-href="${links.android.replaceAll('&', '&amp;')}"`));
     assert.match(html, new RegExp(`package=${BUSINESS_SUITE_PACKAGE}`));
     assert.match(html, /Open in Messenger/);
@@ -1362,7 +1395,8 @@ test('a missing profile name is taken from the conversation participants', async
     assert.equal(phone.includes('Open in Messenger'), false);
     const desk = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
     assert.match(desk, /Open in Messenger/);
-    assert.equal(desk.includes('Kopyahin ang pangalan'), false);
+    assert.match(desk, /Kopyahin ang pangalan/);
+    assert.match(desk, /data-copy-name="Juan Dela Cruz"/);
   } finally { await s.close(); }
 });
 
@@ -1386,14 +1420,68 @@ test('the dashboard fills a missing conversation id on first load', async () => 
     }, Date.now());
     const { cookie } = await dashCookie(s.base);
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
-    const href = businessSuiteThreadUrl(PAGE, '777').replaceAll('&', '&amp;');
+    const href = genericInboxUrl(PAGE).replaceAll('&', '&amp;');
     assert.ok(html.includes(`href="${href}"`));
+    assert.equal(html.includes('selected_item_id'), false);
     assert.match(html, /Open in Messenger/);
     assert.equal(html.includes('lazy-9001'), false);
     assert.equal(s.app.store.data.reviews[0].conversationId, 't_4242');
     assert.equal(s.app.store.data.reviews[0].conversationLink, `/${PAGE}/inbox/777/`);
     assert.equal(s.mock.calls.conversations.length, 1);
     await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } });
+    assert.equal(s.mock.calls.conversations.length, 1);
+  } finally { await s.close(); }
+});
+
+test('admin inbox candidates lists every id and URL for a PSID', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  s.mock.state.profiles = {
+    'cust-7771': { name: 'Maria Cruz' },
+    [PAGE]: { business: { id: '588481615147194', name: 'JMAG Business' } },
+  };
+  s.mock.state.conversations = {
+    'cust-7771': {
+      id: 't_9988',
+      link: `/${PAGE}/inbox/555001/`,
+      updated_time: '2026-05-02T01:02:03+0000',
+      participants: {
+        data: [
+          { id: PAGE, name: "JMAG's Appliances" },
+          { id: 'cust-7771', name: 'Maria Cruz' },
+        ],
+      },
+    },
+  };
+  try {
+    const denied = await fetch(`${s.base}/admin/inbox-candidates?psid=cust-7771`);
+    assert.equal(denied.status, 403);
+    const missing = await fetch(`${s.base}/admin/inbox-candidates`, { headers: { Authorization: 'Bearer adm' } });
+    assert.equal(missing.status, 400);
+    const res = await fetch(`${s.base}/admin/inbox-candidates?psid=cust-7771`, { headers: { Authorization: 'Bearer adm' } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.psid, 'cust-7771');
+    assert.equal(body.pageId, PAGE);
+    assert.equal(body.businessId, '588481615147194');
+    assert.equal(body.businessName, 'JMAG Business');
+    assert.equal(body.profileName, 'Maria Cruz');
+    assert.equal(body.conversation.id, 't_9988');
+    assert.equal(body.conversation.link, `/${PAGE}/inbox/555001/`);
+    assert.equal(body.ids.threadDigitsFromLink, '555001');
+    assert.equal(body.ids.threadDigitsFromConversationId, '9988');
+    assert.ok(body.ids.participantIds.some((p) => p.id === 'cust-7771' && p.name === 'Maria Cruz'));
+    assert.equal(body.ids.participantIds.some((p) => p.id === PAGE), true);
+    const urls = body.urls.map((u) => u.url);
+    assert.ok(urls.includes(genericInboxUrl(PAGE)));
+    assert.ok(urls.some((u) => u.startsWith('https://business.facebook.com/latest/inbox/all?') && u.includes('selected_item_id=cust-7771')));
+    assert.ok(urls.some((u) => u.startsWith('https://business.facebook.com/latest/inbox/all?') && u.includes('selected_item_id=555001')));
+    assert.ok(urls.some((u) => u.startsWith('https://business.facebook.com/latest/inbox/messenger?') && u.includes('selected_item_id=cust-7771')));
+    assert.ok(urls.some((u) => u.startsWith('https://www.facebook.com/latest/inbox/all?') && u.includes('bpn_id=588481615147194') && u.includes('selected_item_id=555001') && u.includes('nav_ref=manage_page_ap_plus_default')));
+    assert.ok(urls.includes(`https://www.facebook.com/${PAGE}/inbox/555001/`));
+    assert.ok(urls.includes('https://www.facebook.com/messages/t/9988'));
+    assert.ok(urls.includes('https://www.facebook.com/messages/t/cust-7771'));
+    const again = await fetch(`${s.base}/admin/inbox-candidates?psid=cust-7771`, { headers: { Authorization: 'Bearer adm' } });
+    assert.equal(again.status, 200);
     assert.equal(s.mock.calls.conversations.length, 1);
   } finally { await s.close(); }
 });

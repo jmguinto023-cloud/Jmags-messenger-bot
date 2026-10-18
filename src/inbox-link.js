@@ -1,15 +1,17 @@
 'use strict';
-// Links from a stored review to the Page's thread with that customer.
+// Links from a stored review to the Page inbox for that customer.
 //
-// Desktop Business Suite, with a Messenger thread open, uses:
-//   https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}&selected_item_id={THREAD}&mailbox_id={PAGE_ID}&thread_type=FB_MESSAGE
-// Live captures (Business Suite address bar, community notes May 2026) put a bare
-// numeric conversation id in selected_item_id. They do not use the Graph id's "t_"
-// prefix, and a customer's PSID in that parameter loads the inbox list then fails
-// the thread pane ("Something went wrong") on mobile web.
-// The number Meta publishes for the thread is the /inbox/{digits}/ segment of
-// Graph's conversation.link. If that path is missing and the Graph id is t_ plus
-// digits, those digits are the same id. A non-numeric t_ id is not placed in the URL.
+// The dashboard button opens the inbox list, not one thread:
+//   https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}
+// A desktop click on
+//   .../latest/inbox/all?asset_id={PAGE}&selected_item_id={THREAD}&mailbox_id={PAGE}&thread_type=FB_MESSAGE
+// redirects to facebook.com with bpn_id and nav_ref=manage_page_ap_plus_default, then
+// shows "Sorry, this content isn't available right now". {THREAD} (the /inbox/{digits}/
+// segment, or the digits after t_) is not a selected_item_id Business Suite accepts.
+// A PSID in that parameter failed the mobile thread pane ("Something went wrong").
+// Candidate URLs for both ids, both inbox paths, and bpn_id are returned by
+// GET /admin/inbox-candidates so they can be tried on a logged-in desktop.
+// The card also copies the customer name so the inbox search can find the chat.
 //
 // Phones: an https://business.facebook.com link stays in the browser. An
 // intent://business.facebook.com/...?selected_item_id=...#Intent;scheme=https
@@ -86,7 +88,9 @@ function androidSuiteIntent() {
 
 function inboxLinks(pageId, row) {
   const itemId = threadItemId(row && row.conversationId, row && row.conversationLink);
-  const suite = businessSuiteThreadUrl(pageId, itemId);
+  // Do not put itemId in the button. That selected_item_id is the one desktop
+  // Business Suite rejects. The button opens the inbox list.
+  const suite = genericInboxUrl(pageId);
   const messenger = messengerThreadHref(row && row.conversationLink, row && row.conversationId, pageId);
   return {
     itemId,
@@ -94,6 +98,109 @@ function inboxLinks(pageId, row) {
     android: androidSuiteIntent(),
     messenger,
   };
+}
+
+function withQuery(base, params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || String(v) === '') continue;
+    q.set(k, String(v));
+  }
+  const qs = q.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+// Every id and URL worth trying for one PSID. The dashboard does not render these.
+function candidateInboxUrls({ pageId, businessId, psid, conversationId, link, participants } = {}) {
+  const page = String(pageId || '');
+  const business = String(businessId || '');
+  const user = String(psid || '');
+  const convo = String(conversationId || '');
+  const people = (Array.isArray(participants) ? participants : []).map((p) => ({
+    id: String((p && p.id) || ''),
+    name: String((p && p.name) || '').trim(),
+  })).filter((p) => p.id);
+  const linkDigits = inboxDigits(link);
+  const prefixed = /^t_(\d+)$/.exec(convo);
+  const tDigits = prefixed ? prefixed[1] : (/^\d+$/.test(convo) ? convo : '');
+  const ids = {
+    psid: user,
+    conversationId: convo,
+    threadDigitsFromLink: linkDigits,
+    threadDigitsFromConversationId: tDigits,
+    participantIds: people,
+  };
+  const selections = [];
+  const add = (source, id) => {
+    const v = String(id || '').trim();
+    if (!v) return;
+    if (selections.some((s) => s.source === source && s.id === v)) return;
+    selections.push({ source, id: v });
+  };
+  add('psid', user);
+  add('conversationId', convo);
+  add('threadDigitsFromLink', linkDigits);
+  add('threadDigitsFromConversationId', tDigits);
+  for (const person of people) {
+    if (person.id !== page) add('participant', person.id);
+  }
+  const bases = [
+    ['business_suite_all', 'https://business.facebook.com/latest/inbox/all'],
+    ['business_suite_messenger', 'https://business.facebook.com/latest/inbox/messenger'],
+    ['facebook_all', 'https://www.facebook.com/latest/inbox/all'],
+    ['facebook_messenger', 'https://www.facebook.com/latest/inbox/messenger'],
+  ];
+  const urls = [];
+  const seen = new Set();
+  const push = (label, url, extra) => {
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    urls.push({ label, url, ...extra });
+  };
+  push('business_suite_list', genericInboxUrl(page), { selectedItemId: '', idSource: '' });
+  if (page) {
+    push('facebook_list', withQuery('https://www.facebook.com/latest/inbox/all', { asset_id: page }), { selectedItemId: '', idSource: '' });
+  }
+  for (const sel of selections) {
+    for (const [baseLabel, base] of bases) {
+      const core = {
+        asset_id: page,
+        selected_item_id: sel.id,
+        mailbox_id: page,
+        thread_type: 'FB_MESSAGE',
+      };
+      push(`${baseLabel} selected=${sel.source}`, withQuery(base, core), { selectedItemId: sel.id, idSource: sel.source });
+      if (business) {
+        push(`${baseLabel} selected=${sel.source} bpn_id`, withQuery(base, {
+          bpn_id: business,
+          asset_id: page,
+          nav_ref: 'manage_page_ap_plus_default',
+          selected_item_id: sel.id,
+          mailbox_id: page,
+          thread_type: 'FB_MESSAGE',
+        }), { selectedItemId: sel.id, idSource: sel.source });
+      }
+    }
+  }
+  const threadDigits = linkDigits || tDigits;
+  if (page && threadDigits) {
+    push('facebook_inbox_thread', `https://www.facebook.com/${encodeURIComponent(page)}/inbox/${encodeURIComponent(threadDigits)}/`, {
+      selectedItemId: threadDigits, idSource: linkDigits ? 'threadDigitsFromLink' : 'threadDigitsFromConversationId',
+    });
+  }
+  if (tDigits) {
+    push('facebook_messages_thread', `https://www.facebook.com/messages/t/${encodeURIComponent(tDigits)}`, {
+      selectedItemId: tDigits, idSource: 'threadDigitsFromConversationId',
+    });
+  }
+  if (user) {
+    push('facebook_messages_psid', `https://www.facebook.com/messages/t/${encodeURIComponent(user)}`, {
+      selectedItemId: user, idSource: 'psid',
+    });
+  }
+  const graph = messengerAppHref(link);
+  if (graph) push('graph_conversation_link', graph, { selectedItemId: '', idSource: 'conversationLink' });
+  return { ids, urls };
 }
 
 // '' desktop, 'android', 'ios', or 'coarse' (touch device that is not Android or iOS).
@@ -121,6 +228,7 @@ module.exports = {
   messengerThreadHref,
   androidSuiteIntent,
   inboxLinks,
+  candidateInboxUrls,
   inboxClientKind,
   primaryInboxHref,
 };

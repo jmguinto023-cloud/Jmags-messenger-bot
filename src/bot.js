@@ -5,6 +5,7 @@ const lines = require('./messages');
 const { sanitizeOutgoing, bookingFormMessage } = lines;
 const { short } = require('./log');
 const { psidHash } = require('./store');
+const { candidateInboxUrls } = require('./inbox-link');
 const { summarizeConversation } = require('./summary');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
@@ -640,6 +641,56 @@ class Bot {
       }
     }
     if (changed) this.store.save();
+  }
+
+  // Admin: every id and candidate inbox URL for one PSID. Does not change the thread.
+  async inboxCandidates(psid) {
+    const key = String(psid || '').trim();
+    const pageId = this.cfg.pageId || '';
+    let profileName = '';
+    let conversation = null;
+    let business = null;
+    const errors = [];
+    try {
+      profileName = await this.graph.userName(key);
+    } catch (e) {
+      errors.push(e.message);
+    }
+    const found = await this.graph.findConversation(key);
+    if (found) {
+      conversation = {
+        id: found.id,
+        link: found.link,
+        updatedTime: found.updatedTime,
+        name: found.name || '',
+        participants: found.participants || [],
+      };
+    }
+    try {
+      business = await this.graph.pageBusiness();
+    } catch (e) {
+      errors.push(e.message);
+    }
+    const built = candidateInboxUrls({
+      pageId,
+      businessId: business && business.id,
+      psid: key,
+      conversationId: conversation && conversation.id,
+      link: conversation && conversation.link,
+      participants: conversation && conversation.participants,
+    });
+    return {
+      psid: key,
+      pageId,
+      businessId: (business && business.id) || '',
+      businessName: (business && business.name) || '',
+      profileName: profileName || (conversation && conversation.name) || '',
+      conversation,
+      ids: built.ids,
+      urls: built.urls,
+      errors,
+      note: 'The dashboard button opens the inbox list. Try these URLs on a logged-in desktop. The thread-number selected_item_id is the one that redirected to "Sorry, this content isn\'t available right now".',
+    };
   }
 
   // Admin: let the bot answer this customer again.
