@@ -24,6 +24,9 @@ services:
       # Empty means always on. Startup logs hours=24/7. Code default timezone is Asia/Manila.
       - key: BOT_ACTIVE_HOURS
         sync: false
+      # Empty means reply whenever BOT_ENABLED is on. Example night window: 22:00-07:00
+      - key: BOT_SCHEDULE
+        sync: false
       - key: BOT_ALWAYS_ON_DAYS
         sync: false
       - key: BOT_TIMEZONE

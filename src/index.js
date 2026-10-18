@@ -31,7 +31,7 @@ if (require.main === module) {
   const unpaused = app.bot.clearAutomatedPauses();
   if (unpaused.length) log.info(`resumed ${unpaused.length} chat(s) paused by automated Page echoes`);
   app.bot.startFollowups();
-  app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'}`));
+  app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'}`));
   const stop = async () => { log.info('shutting down'); app.server.close(); await app.bot.idle(); app.store.flush(); process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

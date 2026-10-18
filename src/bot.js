@@ -8,6 +8,7 @@ const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
 const { summarizeConversation, firstCustomerSnippet, customerLabel, chatCustomerName } = require('./summary');
 const { quietDeferUntil, videoFollowupText } = require('./video-followup');
+const { activeNow: scheduleActiveNow, nextOpenAt } = require('./schedule');
 const {
   ensureOps, noteSuggestion, jobByPsid, asksJobStatus, asksWarrantyProblem,
   inWarranty, warrantyText, jobStatusText, dailyStatusText, DELIVERY_NOTICE, matchIdentity,
@@ -294,6 +295,7 @@ class Bot {
   blockReason(psid, t, ts) {
     const now = this.now();
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
+    if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.handedOff) return `handed off to Ivan (${t.handoffReason})`;
     if (this.humanPaused(t, now)) return 'paused: a human replied recently';
@@ -775,6 +777,11 @@ class Bot {
     this.store.save();
   }
 
+  // Empty BOT_SCHEDULE is always open. BOT_ENABLED is checked separately.
+  scheduleOpen(now = this.now()) {
+    return scheduleActiveNow({ botEnabled: true, schedule: this.cfg.schedule, timezone: this.cfg.timezone }, new Date(now));
+  }
+
   videoFollowupMax() {
     return this.cfg.videoFollowup2Minutes > 0 ? 2 : 1;
   }
@@ -820,7 +827,19 @@ class Bot {
     const tz = this.cfg.timezone || 'Asia/Manila';
     let skip = '';
     if (!this.cfg.botEnabled) skip = 'BOT_ENABLED is off';
-    else if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) skip = 'not in BOT_TEST_PSIDS allowlist';
+    else if (!this.scheduleOpen(now)) {
+      const until = nextOpenAt(this.cfg, now);
+      if (!until || until <= now || until - lastUser > windowMs) {
+        this.stopVideoFollowup(psid, 'outside BOT_SCHEDULE past the 24h window');
+        return;
+      }
+      if (t.videoFollowupNotBefore !== until) {
+        t.videoFollowupNotBefore = until;
+        this.store.save();
+        this.log.info(`video follow-up deferred for ${short(psid)} until the reply schedule`);
+      }
+      return;
+    } else if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) skip = 'not in BOT_TEST_PSIDS allowlist';
     else if (t.handedOff) skip = 'handed to Ivan';
     else if (t.standby) skip = 'standby, another app owns the thread';
     else if (this.humanPaused(t, now)) skip = 'paused for a human';
@@ -835,7 +854,7 @@ class Bot {
       return;
     }
 
-    const quietUntil = quietDeferUntil(now, tz);
+    const quietUntil = String(this.cfg.schedule || '').trim() ? now : quietDeferUntil(now, tz);
     if (quietUntil > now) {
       if (quietUntil - lastUser > windowMs) {
         this.stopVideoFollowup(psid, 'quiet hours past the 24h window');
@@ -853,7 +872,7 @@ class Bot {
     this.store.save();
     try {
       const fresh = this.store.thread(psid);
-      if (!fresh.videoReplyAt || !this.cfg.botEnabled || fresh.handedOff || fresh.standby || this.humanPaused(fresh, this.now())) {
+      if (!fresh.videoReplyAt || !this.cfg.botEnabled || !this.scheduleOpen(this.now()) || fresh.handedOff || fresh.standby || this.humanPaused(fresh, this.now())) {
         this.log.info(`video follow-up skipped for ${short(psid)}: state changed`);
         return;
       }
@@ -953,7 +972,7 @@ class Bot {
       if (job.lastDailyStatusDate === stamp.date) continue;
       const thread = this.store.data.threads[job.psid];
       if (thread && (thread.handedOff || this.humanPaused(thread, now))) continue;
-      if (!this.cfg.botEnabled) continue;
+      if (!this.cfg.botEnabled || !this.scheduleOpen(now)) continue;
       if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) continue;
       const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
       const outside = !last || now - last > this.cfg.replyWindowHours * HOUR;
@@ -994,6 +1013,7 @@ class Bot {
     const thread = (this.store.data.threads || {})[job.psid];
     if (thread && (thread.handedOff || this.humanPaused(thread, now))) return { sent: false, reason: 'paused' };
     if (!this.cfg.botEnabled) return { sent: false, reason: 'disabled' };
+    if (!this.scheduleOpen(now)) return { sent: false, reason: 'schedule' };
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) return { sent: false, reason: 'allowlist' };
     const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
     if (!last || now - last > this.cfg.replyWindowHours * HOUR) {
@@ -1050,6 +1070,7 @@ class Bot {
     if ((t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
     if (t.bookingDone) return 'booking form already submitted';
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
+    if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.intakeCloseSent || t.tipsSent) return 'intake closed, waiting on the technician';
     if (t.handedOff) return 'handed off';

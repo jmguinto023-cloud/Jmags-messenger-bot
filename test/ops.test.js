@@ -973,3 +973,22 @@ test('ad area fills from the ad name and finance can group profit by ad budget',
     assert.match(jobsCsv, /,North,/);
   } finally { await s.close(); }
 });
+
+test('operations shows when the reply schedule is on or waiting', async () => {
+  const s = await setup({ BOT_SCHEDULE: '22:00-07:00' });
+  let now = Date.parse('2026-10-19T04:00:00Z'); // 12:00 PHT
+  s.app.bot.now = () => now;
+  try {
+    const jar = await cookie(s.base);
+    const off = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(off, /class="bot-status"/);
+    assert.match(off, /OFF now, turns on at 10:00 PM/);
+    now = Date.parse('2026-10-18T15:00:00Z'); // 23:00 PHT
+    const on = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(on, /Bot: ON \(schedule 10PM–7AM\)/);
+    s.app.cfg.botEnabled = false;
+    const master = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(master, /Bot: OFF/);
+    assert.doesNotMatch(master, /turns on at/);
+  } finally { await s.close(); }
+});

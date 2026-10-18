@@ -3,6 +3,7 @@
 // Persisted on store.data.ops inside DATA_DIR/state.json. No customer rows live in git.
 
 const { chatCustomerName } = require('./summary');
+const { statusLine } = require('./schedule');
 
 const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delivery', 'Completed', 'Cancelled'];
 const TECHS = ['JM', 'Joshua', 'Unassigned'];
@@ -1010,6 +1011,11 @@ function buildView(store, opts) {
     tab, branch, branchLabel: branchLabel(branch), period, today, tomorrow, statusFilter, editing,
     dailyOn: Boolean(opts.dailyOn),
     deliveryOn: Boolean(opts.deliveryOn),
+    botStatus: statusLine({
+      botEnabled: Boolean(opts.cfg && opts.cfg.botEnabled),
+      schedule: opts.cfg && opts.cfg.schedule,
+      timezone: tz,
+    }, now),
     kpis: {
       open: jobs.filter(openJob).length,
       inquiries: jobs.filter((j) => j.status === 'Inquiry').length,
