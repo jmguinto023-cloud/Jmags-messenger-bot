@@ -55,3 +55,35 @@ function urlBase64ToUint8Array(base64) {
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+
+// Same rules as inboxClientKind / primaryInboxHref in src/inbox-link.js.
+// Desktop keeps the https Business Suite link. Android opens the Business Suite
+// app by package. Other phones use the Page inbox link when the desktop URL
+// would stay in the mobile browser.
+function inboxClientKind() {
+  const ua = navigator.userAgent || '';
+  if (/Android/i.test(ua)) return 'android';
+  if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+  try {
+    if (window.matchMedia('(pointer: coarse)').matches) return 'coarse';
+  } catch (e) { /* matchMedia can throw in old webviews */ }
+  return '';
+}
+
+function applyMobileInboxLinks() {
+  const kind = inboxClientKind();
+  if (!kind) return;
+  document.querySelectorAll('a.inbox-primary').forEach((a) => {
+    const android = a.getAttribute('data-android-href') || '';
+    const ios = a.getAttribute('data-ios-href') || '';
+    const messenger = a.getAttribute('data-messenger-href') || '';
+    const suite = a.getAttribute('href') || '';
+    let next = suite;
+    if (kind === 'android') next = android || messenger || suite;
+    else if (kind === 'ios') next = ios || messenger || suite;
+    else next = messenger || suite;
+    if (next) a.setAttribute('href', next);
+  });
+}
+
+applyMobileInboxLinks();
