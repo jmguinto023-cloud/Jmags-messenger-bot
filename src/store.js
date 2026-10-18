@@ -51,7 +51,9 @@ class Store {
   addTurn(psid, role, content, ts = Date.now(), opts = {}) {
     const t = this.thread(psid);
     if (opts.history !== false) {
-      t.history.push({ role, content, ts });
+      const turn = { role, content, ts };
+      if (opts.via) turn.via = opts.via;
+      t.history.push(turn);
       const max = this.historyTurns * 2; // a "turn" = customer + reply
       if (t.history.length > max) t.history.splice(0, t.history.length - max);
     }
@@ -126,6 +128,15 @@ class Store {
     row.reviewedAt = new Date(now).toISOString();
     this.save();
     return true;
+  }
+  markIvanReplied(psid, now = Date.now()) {
+    const when = new Date(now).toISOString();
+    let n = 0;
+    for (const row of this.data.reviews || []) {
+      if (row.psid === psid) { row.ivanRepliedAt = when; n += 1; }
+    }
+    if (n) this.save();
+    return n;
   }
   readSubscriptions() {
     try {

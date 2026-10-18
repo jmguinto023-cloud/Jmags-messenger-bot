@@ -1,7 +1,9 @@
 'use strict';
 // Server-rendered Ivan dashboard. No build step.
-const { inboxLinks, inboxClientKind, primaryInboxHref } = require('./inbox-link');
+const { genericInboxUrl } = require('./inbox-link');
 const { customerLabel } = require('./summary');
+
+const WINDOW_ERROR = 'Lampas na sa 24 oras, i-reply sa Business Suite';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -77,28 +79,33 @@ function mediaBlock(row) {
     <p class="meta">Messenger links can expire. This address is saved with the item.</p>`;
 }
 
-function reviewCard(row, pageId, ua) {
+function threadMessages(history, limit = 10) {
+  return (history || []).slice(-limit).map((h) => ({
+    role: h.role === 'assistant' ? 'assistant' : 'user',
+    who: h.role === 'user' ? 'Customer' : (h.via === 'ivan' ? 'Ivan' : 'Bot'),
+    text: String(h.content || ''),
+    time: manila(h.ts),
+  }));
+}
+
+function windowOpen(thread, now, windowMs) {
+  const last = thread && thread.lastUserTs;
+  return Boolean(last) && now - last <= windowMs;
+}
+
+function messageList(history) {
+  const rows = threadMessages(history);
+  if (!rows.length) return '<p class="meta empty-thread">Wala pang mensahe.</p>';
+  return `<ol class="thread">${rows.map((m) => `<li class="${m.role === 'user' ? 'from-customer' : 'from-us'}"><span class="who-line">${esc(m.who)} · ${esc(m.time)}</span><p>${esc(m.text)}</p></li>`).join('')}</ol>`;
+}
+
+function reviewCard(row, pageId, thread, now, windowMs) {
   const summary = row.summary || {};
   const named = String(row.customerName || '').trim();
   const who = customerLabel(named, row.psidLast4);
   const status = row.status === 'reviewed' ? 'Reviewed' : 'New';
-  const links = inboxLinks(pageId, row);
-  const kind = inboxClientKind(ua, false);
-  const phone = kind === 'android' || kind === 'ios';
-  const href = primaryInboxHref({
-    kind,
-    suiteHref: links.suite,
-    androidHref: links.android,
-    messengerHref: links.messenger,
-  });
+  const open = windowOpen(thread, now, windowMs);
   const snippet = copySnippet(row);
-  const copyAttr = named
-    ? ` data-copy-name="${esc(named)}"`
-    : (snippet ? ` data-copy-text="${esc(snippet)}" data-copy-kind="message"` : '');
-  const thread = links.itemId ? `thread id: ${links.itemId}` : 'thread id: not found';
-  const debug = [thread, `button: ${href}`];
-  if (links.messenger) debug.push(`messenger: ${links.messenger}`);
-  debug.push(`desktop: ${links.suite}`);
   const fields = [
     ['Size', summary.size],
     ['Brand', summary.brand],
@@ -116,33 +123,43 @@ function reviewCard(row, pageId, ua) {
     : (snippet
       ? `<p><button type="button" class="ghost copy-name" data-copy-text="${esc(snippet)}" data-copy-kind="message">Kopyahin ang mensahe</button></p>`
       : '');
-  return `<article class="card">
-    <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span></h2>
+  const ivan = row.ivanRepliedAt ? ' <span class="pill ivan">Sinagot ni Ivan</span>' : '';
+  const disabled = open ? '' : ' disabled';
+  const note = open ? '' : WINDOW_ERROR;
+  return `<article class="card" data-review-id="${esc(row.id)}">
+    <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span>${ivan}</h2>
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
     ${row.quietNote ? `<p class="meta quiet">${esc(row.quietNote)}</p>` : ''}
     ${dl}
     ${mediaBlock(row)}
-    <p><a class="inbox-primary" href="${esc(href)}"${copyAttr} data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>
+    <h3 class="thread-title">Huling mensahe</h3>
+    <div class="thread-wrap">${messageList(thread && thread.history)}</div>
+    <div class="reply">
+      <label for="reply-${esc(row.id)}">Reply</label>
+      <textarea id="reply-${esc(row.id)}" maxlength="2000" rows="3" placeholder="Sulatan si customer"${disabled}></textarea>
+      <div class="row"><button type="button" class="send-reply"${disabled}>Send</button></div>
+      <p class="send-note" role="status">${esc(note)}</p>
+    </div>
     ${copyButton}
-    ${!phone && links.messenger ? `<p><a class="personal-inbox" href="${esc(links.messenger)}">Open in Messenger</a></p>` : ''}
-    <p class="meta debug">${esc(debug.join(' · '))}</p>
+    <p><a class="inbox-fallback" href="${esc(genericInboxUrl(pageId))}">Buksan ang Inbox</a></p>
     ${button}
   </article>`;
 }
 
-function listPage(cfg, reviews, ua) {
+function listPage(cfg, reviews, threads, now = Date.now()) {
   const rows = [...(reviews || [])].sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
   const fresh = rows.filter((r) => r.status !== 'reviewed').length;
   const title = fresh ? `(${fresh}) JMAG's Video Review` : "JMAG's Video Review";
+  const windowMs = (cfg.replyWindowHours || 23.5) * 3600 * 1000;
   const cards = rows.length
-    ? rows.map((r) => reviewCard(r, cfg.pageId, ua)).join('\n')
+    ? rows.map((r) => reviewCard(r, cfg.pageId, (threads || {})[r.psid], now, windowMs)).join('\n')
     : '<p class="empty">No photos or videos yet.</p>';
   return shell({
     title,
-    refresh: true,
+    refresh: false,
     body: `<header>
       <h1>JMAG's Video Review <span class="badge" id="new-count">${fresh} new</span></h1>
-      <p class="lede">Reply in Business Suite and the bot pauses in that chat so you can give the price. This page refreshes every 30 seconds.</p>
+      <p class="lede">Reply under the video. The bot pauses in that chat. Buksan ang Inbox is only a backup. The chat updates every 15 seconds.</p>
     </header>
     <main>
       <div class="row">
@@ -160,6 +177,22 @@ function copySnippet(row) {
   return raw.replace(/\[Customer sent a (?:video|photo)[^\]]*\]/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
+function threadsPayload(reviews, threads, now, windowMs) {
+  const rows = [...(reviews || [])].sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+  return {
+    ids: rows.map((r) => r.id),
+    cards: rows.map((r) => {
+      const thread = (threads || {})[r.psid] || {};
+      return {
+        id: r.id,
+        ivanReplied: Boolean(r.ivanRepliedAt),
+        windowOpen: windowOpen(thread, now, windowMs),
+        messages: threadMessages(thread.history),
+      };
+    }),
+  };
+}
+
 function publicReview(row) {
   if (!row) return row;
   const copy = { ...row };
@@ -167,4 +200,4 @@ function publicReview(row) {
   return copy;
 }
 
-module.exports = { loginPage, listPage, publicReview, esc };
+module.exports = { loginPage, listPage, publicReview, threadsPayload, esc, WINDOW_ERROR };

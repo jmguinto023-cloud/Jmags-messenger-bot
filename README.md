@@ -101,34 +101,30 @@ npm start           # run (needs env, see .env.example)
 - Storage: `DATA_DIR/state.json` (atomic writes); chats purged after DATA_RETENTION_DAYS of inactivity.
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
   Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
-  name, Manila time, size, brand, problem, location, the photo or video, and a link to
-  the Page inbox. On a computer and on iPhone the button is the inbox list,
-  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}`.
-  Putting the thread number in `selected_item_id` redirects to facebook.com
-  (`bpn_id`, `asset_id`, `nav_ref=manage_page_ap_plus_default`) and shows
-  "Sorry, this content isn't available right now", so that deep link is not the button.
-  The card shows the customer name and **Kopyahin ang pangalan**, which copies it for the inbox search.
+  name, Manila time, size, brand, problem, location, and the photo or video.
+  Under each card are the last 10 messages (customer, bot, or Ivan, Manila time) and a reply box.
+  **Send** posts to `POST /dashboard/api/reply` (same dashboard cookie or admin token; unauthenticated requests are rejected).
+  The send uses Messenger `messaging_type: RESPONSE` and no `HUMAN_AGENT` tag. Outside the reply window
+  (`REPLY_WINDOW_HOURS`, default 23.5, inside Meta's 24 hours) the page shows
+  `Lampas na sa 24 oras, i-reply sa Business Suite` and nothing is sent. Text over 2000 characters is rejected.
+  A dashboard reply pauses that chat like Ivan typing in the inbox (`HUMAN_PAUSE_HOURS`, idle auto-resume),
+  cancels a pending video follow-up, marks the card **Sinagot ni Ivan**, and is stored in the conversation.
+  The echo of our own app id is ignored so the line is not saved twice. A double-tap sends once.
+  Enter sends on a computer; a phone uses the button. Success or the error shows on the card.
+  While the tab is visible the card history refreshes about every 15 seconds.
+  **Kopyahin ang pangalan** copies the customer name for the inbox search.
   If the profile lookup fails, the card and the push say `Customer ••` plus the last 4 digits of the PSID.
-  That label is not copied. **Kopyahin ang mensahe** copies the customer's first message instead, for the same inbox search.
-  A name the customer states in chat (`ako si`, `pangalan ko si`, `my name is`) is kept as a booking fact and used when the profile has no name.
-  `GET /admin/inbox-candidates?psid=` (Bearer `ADMIN_TOKEN`) returns the PSID, Graph conversation id,
-  `/inbox/{digits}/` thread number, participant ids, the Page business id, and candidate URLs
-  (`latest/inbox/all`, `latest/inbox/messenger`, with and without `bpn_id`, `facebook.com/messages/t/`).
+  That label is not copied. **Kopyahin ang mensahe** copies the customer's first message instead.
+  A name the customer states in chat (`ako si`, `pangalan ko si`, `my name is`) is used when the profile has no name.
+  **Buksan ang Inbox** is only the inbox list,
+  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}`.
+  Thread deep links (`selected_item_id`, the Android package intent, and `facebook.com/{page}/inbox/{thread}`)
+  are not on the card. `GET /admin/inbox-candidates?psid=` (Bearer `ADMIN_TOKEN`) still lists those candidate URLs.
   The Graph id and `link` come from
   `GET /{page-id}/conversations?platform=messenger&user_id={PSID}&fields=id,link,updated_time,participants`
   and are cached. The business id comes from `GET /{page-id}?fields=business`.
-  On Android the button is a real link, chosen from the phone's User-Agent:
-  `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.facebook.pages.app;end`.
-  Package `com.facebook.pages.app` is the Meta Business Suite app. Tapping it copies the customer's name and shows
-  `Nakopya ang pangalan ni {name} — i-paste sa search ng inbox`. A **Kopyahin ang pangalan** button does the same
-  without leaving the page. The same button is on the desktop card. The name comes from the profile, or from the conversation participants when the profile
-  has none. The phone does not show `facebook.com/{page}/inbox/{thread}`: that URL opens the personal Facebook feed.
-  An intent whose data is `https://business.facebook.com/latest/inbox/...?selected_item_id=...` is also omitted.
-  Samsung Internet unwraps that into the mobile site, whose thread pane fails, even with no `browser_fallback_url`.
-  On iPhone and iPad the button stays the https Business Suite URL. On a computer, **Open in Messenger** remains.
-  Each card has a small line with the thread id and the exact button URL. `m.me` is not used.
   The service worker is network-first for the dashboard page, script, and stylesheet, and reloads once when a new worker takes control.
-  Mark reviewed drops it from the New count. The page refreshes every 30 seconds.
+  Mark reviewed drops it from the New count.
   The shell is cached by the service worker; the review list is network-first.
   New photos and videos can send a Web Push if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set.
   Generate a pair with `npx web-push generate-vapid-keys` and put both values in the host env (never commit
