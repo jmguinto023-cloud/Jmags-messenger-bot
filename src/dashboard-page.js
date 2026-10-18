@@ -48,7 +48,16 @@ function loginPage(error) {
 <main>
   <form method="post" action="/dashboard/login">
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <div class="password-field">
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="button" class="peek" id="toggle-password" aria-label="Ipakita/Itago ang password" aria-pressed="false">
+        <svg class="eye" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path fill="none" stroke="currentColor" stroke-width="2" d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/>
+          <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path class="slash" fill="none" stroke="currentColor" stroke-width="2" d="M4 20L20 4"/>
+        </svg>
+      </button>
+    </div>
     <div class="row"><button type="submit">Log in</button></div>
   </form>
 </main>`,

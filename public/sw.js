@@ -1,6 +1,6 @@
 'use strict';
 // Video-review PWA: cache the app shell, network-first for data.
-const CACHE = 'jmags-video-shell-v2';
+const CACHE = 'jmags-video-shell-v3';
 const SHELL = [
   '/dashboard.css',
   '/dashboard.js',
