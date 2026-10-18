@@ -29,12 +29,12 @@ class LLM {
     return this._prompt;
   }
 
-  async reply(history, { nowText } = {}) {
+  async reply(history, { nowText, attachmentNote } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const messages = [
       { role: 'system', content: this.systemPrompt() },
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form.` },
-      ...history.map((h) => ({ role: h.role, content: h.content })),
+      ...normalizeTurns(history, { attachmentNote }),
     ];
     try {
       return await this.complete(messages);
@@ -76,6 +76,34 @@ class LLM {
   }
 }
 
+// Claude (and other models) reject assistant prefill: the request must end on a user turn.
+// Merge back-to-back turns of the same role, drop assistant turns that landed after the
+// customer's last message (our reply, an echo, a human reply), and if they only sent an
+// attachment, close with a user turn such as "[Customer sent a video]".
+function normalizeTurns(history, { attachmentNote } = {}) {
+  const turns = [];
+  for (const h of history || []) {
+    const role = h.role === 'assistant' ? 'assistant' : 'user';
+    const content = String(h.content ?? '').trim();
+    if (!content) continue;
+    const prev = turns[turns.length - 1];
+    if (prev && prev.role === role) prev.content += `\n${content}`;
+    else turns.push({ role, content });
+  }
+  while (turns.length && turns[turns.length - 1].role === 'assistant') turns.pop();
+  const note = String(attachmentNote || '').trim();
+  if (note) {
+    const last = turns[turns.length - 1];
+    if (last && last.role === 'user') {
+      if (!last.content.includes(note)) last.content += `\n${note}`;
+    } else turns.push({ role: 'user', content: note });
+  }
+  if (!turns.length || turns[turns.length - 1].role !== 'user') {
+    turns.push({ role: 'user', content: note || '[Customer sent a message]' });
+  }
+  return turns;
+}
+
 // Pull out the hidden [HANDOFF: reason] marker and return clean text.
 function parseHandoff(raw) {
   const re = /\[\s*HANDOFF\s*:?\s*([^\]]*)\]/gi;
@@ -85,4 +113,4 @@ function parseHandoff(raw) {
   const text = raw.replace(re, '').replace(/\n{3,}/g, '\n\n').trim();
   return { text, handoff: reason !== null, reason: reason || '' };
 }
-module.exports = { LLM, parseHandoff };
+module.exports = { LLM, parseHandoff, normalizeTurns };

@@ -6,7 +6,7 @@ class Graph {
   constructor(cfg, log) {
     this.cfg = cfg;
     this.log = log;
-    this.labelId = null;
+    this.labelIds = new Map();
   }
   url(pathPart, params = {}) {
     const u = new URL(`${this.cfg.graphBase}/${this.cfg.graphVersion}/${pathPart}`);
@@ -60,14 +60,22 @@ class Graph {
       body: { recipient: { id: psid }, target_app_id: targetAppId, metadata: metadata.slice(0, 1000) },
     });
   }
-  // Optional: tag the customer with a Page Inbox label (Custom Labels API).
+  // Tag the customer with a Page Inbox label. A numeric value is already an id.
+  // A name is created via custom_labels when missing, and the id is cached per name.
   async addLabel(psid, labelName) {
-    if (!this.labelId) {
-      const list = await this.call('GET', `${this.pageNode()}/custom_labels`, { params: { fields: 'page_label_name', limit: '100' } });
-      const found = (list.data || []).find((l) => l.page_label_name === labelName);
-      this.labelId = found ? found.id : (await this.call('POST', `${this.pageNode()}/custom_labels`, { body: { page_label_name: labelName } })).id;
+    const name = String(labelName || '').trim();
+    if (!name) return null;
+    let id = this.labelIds.get(name);
+    if (!id) {
+      if (/^\d+$/.test(name)) id = name;
+      else {
+        const list = await this.call('GET', `${this.pageNode()}/custom_labels`, { params: { fields: 'page_label_name', limit: '100' } });
+        const found = (list.data || []).find((l) => l.page_label_name === name);
+        id = found ? found.id : (await this.call('POST', `${this.pageNode()}/custom_labels`, { body: { page_label_name: name } })).id;
+      }
+      if (id) this.labelIds.set(name, id);
     }
-    return this.call('POST', `${this.labelId}/label`, { body: { user: psid } });
+    return this.call('POST', `${id}/label`, { body: { user: psid } });
   }
 }
 module.exports = { Graph };

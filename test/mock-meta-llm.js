@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startMock({ llmResponder } = {}) {
-  const calls = { messages: [], typing: [], pass: [], labels: [], llm: [] };
+  const calls = { messages: [], typing: [], pass: [], labels: [], labelCreates: [], llm: [] };
   const state = { llmResponder: llmResponder || (() => 'Noted po maam/sir 😊 Taga saan po sila?'), llmFail: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -32,9 +32,12 @@ function startMock({ llmResponder } = {}) {
         return json(200, { recipient_id: body.recipient.id, message_id: `m_${calls.messages.length}` });
       }
       if (url.pathname.endsWith('/pass_thread_control')) { calls.pass.push(body); return json(200, { success: true }); }
-      if (url.pathname.endsWith('/custom_labels') && req.method === 'GET') return json(200, { data: [] });
-      if (url.pathname.endsWith('/custom_labels')) return json(200, { id: 'label123' });
-      if (url.pathname.endsWith('/label')) { calls.labels.push(body); return json(200, { success: true }); }
+      if (url.pathname.endsWith('/custom_labels') && req.method === 'GET') return json(200, { data: state.customLabels || [] });
+      if (url.pathname.endsWith('/custom_labels') && req.method === 'POST') {
+        calls.labelCreates.push(body);
+        return json(200, { id: 'label123' });
+      }
+      if (url.pathname.endsWith('/label')) { calls.labels.push({ ...body, path: url.pathname }); return json(200, { success: true }); }
       return json(404, { error: { message: 'mock: unknown path ' + url.pathname } });
     });
   });

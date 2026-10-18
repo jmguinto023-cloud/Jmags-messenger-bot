@@ -8,7 +8,7 @@ const path = require('node:path');
 const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { isActiveNow, keywordHit } = require('../src/bot');
-const { parseHandoff } = require('../src/llm');
+const { parseHandoff, normalizeTurns } = require('../src/llm');
 const { sanitizeOutgoing } = require('../src/messages');
 
 const SECRET = 'test_app_secret';
@@ -102,21 +102,119 @@ test('history is kept per conversation', async () => {
   } finally { await s.close(); }
 });
 
-test('photo forces handoff: holding line, pass_thread_control to Page Inbox, then silence', async () => {
-  const s = await setup({ NEEDS_IVAN_LABEL: 'Needs Ivan' });
+test('photo or video stays with the bot: acknowledgement, inbox label, URL warning, still answers', async () => {
+  const s = await setup({ LOG_LEVEL: 'warn' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => { logged.push(a.map(String).join(' ')); };
+  s.mock.state.llmResponder = (body) => {
+    const last = body.messages.at(-1).content;
+    if (/Customer sent a photo/.test(last)) return 'Sige po, anong brand at size?';
+    if (/Customer sent a video/.test(last)) return 'Salamat po! Ipapacheck ko po sa technician. May backlight issue po ba?';
+    return 'Samsung 55 po, pwede naming tingnan. Taga saan po sila?';
+  };
   try {
     await s.post(msg('555', { attachments: [{ type: 'image', payload: { url: 'https://example.com/tv.jpg' } }] }));
-    assert.equal(s.mock.calls.llm.length, 0, 'AI not called for photos');
-    assert.equal(s.mock.calls.messages.length, 1);
-    assert.match(s.mock.calls.messages[0].message.text, /Ivan/);
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.store.thread('555').handedOff, false);
+    assert.match(s.mock.calls.messages[0].message.text, /^Salamat po! Ipapacheck ko po sa technician/);
+    assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
+    const first = s.mock.calls.llm[0].body.messages.filter((m) => m.role !== 'system');
+    assert.equal(first.at(-1).role, 'user');
+    assert.equal(first.at(-1).content, '[Customer sent a photo]');
+    assert.equal(s.mock.calls.labelCreates[0].page_label_name, 'Video for review');
+    assert.equal(s.mock.calls.labels[0].user, '555');
+    assert.match(s.mock.calls.labels[0].path, /\/label123\/label$/);
+    assert.ok(logged.some((l) => /\bWARN\b/.test(l) && l.includes('https://example.com/tv.jpg')));
+
+    await s.post(msg('555', { text: 'Samsung 55 walang display' }));
+    assert.equal(s.mock.calls.llm.length, 2);
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.store.thread('555').handedOff, false);
+
+    await s.post(msg('555', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/clip.mp4' } }] }));
+    assert.equal(s.mock.calls.labelCreates.length, 1, 'label id is cached');
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.store.thread('555').handedOff, false);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Ipapacheck ko po sa technician/);
+    assert.ok(logged.some((l) => /\bWARN\b/.test(l) && l.includes('https://cdn.example/clip.mp4')));
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
+});
+
+test('model messages merge same-role turns and always end on a user message', async () => {
+  assert.deepEqual(normalizeTurns([
+    { role: 'user', content: 'hm po' },
+    { role: 'user', content: '55 inch' },
+    { role: 'assistant', content: 'Taga saan po?' },
+    { role: 'assistant', content: 'echo after the customer' },
+  ]), [{ role: 'user', content: 'hm po\n55 inch' }]);
+  assert.deepEqual(
+    normalizeTurns([{ role: 'assistant', content: 'only the bot spoke' }], { attachmentNote: '[Customer sent a video]' }),
+    [{ role: 'user', content: '[Customer sent a video]' }],
+  );
+  const ended = normalizeTurns([
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'hi po' },
+    { role: 'user', content: '[Customer sent a video]' },
+    { role: 'assistant', content: 'trailing echo' },
+  ]);
+  assert.equal(ended.at(-1).role, 'user');
+  assert.equal(ended.at(-1).content, '[Customer sent a video]');
+  assert.equal(ended.some((m) => /trailing echo/.test(m.content)), false);
+
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'ok po';
+  try {
+    await s.app.llm.reply([
+      { role: 'user', content: 'hm po backlight' },
+      { role: 'user', content: '55 inch' },
+      { role: 'assistant', content: 'assistant message prefill' },
+    ], { nowText: 'Saturday' });
+    const sent = s.mock.calls.llm[0].body.messages.filter((m) => m.role !== 'system');
+    assert.deepEqual(sent, [{ role: 'user', content: 'hm po backlight\n55 inch' }]);
+    await s.app.llm.reply([
+      { role: 'assistant', content: 'earlier reply' },
+    ], { nowText: 'Saturday', attachmentNote: '[Customer sent a video]' });
+    const media = s.mock.calls.llm[1].body.messages.filter((m) => m.role !== 'system');
+    assert.deepEqual(media, [{ role: 'user', content: '[Customer sent a video]' }]);
+  } finally { await s.close(); }
+});
+
+test('a video handoff tag does not pass thread control', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => '[HANDOFF: customer sent video]';
+  try {
+    await s.post(msg('556', { attachments: [{ type: 'video', payload: { url: 'https://example.com/x.mp4' } }] }));
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.store.thread('556').handedOff, false);
+    assert.match(s.mock.calls.messages[0].message.text, /Ipapacheck ko po sa technician/);
+    const sent = s.mock.calls.llm[0].body.messages.filter((m) => m.role !== 'system');
+    assert.equal(sent.at(-1).role, 'user');
+    assert.equal(sent.at(-1).content, '[Customer sent a video]');
+  } finally { await s.close(); }
+});
+
+test('a numeric NEEDS_IVAN_LABEL is applied as the label id', async () => {
+  const s = await setup({ NEEDS_IVAN_LABEL: '555001' });
+  try {
+    await s.post(msg('num', { attachments: [{ type: 'image', payload: { url: 'https://example.com/pic.jpg' } }] }));
+    assert.equal(s.mock.calls.labelCreates.length, 0);
+    assert.match(s.mock.calls.labels[0].path, /\/555001\/label$/);
+    assert.equal(s.mock.calls.pass.length, 0);
+  } finally { await s.close(); }
+});
+
+test('audio still hands the thread to the Page Inbox', async () => {
+  const s = await setup();
+  try {
+    await s.post(msg('aud', { attachments: [{ type: 'audio', payload: { url: 'https://example.com/note.mp4' } }] }));
+    assert.equal(s.mock.calls.llm.length, 0);
     assert.equal(s.mock.calls.pass.length, 1);
     assert.equal(s.mock.calls.pass[0].target_app_id, '263902037430900');
-    assert.equal(s.mock.calls.pass[0].recipient.id, '555');
-    await new Promise((r) => setTimeout(r, 50));
-    assert.equal(s.mock.calls.labels[0].user, '555');
-    await s.post({ object: 'page', entry: [{ id: PAGE, time: Date.now(), standby: [{ sender: { id: '555' }, recipient: { id: PAGE }, timestamp: Date.now(), message: { mid: 'standby.555', text: 'ano na po?' } }] }] });
-    assert.equal(s.mock.calls.messages.length, 1, 'no auto reply while the inbox still owns the thread');
-    assert.equal(s.app.store.thread('555').handedOff, true);
+    assert.equal(s.app.store.thread('aud').handedOff, true);
   } finally { await s.close(); }
 });
 
@@ -163,7 +261,7 @@ test('human takeover: echo from another app (or no app_id) pauses the bot; own e
 test('thread control passed back to the bot resumes auto-replies', async () => {
   const s = await setup();
   try {
-    await s.post(msg('901', { attachments: [{ type: 'video', payload: { url: 'x' } }] }));
+    await s.post(msg('901', { text: 'pa tawag na lang po' }));
     assert.equal(s.mock.calls.pass.length, 1);
     await s.post({ object: 'page', entry: [{ id: PAGE, time: Date.now(), messaging: [{ sender: { id: '901' }, recipient: { id: PAGE }, timestamp: Date.now(), pass_thread_control: { previous_owner_app_id: '263902037430900', new_owner_app_id: APP, metadata: '' } }] }] });
     await s.post(msg('901', { text: 'hello ulit po' }));
@@ -276,7 +374,9 @@ test('LLM fallback is not stored in the history sent back to the model', async (
     assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
     await s.post(msg('fb', { text: 'Samsung 55 Biñan' }));
     const nonSystem = s.mock.calls.llm.at(-1).body.messages.filter((m) => m.role !== 'system');
-    assert.deepEqual(nonSystem.map((m) => m.role), ['user', 'user']);
+    assert.deepEqual(nonSystem.map((m) => m.role), ['user']);
+    assert.match(nonSystem[0].content, /hm po backlight/);
+    assert.match(nonSystem[0].content, /Samsung 55/);
     assert.equal(nonSystem.some((m) => /brand at size|Pasensya/.test(m.content)), false);
     assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /Pasensya/);
     assert.equal(s.mock.calls.pass.length, 0);
@@ -355,6 +455,8 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /Do not quote a price\. Then hand off to Ivan for the quote/);
   assert.doesNotMatch(prompt, /no refrigerator/i);
   assert.doesNotMatch(prompt, /don't repair refrigerator/i);
+  assert.match(prompt, /A photo or video is not a handoff/);
+  assert.doesNotMatch(prompt, /They send a photo or video/);
   const example = prompt.slice(prompt.indexOf('Example quote'), prompt.indexOf('Send the schedule form'));
   assert.doesNotMatch(example, /travel fee|within 50 km|\bkm\b/i);
 });

@@ -4,7 +4,7 @@ Ivan-style auto-reply for the JMAG's Appliances Facebook Page, built only on Met
 Messenger Platform (webhooks + Send API + Conversation Routing). Node.js 20, **zero npm dependencies**.
 
 ```
-npm test            # 27 automated tests (mock Graph API + mock LLM, no internet)
+npm test            # 31 automated tests (mock Graph API + mock LLM, no internet)
 npm run simulate    # end-to-end: real server process + mocks + 3 Taglish customer messages
 npm run sync-prompt # refresh prompts/system-prompt.md from ../ivan-bot-system-prompt.md
 npm start           # run (needs env, see .env.example)
@@ -22,10 +22,18 @@ npm start           # run (needs env, see .env.example)
 - Schedule form (`BOOKING_FORM_URL`, default the Netlify form) is injected into the system prompt. The model sends it
   in the same reply when the customer agrees, asks to be scheduled, or gives a date/time — not on a first price question,
   and not with a `[HANDOFF]` tag. A reply that contains the form URL is delivered and does not pass thread control.
-- Handoff when: model prints `[HANDOFF: reason]` (stripped before sending), customer sends image/video/audio/file
+- Handoff when: model prints `[HANDOFF: reason]` (stripped before sending), customer sends audio/file
   (stickers are not handoffs), or keywords (tao, agent, tawag, call, ivan…; "bot ka ba / tao ka ba" goes to the AI).
   Sends one holding line → `POST /{page}/pass_thread_control` to Page Inbox `263902037430900` → optional
-  "Needs Ivan" custom label → silent in that chat.
+  `NEEDS_IVAN_LABEL` custom label → silent in that chat.
+- A photo or video does **not** pass thread control. The bot replies with a short acknowledgement
+  (technician will review, then the next useful question), applies the inbox label
+  (`NEEDS_IVAN_LABEL`, or creates "Video for review" when that is empty), and logs the attachment URL at WARN.
+  Later text in the same chat is still answered.
+- Chat messages sent to the model are merged when the same role speaks twice in a row, and trailing
+  assistant turns (bot reply, echo, or a human reply recorded after the customer) are dropped so the
+  request always ends on a user message. An attachment with no caption is sent as `[Customer sent a video]`
+  (or photo).
 - Human takeover: a `message_echo` whose `app_id` is not ours (or missing) pauses that chat for HUMAN_PAUSE_HOURS.
 - Resume: `messaging_handovers` with `new_owner_app_id` = our app, or HANDOFF_RESUME_HOURS later, or
   `POST /admin/resume?psid=` (Bearer ADMIN_TOKEN).

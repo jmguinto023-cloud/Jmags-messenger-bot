@@ -16,6 +16,22 @@ function isCannedLine(text) {
   return text === lines.fallback || text === lines.holding || text === lines.holdingMedia || text === lines.holdingPerson;
 }
 
+function mediaKind(items) {
+  if (!items || !items.length) return '';
+  return items.some((m) => m.type === 'video') ? 'video' : 'photo';
+}
+
+function mediaNote(kind) {
+  return kind ? `[Customer sent a ${kind}]` : '';
+}
+
+// Guarantee the technician acknowledgement even when the model answers with something else.
+function mediaReply(text) {
+  const clean = sanitizeOutgoing(text);
+  if (/ipapacheck|technician|teknisyan/i.test(clean)) return clean;
+  return clean ? `${lines.mediaAck}\n${clean}` : lines.mediaAck;
+}
+
 const HOUR = 3600 * 1000;
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
@@ -95,20 +111,28 @@ class Bot {
 
     let text = '';
     let forceReason = '';
+    const media = [];
     if (ev.message) {
       if (this.store.seen(ev.message.mid)) return; // webhook retry
       text = ev.message.text || '';
       if (ev.message.quick_reply && ev.message.quick_reply.payload && !text) text = ev.message.quick_reply.payload;
       for (const a of ev.message.attachments || []) {
         if (a.type === 'image' && a.payload && a.payload.sticker_id) { text = text || '👍'; continue; }
-        if (['image', 'video', 'audio', 'file'].includes(a.type)) forceReason = forceReason || `customer sent ${a.type}`;
-        else if (!text) text = `[customer sent a ${a.type}]`;
+        if (a.type === 'image' || a.type === 'video') {
+          media.push({ type: a.type, url: (a.payload && a.payload.url) || '' });
+        } else if (a.type === 'audio' || a.type === 'file') {
+          forceReason = forceReason || `customer sent ${a.type}`;
+        } else if (!text) text = `[customer sent a ${a.type}]`;
       }
     } else if (ev.postback) {
       text = ev.postback.title || ev.postback.payload || '';
     } else {
       return; // other event types (optins, referrals without text, etc.)
     }
+
+    const kind = mediaKind(media);
+    const note = mediaNote(kind);
+    if (note) text = text ? `${text}\n${note}` : note;
 
     const ts = Number(ev.timestamp) || this.now();
     const logText = forceReason ? `${text ? text + ' ' : ''}[${forceReason}]` : text;
@@ -118,6 +142,10 @@ class Bot {
     if (isStandby) { this.log.info(`standby msg from ${short(psid)} (another app owns thread) – no reply`); return; }
 
     const t = this.store.thread(psid);
+    if (media.length) {
+      t.pendingMedia = [...(t.pendingMedia || []), ...media];
+      t.attachmentNote = note;
+    }
     const now = this.now();
 
     // Mark as done returns the thread without a handover webhook. A normal
@@ -132,7 +160,11 @@ class Bot {
       t.handedOff = false; t.handoffReason = ''; t.passedByBot = false;
     }
     const block = this.blockReason(psid, t, ts);
-    if (block) { this.log.info(`no reply to ${short(psid)}: ${block}`); return; }
+    if (block) {
+      t.pendingMedia = []; t.attachmentNote = '';
+      this.log.info(`no reply to ${short(psid)}: ${block}`);
+      return;
+    }
 
     if (!forceReason) {
       // "bot ka ba? / tao ka ba?" is a question about the bot – let the AI answer honestly instead.
@@ -143,7 +175,10 @@ class Bot {
     if (forceReason) {
       this.cancelPending(psid);
       const holding = forceReason.startsWith('customer sent') ? lines.holdingMedia : lines.holdingPerson;
-      return this.enqueue(psid, () => this.handoff(psid, forceReason, holding));
+      return this.enqueue(psid, async () => {
+        await this.flagPendingMedia(psid);
+        return this.handoff(psid, forceReason, holding);
+      });
     }
     this.queueText(psid, ts);
   }
@@ -189,16 +224,46 @@ class Bot {
     return new Intl.DateTimeFormat('en-PH', { timeZone: this.cfg.timezone, dateStyle: 'full', timeStyle: 'short' }).format(new Date(this.now()));
   }
 
+  async flagPendingMedia(psid) {
+    const t = this.store.thread(psid);
+    const items = t.pendingMedia || [];
+    t.pendingMedia = [];
+    if (!items.length) return;
+    this.store.save();
+    for (const m of items) {
+      this.log.warn(`video/photo for Ivan ${short(psid)} type=${m.type} url=${m.url || '(none)'}`);
+    }
+    const label = this.cfg.needsIvanLabel || 'Video for review';
+    try {
+      await this.graph.addLabel(psid, label);
+    } catch (e) {
+      this.log.warn('label failed (optional)', e.message);
+    }
+  }
+
   async replyWithAI(psid, ts) {
     const t = this.store.thread(psid);
     const block = this.blockReason(psid, t, ts); // re-check: Ivan may have jumped in meanwhile
-    if (block) { this.log.info(`skip reply to ${short(psid)}: ${block}`); return; }
+    if (block) {
+      t.pendingMedia = []; t.attachmentNote = '';
+      this.log.info(`skip reply to ${short(psid)}: ${block}`);
+      return;
+    }
+
+    const hadMedia = Boolean((t.pendingMedia || []).length);
+    const attachmentNote = t.attachmentNote || '';
+    t.attachmentNote = '';
+    await this.flagPendingMedia(psid);
 
     this.graph.typingOn(psid).catch((e) => this.log.warn('typing_on failed', e.message));
     let raw;
     try {
-      raw = await this.llm.reply(t.history, { nowText: this.nowText() });
+      raw = await this.llm.reply(t.history, { nowText: this.nowText(), attachmentNote });
     } catch (e) {
+      if (hadMedia) {
+        this.log.error(`LLM failed for media from ${short(psid)} (staying in chat):`, e.message);
+        return this.send(psid, lines.mediaAck);
+      }
       const status = Number(e.status) || 0;
       if (status >= 400 && status < 500) {
         this.log.error(`LLM config error for ${short(psid)}: HTTP ${status} (not handing off). ${e.message}`);
@@ -212,6 +277,8 @@ class Bot {
     t.fallbackCount = 0;
     const { text, handoff, reason } = parseHandoff(raw);
     if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
+    // A photo or video never passes the thread. A keyword in the caption already handed off above.
+    if (hadMedia) return this.send(psid, mediaReply(text));
     // The schedule form must go out before any handoff. A [HANDOFF] tag on that
     // same reply used to silence the bot before the customer got the link.
     const formUrl = this.cfg.bookingFormUrl;
