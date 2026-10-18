@@ -51,6 +51,10 @@ function createServer({ cfg, bot, log }) {
       return sendJson(200, { ok: true, botEnabled: cfg.botEnabled, testMode: cfg.testPsids.length > 0 });
     }
 
+    if (req.method === 'GET' && url.pathname === '/') {
+      return sendFile(res, 'index.html', 'text/html; charset=utf-8');
+    }
+
     if (req.method === 'GET' && (url.pathname === '/privacy' || url.pathname === '/data-deletion')) {
       const file = url.pathname === '/privacy' ? 'privacy.html' : 'data-deletion.html';
       return send(200, legalHtml(file, url.searchParams.get('code') || ''), 'text/html; charset=utf-8');

@@ -1,6 +1,7 @@
 'use strict';
 // Server-rendered Ivan dashboard. No build step.
 const { inboxLinks, inboxClientKind, primaryInboxHref } = require('./inbox-link');
+const { customerLabel } = require('./summary');
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -78,7 +79,8 @@ function mediaBlock(row) {
 
 function reviewCard(row, pageId, ua) {
   const summary = row.summary || {};
-  const who = row.customerName || `…${row.psidLast4 || ''}`;
+  const named = String(row.customerName || '').trim();
+  const who = customerLabel(named, row.psidLast4);
   const status = row.status === 'reviewed' ? 'Reviewed' : 'New';
   const links = inboxLinks(pageId, row);
   const kind = inboxClientKind(ua, false);
@@ -89,8 +91,10 @@ function reviewCard(row, pageId, ua) {
     androidHref: links.android,
     messengerHref: links.messenger,
   });
-  const named = String(row.customerName || '').trim();
-  const copyAttr = named ? ` data-copy-name="${esc(named)}"` : '';
+  const snippet = copySnippet(row);
+  const copyAttr = named
+    ? ` data-copy-name="${esc(named)}"`
+    : (snippet ? ` data-copy-text="${esc(snippet)}" data-copy-kind="message"` : '');
   const thread = links.itemId ? `thread id: ${links.itemId}` : 'thread id: not found';
   const debug = [thread, `button: ${href}`];
   if (links.messenger) debug.push(`messenger: ${links.messenger}`);
@@ -109,7 +113,9 @@ function reviewCard(row, pageId, ua) {
     : '';
   const copyButton = named
     ? `<p><button type="button" class="ghost copy-name" data-copy-name="${esc(named)}">Kopyahin ang pangalan</button></p>`
-    : '';
+    : (snippet
+      ? `<p><button type="button" class="ghost copy-name" data-copy-text="${esc(snippet)}" data-copy-kind="message">Kopyahin ang mensahe</button></p>`
+      : '');
   return `<article class="card">
     <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span></h2>
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
@@ -147,6 +153,11 @@ function listPage(cfg, reviews, ua) {
       <section id="list">${cards}</section>
     </main>`,
   });
+}
+
+function copySnippet(row) {
+  const raw = String(row.firstMessage || row.snippet || '');
+  return raw.replace(/\[Customer sent a (?:video|photo)[^\]]*\]/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
 function publicReview(row) {

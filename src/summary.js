@@ -21,7 +21,54 @@ function summarizeConversation(history) {
     brand: brand ? brandLabel(brand) : '',
     problem,
     location: loc ? loc[0].replace(/\s+/g, ' ').trim() : '',
+    name: chatCustomerName(history),
   };
 }
 
-module.exports = { summarizeConversation };
+const NAME_STOP = new Set([
+  'po', 'opo', 'sir', 'maam', 'mam', 'lang', 'dito', 'from', 'taga', 'sa', 'ng', 'na',
+  'and', 'at', 'the', 'my', 'yung', 'ang', 'naman', 'rin', 'din', 'ito', 'iyan', 'yan',
+]);
+
+// A name the customer stated themselves. Profile lookup is separate.
+function chatCustomerName(history) {
+  const text = (history || [])
+    .filter((h) => h && h.role === 'user')
+    .map((h) => String(h.content || ''))
+    .join('\n');
+  const m = text.match(/(?:pangalan ko(?: po)?(?: ay)?(?: si)?|ako(?: po)? si|my name is|name\s*[:\-])\s+([^\n]{2,80})/i);
+  if (!m) return '';
+  const chunk = m[1].split(/[,.|]/)[0];
+  const kept = [];
+  for (const raw of chunk.trim().split(/\s+/)) {
+    const word = raw.replace(/[^A-Za-zÀ-ÿ.'-]/g, '');
+    if (!word) break;
+    const low = word.toLowerCase();
+    if (NAME_STOP.has(low) || BRANDS.includes(low)) break;
+    kept.push(word.charAt(0).toUpperCase() + word.slice(1).toLowerCase());
+    if (kept.length === 4) break;
+  }
+  if (!kept.length || kept[0].length < 2) return '';
+  return kept.join(' ');
+}
+
+function firstCustomerSnippet(history) {
+  for (const h of history || []) {
+    if (!h || h.role !== 'user') continue;
+    const text = String(h.content || '')
+      .replace(/\[Customer sent a (?:video|photo)[^\]]*\]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (text) return text.slice(0, 120);
+  }
+  return '';
+}
+
+function customerLabel(name, last4) {
+  const named = String(name || '').trim();
+  if (named) return named;
+  const tail = String(last4 || '').slice(-4);
+  return tail ? `Customer ••${tail}` : 'Customer';
+}
+
+module.exports = { summarizeConversation, chatCustomerName, firstCustomerSnippet, customerLabel };
