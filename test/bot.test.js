@@ -1206,8 +1206,10 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.equal(links.messenger, `https://www.facebook.com/${PAGE}/inbox/555001/`);
   assert.equal(JSON.stringify(links).includes('cust-7771'), false);
   assert.equal(links.suite.includes('t_9988'), false);
-  assert.equal(links.android, `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${BUSINESS_SUITE_PACKAGE};S.browser_fallback_url=${encodeURIComponent(links.messenger)};end`);
+  assert.equal(links.android, `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${BUSINESS_SUITE_PACKAGE};end`);
   assert.equal(links.android.includes('business.facebook.com'), false);
+  assert.equal(links.android.includes('browser_fallback_url'), false);
+  assert.equal(links.android.includes('facebook.com'), false);
   const noThread = inboxLinks(PAGE, {});
   assert.equal(noThread.android, `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${BUSINESS_SUITE_PACKAGE};end`);
   assert.equal(noThread.android.includes('browser_fallback_url'), false);
@@ -1230,7 +1232,12 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.match(js, /iPhone\|iPad\|iPod/);
   assert.match(js, /pointer:\s*coarse/);
   assert.match(js, /data-android-href/);
-  assert.match(js, /data-messenger-href/);
+  assert.match(js, /personal-inbox/);
+  assert.doesNotMatch(js, /data-messenger-href/);
+  assert.match(js, /Nakopya ang pangalan ni /);
+  assert.match(js, /i-paste sa search ng inbox/);
+  assert.match(js, /data-copy-name/);
+  assert.doesNotMatch(js, /preventDefault/);
   assert.match(js, /controllerchange/);
   assert.match(js, /location\.reload/);
   const sw = fs.readFileSync(path.join(__dirname, '../public/sw.js'), 'utf8');
@@ -1263,7 +1270,7 @@ test('a stored conversation deep-links Business Suite and the Messenger app', as
     assert.equal(s.mock.calls.conversations.length, 1);
     assert.equal(s.mock.calls.conversations[0].platform, 'messenger');
     assert.equal(s.mock.calls.conversations[0].user_id, 'cust-7771');
-    assert.equal(s.mock.calls.conversations[0].fields, 'id,link,updated_time');
+    assert.equal(s.mock.calls.conversations[0].fields, 'id,link,updated_time,participants');
 
     await s.post(msg('cust-7771', {
       attachments: [{ type: 'image', payload: { url: 'https://cdn.example/again.jpg' } }],
@@ -1290,6 +1297,11 @@ test('a stored conversation deep-links Business Suite and the Messenger app', as
     assert.match(phone, /<a class="inbox-primary" href="intent:#Intent;action=android\.intent\.action\.MAIN;category=android\.intent\.category\.LAUNCHER;package=com\.facebook\.pages\.app;/);
     assert.doesNotMatch(phone, /<a class="inbox-primary" href="https:\/\/business\.facebook\.com/);
     assert.match(phone, /thread id: 555001/);
+    assert.match(phone, /Maria Cruz/);
+    assert.match(phone, /Kopyahin ang pangalan/);
+    assert.match(phone, /data-copy-name="Maria Cruz"/);
+    assert.equal(phone.includes('Open in Messenger'), false);
+    assert.doesNotMatch(phone, /class="personal-inbox"/);
     assert.match(phone, new RegExp(`messenger: https://www.facebook.com/${PAGE}/inbox/555001/`));
     const rows = await (await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } })).json();
     assert.equal(JSON.stringify(rows).includes('cust-7771'), false);
@@ -1317,11 +1329,41 @@ test('a Graph conversation error keeps the generic inbox link', async () => {
     assert.equal(s.app.store.data.reviews[0].conversationId, '');
     assert.ok(logged.some((l) => /conversation lookup failed/.test(l) && /boom/.test(l)));
     await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } });
-    assert.equal(s.mock.calls.conversations.length, 1);
+    assert.equal(s.mock.calls.conversations.length, 2);
   } finally {
     console.error = orig;
     await s.close();
   }
+});
+
+test('a missing profile name is taken from the conversation participants', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret' });
+  s.mock.state.conversations = {
+    'noname-1': {
+      id: 't_111',
+      link: `/${PAGE}/inbox/111/`,
+      participants: {
+        data: [
+          { id: PAGE, name: "JMAG's Appliances" },
+          { id: 'noname-1', name: 'Juan Dela Cruz' },
+        ],
+      },
+    },
+  };
+  try {
+    await s.post(msg('noname-1', { attachments: [{ type: 'image', payload: { url: 'https://cdn.example/n.jpg' } }] }));
+    assert.equal(s.app.store.data.reviews[0].customerName, 'Juan Dela Cruz');
+    const { cookie } = await dashCookie(s.base);
+    const phoneUa = 'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 SamsungBrowser/26.0 Chrome/120.0.0.0 Mobile Safari/537.36';
+    const phone = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie, 'User-Agent': phoneUa } })).text();
+    assert.match(phone, /Juan Dela Cruz/);
+    assert.match(phone, /data-copy-name="Juan Dela Cruz"/);
+    assert.match(phone, /Kopyahin ang pangalan/);
+    assert.equal(phone.includes('Open in Messenger'), false);
+    const desk = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.match(desk, /Open in Messenger/);
+    assert.equal(desk.includes('Kopyahin ang pangalan'), false);
+  } finally { await s.close(); }
 });
 
 test('the dashboard fills a missing conversation id on first load', async () => {

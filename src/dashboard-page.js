@@ -81,12 +81,16 @@ function reviewCard(row, pageId, ua) {
   const who = row.customerName || `…${row.psidLast4 || ''}`;
   const status = row.status === 'reviewed' ? 'Reviewed' : 'New';
   const links = inboxLinks(pageId, row);
+  const kind = inboxClientKind(ua, false);
+  const phone = kind === 'android' || kind === 'ios';
   const href = primaryInboxHref({
-    kind: inboxClientKind(ua, false),
+    kind,
     suiteHref: links.suite,
     androidHref: links.android,
     messengerHref: links.messenger,
   });
+  const named = String(row.customerName || '').trim();
+  const copyAttr = phone && named ? ` data-copy-name="${esc(named)}"` : '';
   const thread = links.itemId ? `thread id: ${links.itemId}` : 'thread id: not found';
   const debug = [thread, `button: ${href}`];
   if (links.messenger) debug.push(`messenger: ${links.messenger}`);
@@ -103,13 +107,17 @@ function reviewCard(row, pageId, ua) {
   const button = status === 'New'
     ? `<form method="post" action="/dashboard/reviewed"><input type="hidden" name="id" value="${esc(row.id)}"><button type="submit">Mark reviewed</button></form>`
     : '';
+  const copyButton = phone && named
+    ? `<p><button type="button" class="ghost copy-name" data-copy-name="${esc(named)}">Kopyahin ang pangalan</button></p>`
+    : '';
   return `<article class="card">
-    <h2>${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span></h2>
+    <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span></h2>
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
     ${dl}
     ${mediaBlock(row)}
-    <p><a class="inbox-primary" href="${esc(href)}" data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>
-    ${links.messenger ? `<p><a href="${esc(links.messenger)}">Open in Messenger</a></p>` : ''}
+    <p><a class="inbox-primary" href="${esc(href)}"${copyAttr} data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>
+    ${copyButton}
+    ${!phone && links.messenger ? `<p><a class="personal-inbox" href="${esc(links.messenger)}">Open in Messenger</a></p>` : ''}
     <p class="meta debug">${esc(debug.join(' · '))}</p>
     ${button}
   </article>`;

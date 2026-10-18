@@ -66,8 +66,7 @@ if ('serviceWorker' in navigator) {
 
 // Same rules as inboxClientKind / primaryInboxHref in src/inbox-link.js.
 // Desktop keeps the https Business Suite link. Android opens the Business Suite
-// app by package. Other phones use the Page inbox link when the desktop URL
-// would stay in the mobile browser.
+// app by package. The facebook.com inbox link is hidden on a phone.
 function inboxClientKind() {
   const ua = navigator.userAgent || '';
   if (/Android/i.test(ua)) return 'android';
@@ -84,14 +83,58 @@ function applyMobileInboxLinks() {
   document.querySelectorAll('a.inbox-primary').forEach((a) => {
     const android = a.getAttribute('data-android-href') || '';
     const ios = a.getAttribute('data-ios-href') || '';
-    const messenger = a.getAttribute('data-messenger-href') || '';
     const suite = a.getAttribute('href') || '';
     let next = suite;
-    if (kind === 'android') next = android || messenger || suite;
-    else if (kind === 'ios') next = ios || messenger || suite;
-    else next = messenger || suite;
+    if (kind === 'android') next = android || suite;
+    else if (kind === 'ios') next = ios || suite;
     if (next) a.setAttribute('href', next);
+  });
+  // facebook.com/{page}/inbox/{thread} opens the personal feed, not the Page chat.
+  document.querySelectorAll('a.personal-inbox').forEach((a) => {
+    const p = a.closest('p');
+    if (p) p.hidden = true;
   });
 }
 
 applyMobileInboxLinks();
+
+function copyName(name) {
+  let ok = false;
+  const ta = document.createElement('textarea');
+  ta.value = name;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  ta.remove();
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(name).then(() => {}, () => {});
+  return ok;
+}
+
+function showToast(text) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.setAttribute('role', 'status');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => el.classList.remove('show'), 5000);
+}
+
+// The click is not cancelled. The Business Suite control stays a real link,
+// and the browser follows that intent itself.
+document.addEventListener('click', (event) => {
+  const el = event.target.closest('[data-copy-name]');
+  if (!el) return;
+  const name = el.getAttribute('data-copy-name') || '';
+  if (!name) return;
+  copyName(name);
+  showToast(`Nakopya ang pangalan ni ${name} — i-paste sa search ng inbox`);
+});

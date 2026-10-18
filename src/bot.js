@@ -301,6 +301,7 @@ class Bot {
     let customerName = '';
     try { customerName = await this.graph.userName(psid); } catch { customerName = ''; }
     const convo = await this.graph.findConversation(psid);
+    if (!customerName && convo && convo.name) customerName = convo.name;
     for (const m of items) {
       const type = m.type === 'image' ? 'photo' : m.type;
       this.store.addReview({
@@ -621,13 +622,22 @@ class Bot {
     const rows = this.store.data.reviews || [];
     let changed = false;
     for (const row of rows) {
-      if (!row || !row.psid || row.conversationId) continue;
+      if (!row || !row.psid) continue;
+      const needsId = !row.conversationId;
+      const needsName = !String(row.customerName || '').trim();
+      if (!needsId && !needsName) continue;
       const found = await this.graph.findConversation(row.psid);
-      if (!found || !found.id) continue;
-      row.conversationId = found.id;
-      row.conversationLink = found.link || '';
-      row.conversationUpdatedTime = found.updatedTime || '';
-      changed = true;
+      if (!found) continue;
+      if (needsId && found.id) {
+        row.conversationId = found.id;
+        row.conversationLink = found.link || '';
+        row.conversationUpdatedTime = found.updatedTime || '';
+        changed = true;
+      }
+      if (needsName && found.name) {
+        row.customerName = found.name;
+        changed = true;
+      }
     }
     if (changed) this.store.save();
   }

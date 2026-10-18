@@ -2,6 +2,12 @@
 // Minimal client for Meta's official Graph API (Messenger Send API + Conversation Routing).
 const crypto = require('node:crypto');
 
+function participantName(row, pageId) {
+  const people = (row && row.participants && row.participants.data) || [];
+  const other = people.find((p) => p && p.name && String(p.id || '') !== String(pageId || ''));
+  return other ? String(other.name).trim() : '';
+}
+
 class Graph {
   constructor(cfg, log) {
     this.cfg = cfg;
@@ -68,26 +74,38 @@ class Graph {
   }
   // Page conversation for one PSID. Cached for 10 minutes, including a miss, so the
   // dashboard refresh does not call Graph again. Null on error or an empty list.
+  // participants is requested so a missing profile name can still be shown. If that
+  // field is rejected, the lookup is repeated without it.
   async findConversation(psid) {
     const key = String(psid || '');
     if (!key) return null;
     const hit = this.conversationCache.get(key);
     if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
-    let value = null;
+    const base = { platform: 'messenger', user_id: key };
+    let json = null;
     try {
-      const json = await this.call('GET', `${this.pageNode()}/conversations`, {
-        params: { platform: 'messenger', user_id: key, fields: 'id,link,updated_time' },
+      json = await this.call('GET', `${this.pageNode()}/conversations`, {
+        params: { ...base, fields: 'id,link,updated_time,participants' },
       });
-      const row = (json.data || [])[0];
-      if (row && row.id) {
-        value = {
-          id: String(row.id),
-          link: String(row.link || ''),
-          updatedTime: String(row.updated_time || ''),
-        };
-      }
     } catch (e) {
-      this.log.warn('conversation lookup failed', e.message);
+      this.log.warn('conversation lookup with participants failed', e.message);
+      try {
+        json = await this.call('GET', `${this.pageNode()}/conversations`, {
+          params: { ...base, fields: 'id,link,updated_time' },
+        });
+      } catch (e2) {
+        this.log.warn('conversation lookup failed', e2.message);
+      }
+    }
+    let value = null;
+    const row = json && (json.data || [])[0];
+    if (row && row.id) {
+      value = {
+        id: String(row.id),
+        link: String(row.link || ''),
+        updatedTime: String(row.updated_time || ''),
+        name: participantName(row, this.cfg.pageId),
+      };
     }
     this.conversationCache.set(key, { at: Date.now(), value });
     return value;
