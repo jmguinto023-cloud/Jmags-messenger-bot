@@ -11,6 +11,10 @@ const { Bot, isActiveNow, keywordHit } = require('../src/bot');
 const { Store } = require('../src/store');
 const { parseHandoff, normalizeTurns } = require('../src/llm');
 const { sanitizeOutgoing } = require('../src/messages');
+const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
+const { summarizeConversation } = require('../src/summary');
+const { loadConfig } = require('../src/config');
+const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
 
 const SECRET = 'test_app_secret';
 const PAGE = '102622881557025';
@@ -44,6 +48,10 @@ let n = 0;
 const msg = (psid, message, ts = Date.now()) => ({
   object: 'page',
   entry: [{ id: PAGE, time: ts, messaging: [{ sender: { id: psid }, recipient: { id: PAGE }, timestamp: ts, message: { mid: `mid.${++n}`, ...message } }] }],
+});
+const standby = (psid, text, ts = Date.now()) => ({
+  object: 'page',
+  entry: [{ id: PAGE, time: ts, standby: [{ sender: { id: psid }, recipient: { id: PAGE }, timestamp: ts, message: { mid: `mid.${++n}`, text } }] }],
 });
 const echo = (psid, appId, text) => ({
   object: 'page',
@@ -122,7 +130,7 @@ test('photo or video stays with the bot: acknowledgement, inbox label, URL warni
     assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
     const first = s.mock.calls.llm[0].body.messages.filter((m) => m.role !== 'system');
     assert.equal(first.at(-1).role, 'user');
-    assert.equal(first.at(-1).content, '[Customer sent a photo]');
+    assert.match(first.at(-1).content, /\[Customer sent a photo at \d{2}:\d{2} - RECEIVED, forwarded to technician Ivan for review\. You cannot view it, but it WAS received\.\]/);
     assert.equal(s.mock.calls.labelCreates[0].page_label_name, 'Video for review');
     assert.equal(s.mock.calls.labels[0].user, '555');
     assert.match(s.mock.calls.labels[0].path, /\/label123\/label$/);
@@ -194,7 +202,7 @@ test('a video handoff tag does not pass thread control', async () => {
     assert.match(s.mock.calls.messages[0].message.text, /Ipapacheck ko po sa technician/);
     const sent = s.mock.calls.llm[0].body.messages.filter((m) => m.role !== 'system');
     assert.equal(sent.at(-1).role, 'user');
-    assert.equal(sent.at(-1).content, '[Customer sent a video]');
+    assert.match(sent.at(-1).content, /\[Customer sent a video at \d{2}:\d{2} - RECEIVED, forwarded to technician Ivan for review\. You cannot view it, but it WAS received\.\]/);
   } finally { await s.close(); }
 });
 
@@ -459,6 +467,13 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /A photo or video is not a handoff/);
   assert.doesNotMatch(prompt, /They send a photo or video/);
   assert.match(prompt, /at most two short follow-ups/);
+  assert.match(prompt, /09386369374 \(Smart\)/);
+  assert.match(prompt, /09267229506 \(Globe\)/);
+  assert.match(prompt, /Ay naku, sayang naman po, bago pa naman po yung TV niyo/);
+  assert.match(prompt, /NEVER say you did not see it/);
+  assert.match(prompt, /NEVER ask them to send it again/);
+  assert.match(prompt, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
+  assert.match(prompt, /If they ask how much the check-up is, answer plainly and only that: "₱1,000 check-up fee \(₱500 for 32" and 40" TVs\), waived if they proceed with the repair\."/);
   const example = prompt.slice(prompt.indexOf('Example quote'), prompt.indexOf('Send the schedule form'));
   assert.doesNotMatch(example, /travel fee|within 50 km|\bkm\b/i);
 });
@@ -756,7 +771,8 @@ test('dashboard is an installable PWA and push is skipped until VAPID keys exist
     const html = await page.text();
     assert.equal(page.status, 200);
     assert.match(html, /rel="manifest"/);
-    assert.match(html, /Enable notifications/);
+    assert.match(html, /Log in/);
+    assert.doesNotMatch(html, /Enable notifications/);
     assert.match(html, /apple-mobile-web-app-capable/);
     assert.match(html, /theme-color/);
     const manifest = await (await fetch(`${s.base}/manifest.webmanifest`)).json();
@@ -842,5 +858,294 @@ test('the follow-up scheduler is started only by the main process', async () => 
     assert.ok(s.app.bot._followTimer);
     s.app.bot.startFollowups();
     clearInterval(s.app.bot._followTimer);
+  } finally { await s.close(); }
+});
+
+async function postRaw(s, payload) {
+  const body = JSON.stringify(payload);
+  const res = await fetch(`${s.base}/webhook`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Hub-Signature-256': 'sha256=' + crypto.createHmac('sha256', SECRET).update(body).digest('hex'),
+    },
+    body,
+  });
+  await new Promise((r) => setImmediate(r));
+  return res;
+}
+
+test('slot extraction picks brand, size, problem, age, location, and repair history from a story', () => {
+  const story = 'Ay grabe po, kagabi nag-brownout habang nanonood yung mga bata. Yung Samsung 55 inch namin, 3 taon pa lang, biglang walang display. Naiinis na po ako. Taga Binan Laguna po kami. Dinala na namin sa ibang shop noong nakaraang buwan, binuksan na nila, hindi pa naayos.';
+  const thread = { history: [{ role: 'user', content: story }] };
+  updateIntake(thread, story, false);
+  assert.equal(thread.slots.brandSize, 'Samsung 55"');
+  assert.equal(thread.slots.problemText, 'no display / backlight');
+  assert.match(thread.slots.age, /3 taon/i);
+  assert.match(thread.slots.location, /Binan/i);
+  assert.equal(thread.slots.repairedElsewhere, 'answered');
+  const summary = summarizeConversation(thread.history);
+  assert.equal(summary.brand, 'Samsung');
+  assert.equal(summary.size, '55"');
+  assert.equal(summary.problem, 'no display / backlight');
+  const note = intakeContext(thread);
+  assert.match(note, /Samsung 55/);
+  assert.match(note, /Binan/i);
+  assert.match(note, /Never ask for a slot that is already filled/);
+});
+
+test('a received video stays in later model calls and is never treated as missing', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = (body) => {
+    const last = body.messages.filter((m) => m.role === 'user').at(-1).content;
+    if (/Ok na ba yung video nareview na/.test(last)) {
+      return 'Hindi pa po nakikita ni Ivan ang video dito sa chat namin. Pwede po ulit i-send?';
+    }
+    if (/Sigurado po ba/.test(last)) {
+      return 'hindi po namin nakikita ang video dito sa aming side. Pwede po ulit i-send?';
+    }
+    if (/magkano po ang estimate/.test(last)) return 'Ano po ang problema ng TV?';
+    return 'Noted po, ipapatingin sa technician namin ang video';
+  };
+  try {
+    await s.post(msg('vid1', {
+      text: 'Samsung 55 inch po',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/live.mp4' } }],
+    }));
+    assert.match(s.mock.calls.messages[0].message.text, /ipapatingin sa technician namin ang video/);
+    assert.equal(s.mock.calls.pass.length, 0);
+    const hist = s.app.store.thread('vid1').history.map((h) => h.content).join('\n');
+    assert.match(hist, /\[Customer sent a video at \d{2}:\d{2} - RECEIVED, forwarded to technician Ivan for review\. You cannot view it, but it WAS received\.\]/);
+    assert.match(s.mock.calls.llm[0].body.messages.map((m) => m.content).join('\n'), /WAS received/);
+
+    await s.post(msg('vid1', { text: 'Ok na ba yung video nareview na?' }));
+    const follow = s.mock.calls.llm.at(-1).body.messages.map((m) => m.content).join('\n');
+    assert.match(follow, /RECEIVED, forwarded to technician Ivan/);
+    assert.match(follow, /NEVER say a video or photo was not received/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /nagre-review ng video/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /all-in price soon/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Karaniwang range po for Samsung 55"/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /₱5,000/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /₱18,000/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /ma-check ng technician personally/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /₱1,000 check-up fee \(₱500 for 32" and 40" TVs\), waived if they proceed with the repair/);
+
+    await s.post(msg('vid1', { text: 'Sigurado po ba kayo?' }));
+    await s.post(msg('vid1', { text: 'magkano po ang estimate?' }));
+    const outbound = s.mock.calls.messages.map((m) => m.message.text).join('\n');
+    assert.doesNotMatch(outbound, /nakikita|ulit i-send|paki-send ulit|\bresend\b/i);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /problema/i);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Karaniwang range po for Samsung 55"/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /ma-check ng technician personally/);
+    assert.equal(s.app.store.thread('vid1').awaitingVideo, false);
+  } finally { await s.close(); }
+});
+
+test('a price range from a description invites a personal check-up', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Karaniwang range po ay ₱9,000–₱10,000.';
+  try {
+    await s.post(msg('rng', { text: 'may lines po sa TCL 40 inch, taga Cabuyao' }));
+    const text = s.mock.calls.messages[0].message.text;
+    assert.match(text, /₱9,000–₱10,000/);
+    assert.match(text, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
+    assert.match(text, /home service check-up/);
+    assert.match(text, /waived if they proceed with the repair/);
+  } finally { await s.close(); }
+});
+
+test('asking the check-up price gets the plain fee and nothing else', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Depende po sa sira. Ano po ang problema ng TV?';
+  try {
+    await s.post(msg('fee', { text: 'magkano po ang check-up?' }));
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].message.text, CHECKUP_FEE_PLAIN);
+    assert.equal(s.mock.calls.pass.length, 0);
+  } finally { await s.close(); }
+});
+
+test('video, location, and age close intake once and send the free tips once', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Nasa ₱9,500 po ang all-in, after repair po ang bayad.';
+  try {
+    await s.post(msg('tip', { text: 'Samsung 55 inch, 5 taon na, taga Binan. Walang display. Nasend ko na ang video.' }));
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(s.mock.calls.messages[0].message.text, CLOSE_LINE);
+    assert.match(s.mock.calls.messages[1].message.text, /free tips/);
+    assert.match(s.mock.calls.messages[1].message.text, /May lumalabas na lines/);
+    assert.match(s.mock.calls.messages[1].message.text, /09386369374 \(Smart\)/);
+    assert.match(s.mock.calls.messages[1].message.text, /09267229506 \(Globe\)/);
+    assert.equal(s.app.store.thread('tip').tipsSent, true);
+    assert.equal(s.app.store.thread('tip').intakeClosed, true);
+    const slots = s.app.store.thread('tip').slots;
+    assert.match(slots.brandSize, /Samsung 55/);
+    assert.match(slots.age, /5 taon/);
+    assert.match(slots.location, /Binan/i);
+    assert.equal(slots.repairedElsewhere, '');
+    await s.post(msg('tip', { text: 'salamat po, magkano na' }));
+    assert.equal(s.mock.calls.messages.filter((m) => /09386369374/.test(m.message.text)).length, 1);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /problema|taga-saan|ilang taon|ibang shop/i);
+    const n = s.mock.calls.messages.length;
+    s.app.bot.now = () => Date.now() + 121 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, n);
+  } finally { await s.close(); }
+});
+
+test('TIPS_MESSAGE replaces the built-in free tips', async () => {
+  const custom = loadConfig({ TIPS_MESSAGE: 'Custom tips line only.\\nSecond line.' });
+  assert.equal(custom.tipsMessage, 'Custom tips line only.\nSecond line.');
+  const s = await setup({ TIPS_MESSAGE: 'Custom tips line only.' });
+  try {
+    await s.post(msg('tip2', { text: '5 taon na po, taga Binan, nasend ko na ang video.' }));
+    assert.equal(s.mock.calls.messages.filter((m) => m.message.text === 'Custom tips line only.').length, 1);
+    assert.equal(s.mock.calls.messages.some((m) => /09386369374/.test(m.message.text)), false);
+  } finally { await s.close(); }
+});
+
+test('text then a video inside the batch window gets one reply', async () => {
+  const s = await setup({ BATCH_WINDOW_MS: '250' });
+  s.mock.state.llmResponder = () => 'Salamat po, titingnan ng technician.';
+  try {
+    await postRaw(s, msg('batch1', { text: 'Nasend ko na ang videi' }));
+    await postRaw(s, msg('batch1', {
+      text: 'Video',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/v.mp4' } }],
+    }));
+    await s.app.bot.idle();
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.llm.length, 1);
+    const users = s.mock.calls.llm[0].body.messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    assert.match(users, /Nasend ko na ang videi/);
+    assert.match(users, /RECEIVED/);
+  } finally { await s.close(); }
+});
+
+test('a message that arrives while the model is thinking is answered once', async () => {
+  const s = await setup();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  s.mock.state.llmResponder = async () => {
+    calls += 1;
+    if (calls === 1) await gate;
+    return 'Sige po, noted.';
+  };
+  try {
+    await postRaw(s, msg('fly', { text: 'una po' }));
+    for (let i = 0; i < 50 && s.mock.calls.llm.length < 1; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(s.mock.calls.llm.length, 1);
+    await postRaw(s, msg('fly', { text: 'pangalawa Samsung 55' }));
+    release();
+    await s.app.bot.idle();
+    assert.equal(s.mock.calls.messages.length, 1);
+    const lastUsers = s.mock.calls.llm.at(-1).body.messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    assert.match(lastUsers, /una po/);
+    assert.match(lastUsers, /pangalawa Samsung 55/);
+  } finally {
+    release();
+    await s.close();
+  }
+});
+
+test('standby takes the thread only when this bot should own it', async () => {
+  const s = await setup({ LOG_LEVEL: 'warn' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => logged.push(a.map(String).join(' '));
+  try {
+    await s.post(standby('idle1', 'hello po'));
+    assert.equal(s.mock.calls.take.length, 1);
+    assert.equal(s.mock.calls.messages.length, 0);
+    await s.post(msg('idle2', { text: 'pa tawag na lang' }));
+    await s.post(standby('idle2', 'nandito pa po'));
+    assert.equal(s.mock.calls.take.length, 1);
+    s.mock.state.takeFail = '(#27) conversation routing is not enabled';
+    await s.post(standby('idle3', 'hello ulit'));
+    assert.equal(s.mock.calls.take.length, 2);
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.ok(logged.some((l) => /#27/.test(l) && /take_thread_control failed/.test(l)));
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
+});
+
+test('dashboard login lists videos without the full PSID and marks them reviewed', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm' });
+  s.mock.state.profiles = { 'cust-7771': { name: 'Maria Cruz' } };
+  try {
+    const locked = await (await fetch(`${s.base}/dashboard`)).text();
+    assert.match(locked, /Log in/);
+    assert.doesNotMatch(locked, /Maria Cruz/);
+    const bad = await fetch(`${s.base}/dashboard/login`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'password=nope',
+    });
+    assert.equal(bad.status, 401);
+    assert.equal(bad.headers.get('set-cookie'), null);
+    assert.match(await bad.text(), /Wrong password/);
+    const forged = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: 'jmags_dash=999.aaaa' } })).text();
+    assert.match(forged, /Log in/);
+    assert.doesNotMatch(forged, /Mark reviewed/);
+
+    await s.post(msg('cust-7771', {
+      text: 'Samsung 55 inch walang display taga Binan',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/dash.mp4' } }],
+    }));
+    const login = await fetch(`${s.base}/dashboard/login`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'password=secret',
+    });
+    assert.equal(login.status, 303);
+    const setCookie = login.headers.get('set-cookie') || '';
+    assert.match(setCookie, /HttpOnly/);
+    assert.match(setCookie, /SameSite=Lax/);
+    const pair = (setCookie.match(/jmags_dash=[^;]+/) || [])[0];
+    const page = await fetch(`${s.base}/dashboard`, { headers: { Cookie: pair } });
+    const html = await page.text();
+    assert.match(html, /Enable notifications/);
+    assert.match(html, /Maria Cruz/);
+    assert.match(html, /Samsung/);
+    assert.match(html, /55/);
+    assert.match(html, /Binan/i);
+    assert.match(html, /<video/);
+    assert.match(html, />Open</);
+    assert.match(html, /Messenger links can expire/);
+    assert.match(html, /Open chat in Business Suite/);
+    assert.match(html, new RegExp(`asset_id=${PAGE}`));
+    assert.match(html, /Mark reviewed/);
+    assert.match(html, /1 new/);
+    assert.equal(html.includes('cust-7771'), false);
+    const rows = await (await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } })).json();
+    assert.equal(JSON.stringify(rows).includes('cust-7771'), false);
+    const id = s.app.store.data.reviews[0].id;
+    const reviewed = await fetch(`${s.base}/dashboard/reviewed`, {
+      method: 'POST', redirect: 'manual',
+      headers: { Cookie: pair, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `id=${id}`,
+    });
+    assert.equal(reviewed.status, 303);
+    const after = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: pair } })).text();
+    assert.match(after, /0 new/);
+    assert.match(after, /Reviewed/);
+  } finally { await s.close(); }
+});
+
+test('an empty dashboard password cannot log in', async () => {
+  const s = await setup();
+  try {
+    const res = await fetch(`${s.base}/dashboard/login`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'password=anything',
+    });
+    assert.equal(res.status, 401);
+    assert.match(await res.text(), /not set/);
+    assert.equal(res.headers.get('set-cookie'), null);
   } finally { await s.close(); }
 });

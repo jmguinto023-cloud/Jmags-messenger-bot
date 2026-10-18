@@ -31,6 +31,11 @@ services:
         generateValue: true
       - key: ADMIN_TOKEN
         generateValue: true
+      - key: DASHBOARD_PASSWORD
+        generateValue: true
+      # Optional replacement for the one-time free-tips message. Empty uses the built-in text.
+      - key: TIPS_MESSAGE
+        sync: false
       - key: APP_ID
         sync: false
       - key: APP_SECRET

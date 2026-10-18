@@ -5,6 +5,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { passwordOk, readCookie, validSession, sessionCookie, clearCookie } = require('./dash-session');
+const { loginPage, listPage, publicReview } = require('./dashboard-page');
+
 const PUBLIC = path.join(__dirname, '..', 'public');
 const FILES = {
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
@@ -28,6 +31,10 @@ function authorized(cfg, rq) {
   return Boolean(cfg.adminToken) && auth === `Bearer ${cfg.adminToken}`;
 }
 
+function dashOk(cfg, rq) {
+  return authorized(cfg, rq) || validSession(cfg, readCookie(rq));
+}
+
 function createServer({ cfg, bot, log }) {
   return http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -42,7 +49,10 @@ function createServer({ cfg, bot, log }) {
     }
 
     if (req.method === 'GET' && url.pathname === '/dashboard') {
-      return sendFile(res, 'dashboard.html', 'text/html; charset=utf-8');
+      const html = validSession(cfg, readCookie(req))
+        ? listPage(cfg, (bot.store.data.reviews || []).map(publicReview))
+        : loginPage();
+      return send(200, html, 'text/html; charset=utf-8');
     }
     if (req.method === 'GET' && FILES[url.pathname]) {
       const [file, type] = FILES[url.pathname];
@@ -57,11 +67,11 @@ function createServer({ cfg, bot, log }) {
       return sendJson(200, rows);
     }
     if (req.method === 'GET' && url.pathname === '/dashboard/api/reviews') {
-      if (!authorized(cfg, req)) return send(403, 'Forbidden');
-      return sendJson(200, bot.store.data.reviews || []);
+      if (!dashOk(cfg, req)) return send(403, 'Forbidden');
+      return sendJson(200, (bot.store.data.reviews || []).map(publicReview));
     }
     if (req.method === 'GET' && url.pathname === '/dashboard/api/push-status') {
-      if (!authorized(cfg, req)) return send(403, 'Forbidden');
+      if (!dashOk(cfg, req)) return send(403, 'Forbidden');
       const enabled = Boolean(bot.push && bot.push.configured());
       return sendJson(200, { enabled, publicKey: enabled ? cfg.vapidPublicKey : '' });
     }
@@ -77,12 +87,16 @@ function createServer({ cfg, bot, log }) {
       return send(403, 'Forbidden');
     }
 
-    if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe')) {
+    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed');
+    if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || dashPost)) {
       const chunks = [];
       let size = 0;
       req.on('data', (c) => { size += c.length; if (size > 1e6) req.destroy(); else chunks.push(c); });
       req.on('end', () => {
         const raw = Buffer.concat(chunks);
+        if (url.pathname === '/dashboard/login') return dashboardLogin(req, raw);
+        if (url.pathname === '/dashboard/logout') return dashboardLogout();
+        if (url.pathname === '/dashboard/reviewed') return dashboardReviewed(req, raw);
         if (url.pathname === '/dashboard/api/subscribe') return subscribe(req, raw);
         if (url.pathname.startsWith('/admin/')) return admin(url, req, raw);
         if (!verifySignature(raw, req.headers['x-hub-signature-256'], cfg.appSecret)) {
@@ -99,8 +113,33 @@ function createServer({ cfg, bot, log }) {
     }
     return send(404, 'Not found');
 
+    function dashboardLogin(rq, raw) {
+      const password = new URLSearchParams(raw.toString('utf8')).get('password') || '';
+      if (!cfg.dashboardPassword) return send(401, loginPage('missing'), 'text/html; charset=utf-8');
+      if (!passwordOk(cfg, password)) return send(401, loginPage('bad'), 'text/html; charset=utf-8');
+      res.writeHead(303, { Location: '/dashboard', 'Set-Cookie': sessionCookie(cfg, rq) });
+      res.end('');
+    }
+
+    function dashboardLogout() {
+      res.writeHead(303, { Location: '/dashboard', 'Set-Cookie': clearCookie() });
+      res.end('');
+    }
+
+    function dashboardReviewed(rq, raw) {
+      if (!validSession(cfg, readCookie(rq))) {
+        res.writeHead(303, { Location: '/dashboard' });
+        res.end('');
+        return;
+      }
+      const id = new URLSearchParams(raw.toString('utf8')).get('id') || '';
+      bot.store.markReviewed(id, bot.now());
+      res.writeHead(303, { Location: '/dashboard' });
+      res.end('');
+    }
+
     function subscribe(rq, raw) {
-      if (!authorized(cfg, rq)) return send(403, 'Forbidden');
+      if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
       let body;
       try { body = JSON.parse(raw.toString('utf8')); } catch { return send(400, 'Bad JSON'); }
       if (!body || !body.endpoint) return send(400, 'endpoint required');

@@ -1,6 +1,7 @@
 'use strict';
 // All settings come from environment variables. See .env.example for explanations.
 const path = require('node:path');
+const { DEFAULT_TIPS } = require('./messages');
 
 function bool(v, def = false) {
   if (v === undefined || v === '') return def;
@@ -62,6 +63,9 @@ function loadConfig(env = process.env) {
     dataRetentionDays: num(env.DATA_RETENTION_DAYS, 90),
     dataDir: env.DATA_DIR || path.join(__dirname, '..', 'data'),
     adminToken: env.ADMIN_TOKEN || '',
+    dashboardPassword: env.DASHBOARD_PASSWORD || '',
+    // Optional full replacement. Empty keeps the built-in free-tips text. Literal \n becomes a line break.
+    tipsMessage: env.TIPS_MESSAGE ? String(env.TIPS_MESSAGE).replace(/\\n/g, '\n') : DEFAULT_TIPS,
     logLevel: env.LOG_LEVEL || 'info',
   };
 }

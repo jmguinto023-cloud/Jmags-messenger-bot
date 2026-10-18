@@ -37,6 +37,7 @@ class Store {
       pausedUntil: 0, fallbackCount: 0, passedByBot: false,
       followupCount: 0, lastFollowupAt: 0, followupPending: false, awaitingVideo: false,
       bookingFormSent: false, bookingDone: false, pendingMedia: [], attachmentNote: '',
+      mediaNotes: [], tipsSent: false, problemViaVideo: false,
     });
     return t;
   }
@@ -100,6 +101,14 @@ class Store {
     this.data.reviews.push(review);
     if (this.data.reviews.length > 500) this.data.reviews.splice(0, this.data.reviews.length - 500);
     this.save();
+  }
+  markReviewed(id, now = Date.now()) {
+    const row = (this.data.reviews || []).find((r) => r.id === id);
+    if (!row) return false;
+    row.status = 'reviewed';
+    row.reviewedAt = new Date(now).toISOString();
+    this.save();
+    return true;
   }
   readSubscriptions() {
     try {

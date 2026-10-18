@@ -29,11 +29,11 @@ class LLM {
     return this._prompt;
   }
 
-  async reply(history, { nowText, attachmentNote } = {}) {
+  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const messages = [
       { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form.` },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
       ...normalizeTurns(history, { attachmentNote }),
     ];
     return this.chat(messages);

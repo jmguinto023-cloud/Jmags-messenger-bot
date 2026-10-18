@@ -5,7 +5,7 @@ Messenger Platform (webhooks + Send API + Conversation Routing). Node.js 20. The
 is `web-push`, used by the video-review app.
 
 ```
-npm test            # 40 automated tests (mock Graph API + mock LLM, no internet)
+npm test            # 51 automated tests (mock Graph API + mock LLM, no internet)
 npm run simulate    # end-to-end: real server process + mocks + 3 Taglish customer messages
 npm run sync-prompt # refresh prompts/system-prompt.md from ../ivan-bot-system-prompt.md
 npm start           # run (needs env, see .env.example)
@@ -30,11 +30,18 @@ npm start           # run (needs env, see .env.example)
 - A photo or video does **not** pass thread control. The bot replies with a short acknowledgement
   (technician will review, then the next useful question), applies the inbox label
   (`NEEDS_IVAN_LABEL`, or creates "Video for review" when that is empty), and logs the attachment URL at WARN.
-  Later text in the same chat is still answered.
+  Later text in the same chat is still answered. Every later model call still includes
+  `[Customer sent a video at HH:MM - RECEIVED, forwarded to technician Ivan for review. You cannot view it, but it WAS received.]`.
+  The bot must not say the file was missing or ask for a resend. A review-status question gets "Ivan is reviewing it, all-in price soon",
+  plus the price-list range when brand and size are known. If the problem is only in the video and they ask for an estimate, that range is the answer.
+  Any preliminary range also says a personal home-service check-up is more exact and names the check-up fee.
+- If they ask how much the check-up is, the reply is only: ₱1,000 check-up fee (₱500 for 32" and 40" TVs), waived if they proceed with the repair.
+- Once a video is in and they have given location and TV age, intake stops. One thank-you says Ivan is reviewing the video and will send the all-in price,
+  then the free-tips message goes out once (`TIPS_MESSAGE` can replace it). After that the bot only answers what they ask.
 - Chat messages sent to the model are merged when the same role speaks twice in a row, and trailing
   assistant turns (bot reply, echo, or a human reply recorded after the customer) are dropped so the
-  request always ends on a user message. An attachment with no caption is sent as `[Customer sent a video]`
-  (or photo).
+  request always ends on a user message. An attachment with no caption is sent as a received-media note
+  (`[Customer sent a video at HH:MM - RECEIVED, ...]`, or photo).
 - Human takeover: a `message_echo` whose `app_id` is not ours (or missing) pauses that chat for HUMAN_PAUSE_HOURS.
 - Resume: `messaging_handovers` with `new_owner_app_id` = our app, or HANDOFF_RESUME_HOURS later, or
   `POST /admin/resume?psid=` (Bearer ADMIN_TOKEN).
@@ -55,7 +62,10 @@ npm start           # run (needs env, see .env.example)
   An empty BOT_ACTIVE_HOURS is 24/7.
 - Storage: `DATA_DIR/state.json` (atomic writes); chats purged after DATA_RETENTION_DAYS of inactivity.
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
-  Chrome or Edge. The shell is cached by the service worker; review data is network-first.
+  Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
+  name (or last 4 of the PSID), Manila time, size, brand, problem, location, the photo or video, and a link to
+  Business Suite. Mark reviewed drops it from the New count. The page refreshes every 30 seconds.
+  The shell is cached by the service worker; the review list is network-first.
   New photos and videos can send a Web Push if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set.
   Generate a pair with `npx web-push generate-vapid-keys` and put both values in the host env (never commit
   the private key). Subscriptions are stored in `/data/push-subscriptions.json`. The page has an
@@ -70,6 +80,9 @@ Secrets are `sync: false` (typed into the dashboard). See `SETUP-FOR-JM.md` for 
 - Echo `app_id` value for replies Ivan types in Business Suite (expected: Inbox app id or absent – both pause the bot).
 - Business Suite automations (instant reply etc.) also produce echoes not from our app and would pause the bot:
   turn them off at go-live or add their app id to IGNORE_ECHO_APP_IDS.
+- Set this bot as the Primary Receiver in Page Conversation Routing. If a standby message arrives and the chat
+  was not just handed to the Page Inbox, the bot calls `take_thread_control` and logs the result. Error #27 means
+  routing is not enabled yet; that is logged and the process keeps running.
 - Mark as done often does not send a handover webhook. A later customer message arrives as a normal `messaging`
   event (not standby); if this bot was the one that passed thread control, that message clears the handoff and the bot replies.
   A human reply from the Page Inbox still pauses the chat. HANDOFF_RESUME_HOURS still covers a handoff this bot did not start.

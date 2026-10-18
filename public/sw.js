@@ -1,8 +1,7 @@
 'use strict';
 // Video-review PWA: cache the app shell, network-first for data.
-const CACHE = 'jmags-video-shell-v1';
+const CACHE = 'jmags-video-shell-v2';
 const SHELL = [
-  '/dashboard',
   '/dashboard.css',
   '/dashboard.js',
   '/manifest.webmanifest',
@@ -24,7 +23,8 @@ self.addEventListener('activate', (event) => {
 });
 
 function isDataRequest(url) {
-  return url.pathname.startsWith('/dashboard/api/');
+  // The dashboard HTML is the review list, so it stays network-first for data.
+  return url.pathname === '/dashboard' || url.pathname.startsWith('/dashboard/api/');
 }
 
 async function networkFirst(request) {
