@@ -11,8 +11,8 @@ const { loadConfig } = require('../src/config');
 const { asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
 const {
   emptyOps, moneyReport, nextJobId, addMonths, jobStatusText, dailyStatusText, warrantyText,
-  asksJobStatus, asksWarrantyProblem, importOps, parseJobsCsv, jobBalance, duplicatePayments,
-  ensureOps,
+  asksJobStatus, asksWarrantyProblem, importOps, parseJobsCsv, jobBalance, jobPaid, duplicatePayments,
+  ensureOps, STATUSES, DELIVERY_NOTICE, DELIVERY_STATUS,
 } = require('../src/ops');
 
 const SECRET = 'test_app_secret';
@@ -92,6 +92,10 @@ test('money totals, job ids, warranty date, and sample replies', () => {
   assert.equal(loadConfig({}).dailyStatusUpdates, false);
   assert.equal(loadConfig({ DAILY_STATUS_UPDATES: '' }).dailyStatusUpdates, false);
   assert.equal(loadConfig({ DAILY_STATUS_UPDATES: 'on' }).dailyStatusUpdates, true);
+  assert.equal(loadConfig({}).deliveryNotifications, false);
+  assert.equal(loadConfig({ DELIVERY_NOTIFICATIONS: '' }).deliveryNotifications, false);
+  assert.equal(loadConfig({ DELIVERY_NOTIFICATIONS: 'on' }).deliveryNotifications, true);
+  assert.deepEqual(STATUSES, ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delivery', 'Completed', 'Cancelled']);
 
   const report = shopTotals();
   assert.equal(report.collected, 124000);
@@ -133,6 +137,13 @@ test('money totals, job ids, warranty date, and sample replies', () => {
     'Hello po 😊 Under repair pa din po ang status ng TV niyo. Note: Inaayos na po ng technician namin. Babalikan po namin kayo pag tapos na.',
   );
   assert.doesNotMatch(dailyStatusText({ statusNote: 'Inaayos na po ng technician namin' }), /Ivan/);
+  assert.equal(jobStatusText({ status: 'For Delivery', statusNote: '' }), DELIVERY_STATUS);
+  assert.equal(
+    jobStatusText({ status: 'For Delivery', statusNote: 'hinihintay po ang schedule' }),
+    'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Note: hinihintay po ang schedule. Si Ivan po ang magko-confirm ng schedule.',
+  );
+  assert.equal(DELIVERY_NOTICE, 'Hello po 😊 Good news po! Okay na po ang TV niyo at ready na for delivery. Ichecheck lang po namin ang schedule at babalikan po namin kayo para sa delivery.');
+  assert.equal(DELIVERY_STATUS, 'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Si Ivan po ang magko-confirm ng schedule.');
   const warranty = warrantyText({ date: '2026-10-18', warrantyEnd: '2027-01-18' });
   assert.equal(warranty, 'Hello po 😊 Nasa warranty pa po ang unit hanggang 18 Enero 2027. Pakisend lang po ng issue at video para ma-check ni Ivan. Hindi pa po ako makakapangako kung covered.');
   assert.doesNotMatch(warranty, /\blibre\b|siguradong covered|covered po ito/i);
@@ -155,6 +166,43 @@ test('money totals, job ids, warranty date, and sample replies', () => {
   const sw = fs.readFileSync(path.join(__dirname, '../public/sw.js'), 'utf8');
   assert.match(sw, /jmags-video-shell-v7/);
   assert.match(sw, /\/ops/);
+});
+
+test('payment import keeps identical rows up to the CSV count and does not double them', () => {
+  const csv = [
+    'Date,JO number,Customer,Branch,Type,Method,Amount (₱),Note',
+    '2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,first visit',
+    '2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,first visit',
+    '2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Check-up fee,GCash,1500,first visit',
+  ].join('\n');
+  const store = { data: {}, save() {} };
+  const first = importOps(store, { paymentsCsv: csv });
+  assert.equal(first.payments, 3);
+  const repairs = () => store.data.ops.payments.filter((p) => p.type === 'Repair' && p.amount === 2500);
+  assert.equal(repairs().length, 2);
+  assert.equal(jobPaid({ id: 'JO-261018-001', importedPaid: 0 }, store.data.ops.payments), 6500);
+
+  const again = importOps(store, { paymentsCsv: csv });
+  assert.equal(again.payments, 0);
+  assert.equal(store.data.ops.payments.length, 3);
+
+  const oneShort = { data: { ops: { jobs: [], payments: [store.data.ops.payments[0]], expenses: [], ads: [], parts: [], bookings: [], customers: [], otherIncome: [] } }, save() {} };
+  const caughtUp = importOps(oneShort, { paymentsCsv: csv });
+  assert.equal(caughtUp.payments, 2);
+  assert.equal(oneShort.data.ops.payments.filter((p) => p.amount === 2500).length, 2);
+  assert.equal(oneShort.data.ops.payments.filter((p) => p.amount === 1500).length, 1);
+
+  const extra = importOps(store, {
+    paymentsCsv: `${csv}\n2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,first visit`,
+  });
+  assert.equal(extra.payments, 1);
+  assert.equal(repairs().length, 3);
+
+  const otherNote = importOps(store, {
+    paymentsCsv: 'Date,JO number,Customer,Branch,Type,Method,Amount (₱),Note\n2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,second visit',
+  });
+  assert.equal(otherNote.payments, 1);
+  assert.equal(store.data.ops.payments.filter((p) => p.note === 'second visit').length, 1);
 });
 
 test('import requires the admin token and the operations page stays behind the dashboard login', async () => {
@@ -215,6 +263,10 @@ test('import requires the admin token and the operations page stays behind the d
     assert.match(today, /Open jobs/);
     assert.match(today, /data-kpi="open"/);
     assert.match(today, /Under repair/);
+    assert.match(today, /data-kpi="for-delivery"/);
+    assert.match(today, /For delivery/);
+    assert.match(today, /Needs text update \(delivery\)/);
+    assert.match(today, /Delivery notifications are off/);
     assert.match(today, /Visits today/);
     assert.match(today, /Collected today/);
     assert.match(today, /Profit this month/);
@@ -241,6 +293,7 @@ test('import requires the admin token and the operations page stays behind the d
     assert.match(jobs, /2027-01-18/);
     assert.match(jobs, /data-confirm="Delete JO-261018-001\?"/);
     assert.match(jobs, /Status note for customer|Add job/);
+    assert.match(jobs, /Under Repair<\/option><option>For Delivery<\/option><option>Completed/);
     assert.doesNotMatch(jobs, /Nico Bautista/);
     const customers = await (await fetch(`${s.base}/ops?tab=customers`, { headers: { Cookie: jar } })).text();
     assert.match(customers, /Liza Mercado/);
@@ -491,11 +544,15 @@ test('daily status stays off until enabled, sends once inside 24h, and lists the
     assert.equal(s.mock.calls.messages.length, 0);
 
     s.app.cfg.dailyStatusUpdates = true;
-    s.app.bot.now = () => Date.parse('2026-10-18T01:00:00Z');
+    const seven = Date.parse('2026-10-17T23:00:00Z');
+    s.app.store.thread(psid).lastUserTs = seven - 30 * 60 * 1000;
+    s.app.bot.now = () => seven;
     assert.deepEqual((await s.app.bot.maybeDailyStatus()).sent, []);
-    s.app.bot.now = () => TEN_AM;
-    const sent = await s.app.bot.checkFollowups();
-    void sent;
+    assert.equal(s.mock.calls.messages.length, 0);
+    const eight = Date.parse('2026-10-18T00:00:00Z');
+    s.app.store.thread(psid).lastUserTs = eight - 30 * 60 * 1000;
+    s.app.bot.now = () => eight;
+    await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.length, 1);
     assert.equal(s.mock.calls.messages[0].message.text, 'Hello po 😊 Under repair pa din po ang status ng TV niyo. Note: hinihintay po ang piyesa (backlight). Babalikan po namin kayo pag tapos na.');
     assert.equal(s.mock.calls.messages[0].messaging_type, 'RESPONSE');
@@ -551,5 +608,190 @@ test('daily status stays off until enabled, sends once inside 24h, and lists the
     assert.equal(forgotten.status, 200);
     assert.equal(s.app.store.data.ops.jobs.find((j) => j.id === 'JO-261018-002').psid, '');
     assert.ok(s.app.store.data.ops.jobs.find((j) => j.id === 'JO-261018-001'));
+  } finally { await s.close(); }
+});
+
+test('For Delivery notifies once inside the reply window and lists a text otherwise', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'LLM fallback';
+  const psid = 'deliv-4242';
+  try {
+    s.app.bot.now = () => NOON;
+    const jar = await cookie(s.base);
+    const postAction = (body) => fetch(`${s.base}/ops/action`, {
+      method: 'POST', redirect: 'manual',
+      headers: { Cookie: jar, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(),
+    });
+    await postAction({
+      action: 'create-job', returnTab: 'jobs', returnBranch: 'ALL',
+      customerName: 'Liza Mercado', phone: '09170001122', city: 'Testville', address: '12 Test Street',
+      unitType: 'TV', brand: 'Inventa', size: '42', issue: 'no power',
+      date: '2026-10-18', visitDate: '2026-10-19', technician: 'JM', branch: 'San Pablo',
+      price: '5000', status: 'Under Repair',
+    });
+    const job = s.app.store.data.ops.jobs[0];
+    assert.equal(job.id, 'JO-261018-001');
+    s.app.store.addTurn(psid, 'user', 'hello po', NOON - 60 * 60 * 1000);
+    job.psid = psid;
+    s.app.store.thread(psid).jobId = job.id;
+    s.app.store.save();
+
+    assert.equal(s.app.cfg.deliveryNotifications, false);
+    const off = await postAction({ action: 'status', id: job.id, status: 'For Delivery', returnTab: 'today', returnBranch: 'ALL' });
+    assert.equal(off.status, 303);
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(job.status, 'For Delivery');
+    assert.equal(job.deliveryNotifiedAt || '', '');
+    const todayOff = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(todayOff, /data-kpi="for-delivery"><span>For delivery<\/span><strong>1<\/strong>/);
+    assert.match(todayOff, /data-kpi="open"><span>Open jobs<\/span><strong>1<\/strong>/);
+    assert.match(todayOff, /id="delivery-flag"/);
+    assert.doesNotMatch(todayOff, /data-needs="delivery"/);
+    assert.doesNotMatch(todayOff, /09170001122/);
+
+    s.app.cfg.dailyStatusUpdates = true;
+    const eight = Date.parse('2026-10-18T00:00:00Z');
+    s.app.bot.now = () => eight;
+    assert.deepEqual((await s.app.bot.maybeDailyStatus(eight)).sent, []);
+    assert.equal(s.mock.calls.messages.length, 0);
+    s.app.cfg.dailyStatusUpdates = false;
+    s.app.bot.now = () => NOON;
+
+    await postAction({ action: 'status', id: job.id, status: 'Under Repair', returnTab: 'jobs' });
+    s.app.cfg.deliveryNotifications = true;
+    s.app.cfg.botEnabled = false;
+    await postAction({ action: 'status', id: job.id, status: 'For Delivery', returnTab: 'jobs' });
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(job.deliveryNotifiedAt || '', '');
+    s.app.cfg.botEnabled = true;
+    await postAction({ action: 'status', id: job.id, status: 'Under Repair', returnTab: 'jobs' });
+
+    const thread = s.app.store.thread(psid);
+    thread.pausedUntil = NOON + 12 * 3600 * 1000;
+    thread.lastHumanEchoAt = NOON;
+    await postAction({ action: 'status', id: job.id, status: 'For Delivery', returnTab: 'jobs' });
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(job.deliveryNotifiedAt || '', '');
+    let page = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.doesNotMatch(page, /data-needs="delivery"/);
+    thread.pausedUntil = 0;
+    thread.lastHumanEchoAt = 0;
+    await postAction({ action: 'status', id: job.id, status: 'Under Repair', returnTab: 'jobs' });
+
+    thread.handedOff = true;
+    await postAction({ action: 'status', id: job.id, status: 'For Delivery', returnTab: 'jobs' });
+    assert.equal(s.mock.calls.messages.length, 0);
+    page = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.doesNotMatch(page, /09170001122/);
+    thread.handedOff = false;
+    await postAction({ action: 'status', id: job.id, status: 'Checked', returnTab: 'jobs' });
+
+    const sent = await postAction({ action: 'status', id: job.id, status: 'For Delivery', returnTab: 'jobs' });
+    assert.equal(sent.status, 303);
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].message.text, DELIVERY_NOTICE);
+    assert.equal(s.mock.calls.messages[0].messaging_type, 'RESPONSE');
+    assert.ok(job.deliveryNotifiedAt);
+    const noticedAt = job.deliveryNotifiedAt;
+    await postAction({ action: 'status', id: job.id, status: 'Under Repair', returnTab: 'jobs' });
+    await postAction({ action: 'status', id: job.id, status: 'For Delivery', returnTab: 'jobs' });
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(job.deliveryNotifiedAt, noticedAt);
+
+    await s.post(msg(psid, 'ano na status po', NOON));
+    assert.equal(s.mock.calls.messages.at(-1).message.text, DELIVERY_STATUS);
+    assert.equal(s.mock.calls.messages.at(-1).messaging_type, 'RESPONSE');
+    job.statusNote = 'hinihintay po ang schedule';
+    await s.post(msg(psid, 'kumusta na TV ko', NOON + 1000));
+    assert.equal(
+      s.mock.calls.messages.at(-1).message.text,
+      'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Note: hinihintay po ang schedule. Si Ivan po ang magko-confirm ng schedule.',
+    );
+
+    await postAction({
+      action: 'create-job', returnTab: 'jobs',
+      customerName: 'Nico Bautista', phone: '09180002233', city: 'Sample City', address: '9 Sample Road',
+      date: '2026-10-17', branch: 'Cavite', price: '2000', status: 'Checked', unitType: 'TV', issue: 'no sound',
+    });
+    const nico = s.app.store.data.ops.jobs.find((j) => j.customerName === 'Nico Bautista');
+    const nicoPsid = 'nico-4242';
+    s.app.store.addTurn(nicoPsid, 'user', 'hello', NOON - 40 * 3600 * 1000);
+    nico.psid = nicoPsid;
+    s.app.store.save();
+    await postAction({
+      action: 'update-job', id: nico.id, returnTab: 'jobs',
+      customerName: 'Nico Bautista', phone: '09180002233', city: 'Sample City', address: '9 Sample Road',
+      date: '2026-10-17', branch: 'Cavite', price: '2000', status: 'For Delivery', unitType: 'TV', issue: 'no sound',
+    });
+    assert.equal(nico.status, 'For Delivery');
+    assert.equal(nico.deliveryNotifiedAt || '', '');
+    assert.equal(s.mock.calls.messages.filter((m) => m.message.text === DELIVERY_NOTICE).length, 1);
+
+    const header = JOBS_CSV.split('\n')[0];
+    const imported = await fetch(`${s.base}/admin/ops/import?type=jobs`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'text/csv' },
+      body: `${header}\nJO-261018-009,2026-10-18,,,Mina Solis,09190003344,Testville,Facebook,,North,TV,Inventa,32,no power,,1000,0,0,1000,Cash,For Delivery,JM,,,shop note,Cavite`,
+    });
+    assert.equal(imported.status, 200);
+    const mina = s.app.store.data.ops.jobs.find((j) => j.id === 'JO-261018-009');
+    assert.equal(mina.status, 'For Delivery');
+    assert.equal(mina.psid, '');
+    assert.equal(mina.deliveryNotifiedAt || '', '');
+    assert.equal(s.mock.calls.messages.filter((m) => m.message.text === DELIVERY_NOTICE).length, 1);
+
+    const kept = await fetch(`${s.base}/admin/ops/import?type=jobs`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'text/csv' },
+      body: `${header}\nJO-261018-001,2026-10-18,,,Liza Mercado,09170001122,Testville,Facebook,,North,TV,Inventa,42,no power,,5000,0,0,5000,Cash,For Delivery,JM,,,shop note,San Pablo`,
+    });
+    assert.equal(kept.status, 200);
+    assert.equal(job.deliveryNotifiedAt, noticedAt);
+    assert.equal(job.psid, psid);
+    assert.equal(s.mock.calls.messages.filter((m) => m.message.text === DELIVERY_NOTICE).length, 1);
+
+    await postAction({
+      action: 'create-job', returnTab: 'jobs',
+      customerName: 'Rafi Gomez', phone: '09160004455', city: 'Testville', address: '9 Sample Road',
+      date: '2026-10-18', branch: 'San Pablo', price: '1000', status: 'Under Repair', unitType: 'TV', issue: 'no power',
+    });
+    const rafi = s.app.store.data.ops.jobs.find((j) => j.customerName === 'Rafi Gomez');
+    const rafiPsid = 'rafi-4242';
+    s.app.store.addTurn(rafiPsid, 'user', 'hello', NOON - 30 * 60 * 1000);
+    rafi.psid = rafiPsid;
+    s.app.store.thread(rafiPsid).handedOff = true;
+    s.app.store.save();
+    await postAction({ action: 'status', id: rafi.id, status: 'For Delivery', returnTab: 'jobs' });
+    assert.equal(rafi.status, 'For Delivery');
+    assert.equal(rafi.deliveryNotifiedAt || '', '');
+    assert.equal(s.mock.calls.messages.filter((m) => m.message.text === DELIVERY_NOTICE).length, 1);
+
+    const today = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(today, /Needs text update \(delivery\)/);
+    assert.match(today, /data-needs="delivery">JO-261017-001 · Nico Bautista · 09180002233/);
+    assert.match(today, /data-needs="delivery">JO-261018-009 · Mina Solis · 09190003344/);
+    assert.doesNotMatch(today, /data-needs="delivery"[^<]*09170001122/);
+    assert.doesNotMatch(today, /data-needs="delivery"[^<]*09160004455/);
+    assert.match(today, /data-kpi="for-delivery"><span>For delivery<\/span><strong>4<\/strong>/);
+    const cavite = await (await fetch(`${s.base}/ops?tab=today&branch=CAVITE`, { headers: { Cookie: jar } })).text();
+    assert.match(cavite, /09180002233/);
+    assert.match(cavite, /09190003344/);
+    assert.doesNotMatch(cavite, /09170001122/);
+    assert.match(cavite, /data-kpi="for-delivery"><span>For delivery<\/span><strong>2<\/strong>/);
+    const sanPablo = await (await fetch(`${s.base}/ops?tab=today&branch=SAN%20PABLO`, { headers: { Cookie: jar } })).text();
+    assert.doesNotMatch(sanPablo, /09180002233|09190003344/);
+    assert.match(sanPablo, /data-kpi="for-delivery"><span>For delivery<\/span><strong>2<\/strong>/);
+    const caviteJobs = await (await fetch(`${s.base}/ops?tab=jobs&branch=CAVITE&status=For%20Delivery`, { headers: { Cookie: jar } })).text();
+    assert.match(caviteJobs, /Nico Bautista/);
+    assert.match(caviteJobs, /Mina Solis/);
+    assert.doesNotMatch(caviteJobs, /Liza Mercado|Rafi Gomez/);
+
+    await s.post(msg(psid, 'sira ulit po yung tv', NOON + 2000));
+    const warranty = s.mock.calls.messages.at(-1).message.text;
+    assert.match(warranty, /Hindi pa po ako makakapangako kung covered/);
+    assert.doesNotMatch(warranty, /ready na for delivery/);
+    assert.equal(s.app.store.thread(psid).handedOff, true);
+    assert.equal(s.app.store.thread(psid).awaitingVideo, false);
   } finally { await s.close(); }
 });

@@ -4,7 +4,7 @@
 
 const { chatCustomerName } = require('./summary');
 
-const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'Completed', 'Cancelled'];
+const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delivery', 'Completed', 'Cancelled'];
 const TECHS = ['JM', 'Joshua', 'Unassigned'];
 const BRANCHES = ['San Pablo', 'Cavite'];
 const PAY_TYPES = ['Check-up fee', 'Repair', 'Parts', 'Other'];
@@ -16,6 +16,8 @@ const ASK_BOTH = 'Para macheck ko po ang status, pakisabi ang pangalan at phone 
 const ASK_NAME = 'Salamat po. Paki-confirm lang ang buong pangalan na naka-book.';
 const ASK_PHONE = 'Salamat po. Paki-send lang ang phone number na ginamit sa booking.';
 const UNSURE = 'Pasensya na po, hindi ko mahanap ang eksaktong record. Ipapaabot ko na po kay Ivan.';
+const DELIVERY_NOTICE = 'Hello po 😊 Good news po! Okay na po ang TV niyo at ready na for delivery. Ichecheck lang po namin ang schedule at babalikan po namin kayo para sa delivery.';
+const DELIVERY_STATUS = 'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Si Ivan po ang magko-confirm ng schedule.';
 
 function emptyOps() {
   return {
@@ -172,6 +174,7 @@ function blankJob(partial = {}) {
     status: 'Inquiry', statusNote: '', notes: '',
     partsUsed: '', partsCost: 0, psid: '',
     warrantyEnd: '', createdAt: '', updatedAt: '', lastDailyStatusDate: '', dailyStatusSkip: '',
+    deliveryNotifiedAt: '',
     ...partial,
   };
 }
@@ -330,6 +333,7 @@ function upsertJobs(ops, incoming) {
       mapLink: raw.mapLink || (prev && prev.mapLink) || '',
       lastDailyStatusDate: prev ? prev.lastDailyStatusDate || '' : '',
       dailyStatusSkip: prev ? prev.dailyStatusSkip || '' : '',
+      deliveryNotifiedAt: prev ? prev.deliveryNotifiedAt || '' : '',
       createdAt: prev ? prev.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -341,12 +345,22 @@ function upsertJobs(ops, incoming) {
 }
 
 function addPayments(ops, incoming) {
-  const seen = new Set(ops.payments.map(payKey));
+  // Same date, job, type, method, amount, and note can be two real payments.
+  // Match by how many times that key already exists, so a re-import does not
+  // add a second copy of each row and a first import does not drop repeats.
+  const remaining = new Map();
+  for (const row of ops.payments) {
+    const key = payKey(row);
+    remaining.set(key, (remaining.get(key) || 0) + 1);
+  }
   let n = 0;
   for (const row of incoming) {
     const key = payKey(row);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const left = remaining.get(key) || 0;
+    if (left > 0) {
+      remaining.set(key, left - 1);
+      continue;
+    }
     ops.payments.push(row);
     n += 1;
   }
@@ -626,6 +640,7 @@ function friendlyStatus(status) {
     Scheduled: 'naka-schedule na',
     Checked: 'na-check na',
     'Under Repair': 'naka-under repair na',
+    'For Delivery': 'ready na for delivery',
     Completed: 'tapos na',
     Cancelled: 'na-cancel',
   }[status] || String(status || '').toLowerCase();
@@ -645,8 +660,12 @@ function noteSentence(note) {
 }
 
 function jobStatusText(job) {
-  const status = friendlyStatus(job.status);
   const note = noteSentence(job.statusNote);
+  if (job.status === 'For Delivery') {
+    if (note) return `Hello po 😊 Okay na po ang TV niyo at ready na for delivery. ${note} Si Ivan po ang magko-confirm ng schedule.`;
+    return DELIVERY_STATUS;
+  }
+  const status = friendlyStatus(job.status);
   if (note) return `Hello po 😊 Yung TV niyo po ay ${status}. ${note} Babalikan po namin kayo.`;
   return `Hello po 😊 Yung TV niyo po ay ${status}. Babalikan po namin kayo pag may update.`;
 }
@@ -810,6 +829,25 @@ function needsTextUpdates(ops, threads, now, cfg, branch) {
   return rows;
 }
 
+function needsDeliveryUpdates(ops, threads, now, cfg, branch) {
+  const windowMs = (cfg.replyWindowHours || 23.5) * 3600e3;
+  const rows = [];
+  for (const job of filterBranch(ops.jobs, branch)) {
+    if (job.status !== 'For Delivery' || job.deliveryNotifiedAt) continue;
+    const thread = job.psid ? (threads || {})[job.psid] : null;
+    if (job.psid && thread && (thread.handedOff || pausedReadOnly(thread, now, cfg))) continue;
+    const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
+    const outside = !job.psid || !last || now - last > windowMs;
+    if (!outside) continue;
+    rows.push({
+      jobId: job.id,
+      customerName: job.customerName,
+      phone: job.phone || '',
+    });
+  }
+  return rows;
+}
+
 function buildView(store, opts) {
   const ops = ensureOps(store);
   const tz = opts.tz || 'Asia/Manila';
@@ -837,9 +875,11 @@ function buildView(store, opts) {
   return {
     tab, branch, branchLabel: branchLabel(branch), period, today, tomorrow, statusFilter, editing,
     dailyOn: Boolean(opts.dailyOn),
+    deliveryOn: Boolean(opts.deliveryOn),
     kpis: {
       open: jobs.filter(openJob).length,
       underRepair: jobs.filter((j) => j.status === 'Under Repair').length,
+      forDelivery: jobs.filter((j) => j.status === 'For Delivery').length,
       visitsToday: visitsToday.length,
       collectedToday: sumAmount(payments.filter((p) => p.date === today)),
       collectedMonth: month.collected,
@@ -855,6 +895,7 @@ function buildView(store, opts) {
       dupes: duplicatePayments(ops.payments, branch),
     },
     needsText: needsTextUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanIdleResumeHours: 2 }, branch),
+    needsDelivery: needsDeliveryUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanIdleResumeHours: 2 }, branch),
     techLoad: TECHS.map((tech) => ({
       tech,
       open: jobs.filter((j) => (j.technician || 'Unassigned') === tech && openJob(j)).length,
@@ -885,6 +926,7 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
     const id = action === 'update-job' ? field(params, 'id') : nextJobId(ops.jobs, date);
     if (!id) return { ok: false, error: 'Job id required' };
     const prev = ops.jobs.find((j) => j.id === id);
+    const wasDelivery = Boolean(prev && prev.status === 'For Delivery');
     const job = withWarranty(blankJob({
       ...(prev || {}),
       id,
@@ -915,6 +957,8 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
       psid: prev ? prev.psid || '' : '',
       importedPaid: prev ? prev.importedPaid || 0 : 0,
       lastDailyStatusDate: prev ? prev.lastDailyStatusDate || '' : '',
+      dailyStatusSkip: prev ? prev.dailyStatusSkip || '' : '',
+      deliveryNotifiedAt: prev ? prev.deliveryNotifiedAt || '' : '',
       createdAt: prev ? prev.createdAt : new Date(now).toISOString(),
     }));
     touch(job);
@@ -935,19 +979,20 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
       }
     }
     store.save();
-    return { ok: true, id };
+    return { ok: true, id, notifyDelivery: job.status === 'For Delivery' && !wasDelivery };
   }
 
   if (action === 'status' || action === 'done') {
     const job = ops.jobs.find((j) => j.id === field(params, 'id'));
     if (!job) return { ok: false, error: 'Hindi makita ang job.' };
+    const prevStatus = job.status;
     if (action === 'done') {
       job.status = 'Completed';
       if (!job.doneDate) job.doneDate = today;
     } else if (STATUSES.includes(field(params, 'status'))) job.status = field(params, 'status');
     touch(job);
     store.save();
-    return { ok: true, id: job.id };
+    return { ok: true, id: job.id, notifyDelivery: job.status === 'For Delivery' && prevStatus !== 'For Delivery' };
   }
 
   if (action === 'delete-job') {
@@ -1196,7 +1241,7 @@ function exportCsv(store, kind, opts) {
 
 module.exports = {
   STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, TABS,
-  ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE,
+  ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE, DELIVERY_NOTICE, DELIVERY_STATUS,
   emptyOps, ensureOps, manilaStamp, addMonths, addDays, parseBranch, branchLabel,
   parseCsv, parseJobsCsv, parsePaymentsCsv, parseAdsCsv,
   nextJobId, jobBalance, jobPaid, phoneKey, namesMatch, extractPhone,
