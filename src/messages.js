@@ -22,6 +22,9 @@ const lines = {
     'Noted po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito. Saglit lang po.',
   holdingMedia:
     'Noted po maam/sir 🙏 Natanggap po namin, si Ivan na po ang titingin at tutuloy sa inyo dito. Saglit lang po.',
+  // Photo/video stay in this chat. No "video" in the text (a later follow-up treats that word as a request).
+  mediaAck:
+    'Salamat po! Ipapacheck ko po sa technician. Ano po ang issue, kailan po nagsimula, at taga-saan po sila?',
   holdingPerson:
     'Sige po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito. Saglit lang po.',
   sanitizeOutgoing,

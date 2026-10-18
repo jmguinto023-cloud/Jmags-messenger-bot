@@ -72,11 +72,11 @@ async function main() {
     for (const p of mock.calls.pass.slice(passBefore)) console.log(`   HANDOFF → pass_thread_control to app ${p.target_app_id} (${p.metadata})`);
   }
 
-  // Extra: a photo is always handed to Ivan without calling the AI.
+  // Extra: a photo is acknowledged and the bot stays in the chat (no pass_thread_control).
   const before = mock.calls.messages.length;
   const raw = JSON.stringify(photoEvent('psid_photo'));
   await fetch(`${base}/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': sign(raw) }, body: raw });
-  for (let i = 0; i < 60 && mock.calls.pass.length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 60 && mock.calls.messages.length === before; i++) await new Promise((r) => setTimeout(r, 50));
   console.log(`\n${step++}) Customer (psid_photo) sends a photo`);
   for (const m of mock.calls.messages.slice(before)) console.log(`   BOT → ${m.message.text}`);
   console.log(`   HANDOFF calls so far: ${mock.calls.pass.length}`);
