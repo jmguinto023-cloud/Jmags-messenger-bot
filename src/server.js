@@ -7,6 +7,9 @@ const path = require('node:path');
 
 const { passwordOk, readCookie, validSession, sessionCookie, clearCookie } = require('./dash-session');
 const { loginPage, listPage, publicReview } = require('./dashboard-page');
+const { parseSignedRequest } = require('./signed-request');
+
+const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const FILES = {
@@ -46,6 +49,11 @@ function createServer({ cfg, bot, log }) {
 
     if (req.method === 'GET' && url.pathname === '/health') {
       return sendJson(200, { ok: true, botEnabled: cfg.botEnabled, testMode: cfg.testPsids.length > 0 });
+    }
+
+    if (req.method === 'GET' && (url.pathname === '/privacy' || url.pathname === '/data-deletion')) {
+      const file = url.pathname === '/privacy' ? 'privacy.html' : 'data-deletion.html';
+      return send(200, legalHtml(file, url.searchParams.get('code') || ''), 'text/html; charset=utf-8');
     }
 
     if (req.method === 'GET' && url.pathname === '/dashboard') {
@@ -103,7 +111,7 @@ function createServer({ cfg, bot, log }) {
     }
 
     const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed');
-    if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || dashPost)) {
+    if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || dashPost)) {
       const chunks = [];
       let size = 0;
       req.on('data', (c) => { size += c.length; if (size > 1e6) req.destroy(); else chunks.push(c); });
@@ -113,6 +121,7 @@ function createServer({ cfg, bot, log }) {
         if (url.pathname === '/dashboard/logout') return dashboardLogout();
         if (url.pathname === '/dashboard/reviewed') return dashboardReviewed(req, raw);
         if (url.pathname === '/dashboard/api/subscribe') return subscribe(req, raw);
+        if (url.pathname === '/data-deletion-callback') return dataDeletionCallback(raw);
         if (url.pathname.startsWith('/admin/')) return admin(url, req, raw);
         if (!verifySignature(raw, req.headers['x-hub-signature-256'], cfg.appSecret)) {
           log.warn('Rejected webhook: bad or missing X-Hub-Signature-256');
@@ -176,12 +185,49 @@ function createServer({ cfg, bot, log }) {
       if (u.pathname === '/admin/forget') {
         const psid = u.searchParams.get('psid');
         if (!psid) return send(400, 'psid required');
-        bot.store.forget(psid);
-        return send(200, 'deleted');
+        return sendJson(200, bot.forgetCustomer(psid));
       }
       return send(404, 'Not found');
     }
+
+    function legalHtml(file, code) {
+      let html = fs.readFileSync(path.join(PUBLIC, file), 'utf8');
+      if (file !== 'data-deletion.html') return html;
+      let status = '';
+      if (code) {
+        const row = bot.store.deletionStatus(code);
+        if (row) {
+          const counts = row.deleted || {};
+          status = `<p class="status"><strong>Request ${escHtml(code)}</strong> was received on ${escHtml(row.receivedAt || '')}. We deleted ${Number(counts.threads) || 0} conversation record(s), ${Number(counts.reviews) || 0} photo or video record(s), and ${Number(counts.conversations) || 0} log line(s) from our server.</p>`;
+        } else {
+          status = `<p class="status">We could not find confirmation code <strong>${escHtml(code)}</strong>. Message the JMAG's Appliances Facebook Page or call/text 09386369374 (Smart) / 09267229506 (Globe).</p>`;
+        }
+      }
+      return html.replace('<!--STATUS-->', status);
+    }
+
+    function dataDeletionCallback(raw) {
+      const text = raw.toString('utf8');
+      let signed = new URLSearchParams(text).get('signed_request') || '';
+      if (!signed) {
+        try { signed = JSON.parse(text).signed_request || ''; } catch { signed = ''; }
+      }
+      const data = parseSignedRequest(signed, cfg.appSecret);
+      const userId = data && data.user_id ? String(data.user_id) : '';
+      if (!userId) return send(400, 'Invalid signed_request');
+      const deleted = bot.forgetCustomer(userId);
+      const code = crypto.randomBytes(8).toString('hex');
+      bot.store.rememberDeletion(code, { receivedAt: new Date().toISOString(), deleted });
+      return sendJson(200, {
+        url: `${PUBLIC_ORIGIN}/data-deletion?code=${code}`,
+        confirmation_code: code,
+      });
+    }
   });
+}
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function sendFile(res, name, type) {

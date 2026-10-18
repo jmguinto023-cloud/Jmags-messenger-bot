@@ -741,6 +741,16 @@ class Bot {
     };
   }
 
+  // Admin and Meta deletion: drop queued work, then every stored record for this PSID.
+  forgetCustomer(psid) {
+    const key = String(psid || '');
+    this.cancelPending(key);
+    this.rev.delete(key);
+    this.repliedRev.delete(key);
+    this.chains.delete(key);
+    return this.store.forget(key);
+  }
+
   // Admin: let the bot answer this customer again.
   resume(psid) {
     const t = this.store.thread(psid);

@@ -56,6 +56,15 @@ npm start           # run (needs env, see .env.example)
   the video under review.
 - Resume: `messaging_handovers` with `new_owner_app_id` = our app, or HANDOFF_RESUME_HOURS later, or
   `POST /admin/resume?psid=` (Bearer ADMIN_TOKEN).
+  `POST /admin/forget?psid=` deletes that customer's thread, follow-up state, dashboard photo/video
+  cards, `conversations.jsonl` lines, and any push subscription stored for that PSID, and returns the counts.
+- `GET /privacy` and `GET /data-deletion` are public (no login). Meta's data-deletion callback is
+  `POST /data-deletion-callback` (`signed_request` checked with APP_SECRET). A valid request deletes that
+  user id and returns `{url, confirmation_code}`. The status is shown at `/data-deletion?code=`.
+  Live URLs: https://jmags-messenger-bot.onrender.com/privacy and
+  https://jmags-messenger-bot.onrender.com/data-deletion.
+  Conversation threads are purged after DATA_RETENTION_DAYS (default 90). Photo and video review cards
+  are pruned after 60 days. A deletion request is completed within 30 days.
 - Replies stay inside the 24 h window (REPLY_WINDOW_HOURS=23.5). A separate follow-up may go out when the
   bot's last message was a real reply and the customer has been quiet for FOLLOWUP_AFTER_MIN (default 120).
   At most FOLLOWUP_MAX (default 2) per conversation. The second is about 24 hours after the first, and only
