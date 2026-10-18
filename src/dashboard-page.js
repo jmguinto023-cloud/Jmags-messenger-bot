@@ -113,6 +113,7 @@ function reviewCard(row, pageId, ua) {
   return `<article class="card">
     <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span></h2>
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
+    ${row.quietNote ? `<p class="meta quiet">${esc(row.quietNote)}</p>` : ''}
     ${dl}
     ${mediaBlock(row)}
     <p><a class="inbox-primary" href="${esc(href)}"${copyAttr} data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>

@@ -1,6 +1,7 @@
 'use strict';
 // What we already know about a TV job, so the bot does not ask for it again.
 const { summarizeConversation } = require('./summary');
+const { recentUserBlob } = require('./recency');
 
 const CLOSE_LINE = 'Salamat po. Si Ivan na po ang nagre-review ng video at ipapadala po namin ang all-in price shortly 😊';
 
@@ -28,7 +29,7 @@ function questionTopic(text) {
 }
 
 function updateIntake(thread, latestText, hasMedia) {
-  const blob = (thread.history || []).filter((h) => h.role === 'user').map((h) => h.content).join('\n');
+  const blob = recentUserBlob(thread);
   const summary = summarizeConversation([{ content: blob }]);
   const slots = thread.slots || { brandSize: '', problemOrVideo: false, problemText: '', age: '', location: '', repairedElsewhere: '' };
   if (summary.brand || summary.size) slots.brandSize = [summary.brand, summary.size].filter(Boolean).join(' ');
@@ -63,7 +64,7 @@ function intakeContext(thread) {
     `Repaired at another shop: ${s.repairedElsewhere || 'missing'}.`,
   ];
   if (thread.intakeClosed) {
-    lines.push('Intake is complete: a video was sent and they gave location and TV age. Do not ask any intake question. Only answer what they just asked. The price will come from Ivan after he reviews the video.');
+    lines.push('Intake is complete: a video was sent and they gave location and TV age. Do not ask any intake question. Only answer what they just asked. The price will come from Ivan after he reviews the video. Do not mention an older booking or cancellation. Never blame the customer or say they themselves asked to cancel.');
   } else {
     lines.push('Ask only ONE still-missing item, in order: brand/size, TV age, location, whether another shop already repaired it. Do not repeat the question you asked last.');
   }

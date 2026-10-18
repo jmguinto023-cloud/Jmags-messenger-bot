@@ -43,6 +43,17 @@ npm start           # run (needs env, see .env.example)
   request always ends on a user message. An attachment with no caption is sent as a received-media note
   (`[Customer sent a video at HH:MM - RECEIVED, ...]`, or photo).
 - Human takeover: a `message_echo` whose `app_id` is not ours (or missing) pauses that chat for HUMAN_PAUSE_HOURS.
+  The log line includes `app_id=...`. `PAGE_AI_APP_IDS` (comma-separated, default empty) lists Meta automation
+  app ids. An echo from one of those ids is logged as `page AI echo ... app_id=... – not pausing` and does not
+  start the pause. `IGNORE_ECHO_APP_IDS` still drops an echo before that check.
+- A photo or video is saved to the dashboard and push even when the bot is not replying: standby (another app
+  owns the thread), a human pause, or a handoff. The card says `bot not replying, standby/paused`. The same
+  message mid is not saved twice. Standby never sends a Messenger reply.
+- While a video is waiting on Ivan, "Ok na ba?", "Kamusta na?", "Wala pa ba?", and "Ano na?" are answered about
+  that review (all-in price soon, and 09386369374 / 09267229506 if urgent). Bookings, cancellations, and slot
+  facts older than 12 hours, or from before the latest video, are left out of the model context unless the
+  customer brings them up. The bot never says "kayo po mismo nagsabi". An unclear line gets one question about
+  the video under review.
 - Resume: `messaging_handovers` with `new_owner_app_id` = our app, or HANDOFF_RESUME_HOURS later, or
   `POST /admin/resume?psid=` (Bearer ADMIN_TOKEN).
 - Replies stay inside the 24 h window (REPLY_WINDOW_HOURS=23.5). A separate follow-up may go out when the
