@@ -70,6 +70,7 @@ button.ghost { background: transparent; color: var(--ink); border: 1px solid var
 }
 .card h2 { margin: 0 0 6px; font-size: 1rem; }
 .meta { color: var(--muted); font-size: 0.85rem; }
+.debug { word-break: break-all; font-size: 0.75rem; }
 a { color: var(--amber); }
 .empty { color: var(--muted); padding: 24px 0; }
 .badge, .pill {

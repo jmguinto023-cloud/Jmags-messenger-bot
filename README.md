@@ -71,11 +71,16 @@ npm start           # run (needs env, see .env.example)
   The Graph id and `link` come from
   `GET /{page-id}/conversations?platform=messenger&user_id={PSID}&fields=id,link,updated_time` and are cached.
   If that call fails, or the id is not numeric, the button falls back to the inbox list (`asset_id` only).
-  On Android the same button is an `intent://` link for package `com.facebook.pages.app` (Meta Business Suite),
-  which claims `business.facebook.com`. If that app is missing, the intent opens the Page inbox link instead
-  of the mobile website. On iPhone and iPad the button stays the https Business Suite URL so the Page app's
-  universal link can claim it. The card also has "Open in Messenger" when a Page inbox link is known.
-  `m.me` is not used: it opens a visitor chat with the Page, not the Page's thread.
+  On Android the button is a real link, chosen from the phone's User-Agent so it does not depend on script:
+  `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.facebook.pages.app;S.browser_fallback_url={Page inbox link};end`.
+  Package `com.facebook.pages.app` is the Meta Business Suite app. The intent does not contain
+  `business.facebook.com`, because Samsung Internet turns `intent://business.facebook.com/...#Intent;scheme=https`
+  back into that website. There is no documented `fb://` or `fbpages://` URL for one Page thread.
+  If the app is not installed, the fallback is `https://www.facebook.com/{PAGE_ID}/inbox/{THREAD}/`.
+  On iPhone and iPad the button stays the https Business Suite URL so the Page app's universal link can claim it.
+  The card also has "Open in Messenger" when a Page inbox link is known, and a small line with the thread id
+  and the exact button URL. `m.me` is not used: it opens a visitor chat with the Page, not the Page's thread.
+  The service worker is network-first for the dashboard page, script, and stylesheet, and reloads once when a new worker takes control.
   Mark reviewed drops it from the New count. The page refreshes every 30 seconds.
   The shell is cached by the service worker; the review list is network-first.
   New photos and videos can send a Web Push if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set.

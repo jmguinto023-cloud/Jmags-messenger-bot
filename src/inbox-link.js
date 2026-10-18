@@ -11,12 +11,14 @@
 // Graph's conversation.link. If that path is missing and the Graph id is t_ plus
 // digits, those digits are the same id. A non-numeric t_ id is not placed in the URL.
 //
-// Phones: business.facebook.com App Links are delegated to the Meta Business Suite
-// app (Android package com.facebook.pages.app, assetlinks.json handle_all_urls;
-// iOS Page admin app claims the host). A plain https link still stayed in Chrome
-// on the reported Android phone, so Android uses an intent that names that package.
-// There is no separate documented scheme that addresses one thread inside the app.
-// If the app is not installed, the intent falls back to the Page inbox link.
+// Phones: an https://business.facebook.com link stays in Samsung Internet and other
+// non-Chrome browsers, and a standalone PWA will not hand it to the app. An
+// intent://business.facebook.com/... URL is also unwrapped back into that website.
+// Android therefore uses a launcher intent for package com.facebook.pages.app
+// (Meta Business Suite, confirmed by assetlinks.json). It does not embed
+// business.facebook.com. No documented fb:// or fbpages:// route opens one Page
+// thread in that app, so the intent does not pretend to. If the app is missing,
+// browser_fallback_url is the Page inbox link only (never the broken mobile site).
 // https://m.me/{page} opens a visitor chat with the Page, so it is not used.
 
 const BUSINESS_SUITE_PACKAGE = 'com.facebook.pages.app';
@@ -76,12 +78,19 @@ function messengerThreadHref(link, conversationId, pageId) {
   return `https://www.facebook.com/messages/t/${encodeURIComponent(item)}`;
 }
 
-function androidSuiteIntent(httpsUrl, fallbackUrl) {
-  let u;
-  try { u = new URL(String(httpsUrl || '')); } catch { return ''; }
-  if (u.protocol !== 'https:' || u.hostname !== 'business.facebook.com') return '';
-  const fallback = fallbackUrl || httpsUrl;
-  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=${BUSINESS_SUITE_PACKAGE};S.browser_fallback_url=${encodeURIComponent(fallback)};end`;
+// Launch the installed Business Suite app. Fallback, when present, is the Page
+// inbox link — not business.facebook.com, which mobile browsers fail to open.
+function androidSuiteIntent(fallbackUrl) {
+  const parts = [
+    'action=android.intent.action.MAIN',
+    'category=android.intent.category.LAUNCHER',
+    `package=${BUSINESS_SUITE_PACKAGE}`,
+  ];
+  const fallback = String(fallbackUrl || '');
+  if (fallback && !fallback.includes('business.facebook.com')) {
+    parts.push(`S.browser_fallback_url=${encodeURIComponent(fallback)}`);
+  }
+  return `intent:#Intent;${parts.join(';')};end`;
 }
 
 function inboxLinks(pageId, row) {
@@ -91,7 +100,7 @@ function inboxLinks(pageId, row) {
   return {
     itemId,
     suite,
-    android: androidSuiteIntent(suite, messenger || suite),
+    android: androidSuiteIntent(messenger),
     messenger,
   };
 }

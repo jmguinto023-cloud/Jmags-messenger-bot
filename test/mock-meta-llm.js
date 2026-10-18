@@ -41,9 +41,12 @@ function startMock({ llmResponder } = {}) {
       if (url.pathname.endsWith('/custom_labels') && req.method === 'GET') return json(200, { data: state.customLabels || [] });
       if (url.pathname.endsWith('/custom_labels') && req.method === 'POST') {
         calls.labelCreates.push(body);
-        return json(200, { id: 'label123' });
+        return json(200, { id: state.labelId || 'label123' });
       }
-      if (url.pathname.endsWith('/label')) { calls.labels.push({ ...body, path: url.pathname }); return json(200, { success: true }); }
+      if (url.pathname.endsWith('/label')) {
+        calls.labels.push({ user: body.user || url.searchParams.get('user'), path: url.pathname });
+        return json(200, { success: true });
+      }
       if (url.pathname.endsWith('/conversations') && req.method === 'GET') {
         const userId = url.searchParams.get('user_id');
         calls.conversations.push({
