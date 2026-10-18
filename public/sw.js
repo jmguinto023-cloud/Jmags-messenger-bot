@@ -1,6 +1,6 @@
 'use strict';
 // Video-review PWA: cache the app shell icons, network-first for data and for the dashboard page and script.
-const CACHE = 'jmags-video-shell-v6';
+const CACHE = 'jmags-video-shell-v7';
 const SHELL = [
   '/dashboard.css',
   '/dashboard.js',
@@ -32,7 +32,11 @@ function isDataRequest(url) {
   return url.pathname === '/dashboard'
     || url.pathname === '/dashboard.js'
     || url.pathname === '/dashboard.css'
-    || url.pathname.startsWith('/dashboard/');
+    || url.pathname.startsWith('/dashboard/')
+    || url.pathname === '/ops'
+    || url.pathname === '/ops.js'
+    || url.pathname === '/ops.css'
+    || url.pathname.startsWith('/ops/');
 }
 
 async function networkFirst(request) {

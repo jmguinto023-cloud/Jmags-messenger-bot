@@ -6,8 +6,14 @@ const { sanitizeOutgoing, bookingFormMessage } = lines;
 const { short } = require('./log');
 const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
-const { summarizeConversation, firstCustomerSnippet, customerLabel } = require('./summary');
+const { summarizeConversation, firstCustomerSnippet, customerLabel, chatCustomerName } = require('./summary');
 const { quietDeferUntil, videoFollowupText } = require('./video-followup');
+const {
+  ensureOps, noteSuggestion, jobByPsid, asksJobStatus, asksWarrantyProblem,
+  inWarranty, warrantyText, jobStatusText, dailyStatusText, matchIdentity,
+  linkCustomer, extractPhone, nameGuess, ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE,
+  manilaStamp,
+} = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
 const {
@@ -190,6 +196,7 @@ class Bot {
     this.store.addTurn(psid, 'user', logText, ts);
 
     const t = this.store.thread(psid);
+    noteSuggestion(this.store, psid);
     // A new customer message ends a closed video follow-up, so a later silence
     // can use the normal quiet-customer nudge again.
     if (t.videoFollowupStopped && !(t.videoReplyAt && ts > t.videoReplyAt)) {
@@ -452,6 +459,11 @@ class Bot {
         return;
       }
 
+      if (await this.handleOpsTurn(psid, latestUser, { rev, hadVideo })) {
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
+
       if (reviewPending(t) && asksReviewStatus(latestUser)) {
         this.repliedRev.set(psid, rev);
         await this.send(psid, PENDING_REVIEW_STATUS, { armVideo: hadVideo });
@@ -551,8 +563,8 @@ class Bot {
     await this.graph.sendText(psid, clean);
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
-    if (opts.videoFollowup) {
-      // This nudge talks about the video they already sent. It is not a request for another one.
+    if (opts.videoFollowup || opts.ops) {
+      // A status, warranty, or video follow-up line is not a new request for a video.
     } else if (t.problemViaVideo || t.intakeClosed || opts.tips) t.awaitingVideo = false;
     else if (/\bvideo\b/i.test(clean)) t.awaitingVideo = true;
     // Canned fallback/holding lines are not part of the chat the model sees,
@@ -629,14 +641,14 @@ class Bot {
     return { ok: true, status: 200 };
   }
 
-  async handoff(psid, reason, holdingText) {
+  async handoff(psid, reason, holdingText, sendOpts = {}) {
     const t = this.store.thread(psid);
     if (t.handedOff) return;
     t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = reason; t.passedByBot = true;
     this.stopVideoFollowup(psid, 'handed to Ivan');
     this.store.save();
     this.log.info(`HANDOFF ${short(psid)}: ${reason}`);
-    try { await this.send(psid, holdingText); } catch (e) { this.log.error('holding line failed', e.message); }
+    try { await this.send(psid, holdingText, sendOpts); } catch (e) { this.log.error('holding line failed', e.message); }
     try {
       await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`);
     } catch (e) { this.log.error('pass_thread_control failed', e.message); }
@@ -865,6 +877,112 @@ class Bot {
     }
   }
 
+  // Job status and warranty answers. A linked chat, or a name plus phone that
+  // match the same customer. Never reads another customer's job out loud.
+  async handleOpsTurn(psid, latestUser, { rev, hadVideo }) {
+    const ops = ensureOps(this.store);
+    const job = jobByPsid(ops, psid);
+    const tz = this.cfg.timezone || 'Asia/Manila';
+    if (job && inWarranty(job, this.now(), tz) && asksWarrantyProblem(latestUser)) {
+      this.repliedRev.set(psid, rev);
+      await this.handoff(psid, 'warranty problem', warrantyText(job), { ops: true });
+      return true;
+    }
+    if (job && asksJobStatus(latestUser)) {
+      this.repliedRev.set(psid, rev);
+      await this.send(psid, jobStatusText(job), { ops: true, armVideo: hadVideo });
+      return true;
+    }
+    const thread = this.store.thread(psid);
+    const answering = Boolean(thread.opsAwait) && (extractPhone(latestUser) || nameGuess(latestUser));
+    if (!job && (asksJobStatus(latestUser) || answering)) {
+      return this.answerUnlinkedStatus(psid, latestUser, { rev, hadVideo });
+    }
+    if (thread.opsAwait && !asksJobStatus(latestUser)) thread.opsAwait = '';
+    return false;
+  }
+
+  async answerUnlinkedStatus(psid, latestUser, { rev, hadVideo }) {
+    const thread = this.store.thread(psid);
+    const users = (thread.history || []).filter((h) => h.role === 'user').map((h) => h.content || '').join('\n');
+    let name = chatCustomerName(thread.history);
+    if (!name && (thread.opsAwait === 'name' || thread.opsAwait === 'both')) name = nameGuess(latestUser);
+    const phone = extractPhone(users) || extractPhone(latestUser);
+    const ops = ensureOps(this.store);
+    if (name && phone) {
+      const found = matchIdentity(ops, { name, phone });
+      this.repliedRev.set(psid, rev);
+      thread.opsAwait = '';
+      if (found.status === 'one') {
+        const job = linkCustomer(this.store, psid, found.customer);
+        if (job) {
+          await this.send(psid, jobStatusText(job), { ops: true, armVideo: hadVideo });
+          return true;
+        }
+      }
+      await this.handoff(psid, 'job status not matched', UNSURE, { ops: true });
+      return true;
+    }
+    this.repliedRev.set(psid, rev);
+    if (phone && !name) {
+      thread.opsAwait = 'name';
+      await this.send(psid, ASK_NAME, { ops: true, armVideo: hadVideo });
+    } else if (name && !phone) {
+      thread.opsAwait = 'phone';
+      await this.send(psid, ASK_PHONE, { ops: true, armVideo: hadVideo });
+    } else {
+      thread.opsAwait = 'both';
+      await this.send(psid, ASK_BOTH, { ops: true, armVideo: hadVideo });
+    }
+    this.store.save();
+    return true;
+  }
+
+  // One Taglish update per Under Repair job, around 10:00 Asia/Manila, inside the 24h window.
+  async maybeDailyStatus(now = this.now()) {
+    if (!this.cfg.dailyStatusUpdates) return { sent: [], skipped: [] };
+    const tz = this.cfg.timezone || 'Asia/Manila';
+    const stamp = manilaStamp(now, tz);
+    if (stamp.hour < 10 || stamp.hour >= 19) return { sent: [], skipped: [] };
+    const ops = ensureOps(this.store);
+    const sent = [];
+    const skipped = [];
+    let changed = false;
+    for (const job of ops.jobs) {
+      if (job.status !== 'Under Repair' || !job.psid) continue;
+      if (job.lastDailyStatusDate === stamp.date) continue;
+      const thread = this.store.data.threads[job.psid];
+      if (thread && (thread.handedOff || this.humanPaused(thread, now))) continue;
+      if (!this.cfg.botEnabled) continue;
+      if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) continue;
+      const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
+      const outside = !last || now - last > this.cfg.replyWindowHours * HOUR;
+      if (outside) {
+        if (job.dailyStatusSkip !== 'window' || job.lastDailyStatusDate !== stamp.date) {
+          this.log.info(`daily status skipped for ${short(job.psid)}: outside 24h`);
+        }
+        job.lastDailyStatusDate = stamp.date;
+        job.dailyStatusSkip = 'window';
+        skipped.push(job.id);
+        changed = true;
+        continue;
+      }
+      job.lastDailyStatusDate = stamp.date;
+      job.dailyStatusSkip = '';
+      changed = true;
+      try {
+        await this.send(job.psid, dailyStatusText(job), { ops: true });
+        sent.push(job.id);
+        this.log.info(`daily status sent to ${short(job.psid)}`);
+      } catch (e) {
+        job.lastDailyStatusDate = '';
+        this.log.error(`daily status failed for ${short(job.psid)}:`, e.message);
+      }
+    }
+    if (changed) this.store.save();
+    return { sent, skipped };
+  }
+
   // Quiet-customer follow-up. One short LLM line, then at most one more about 24h later,
   // and only while the customer's last message is still inside 23h.
   startFollowups() {
@@ -890,6 +1008,7 @@ class Bot {
           if (max > 0) await this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
         } catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
       }
+      await this.maybeDailyStatus(now);
     } finally {
       this._followRunning = false;
     }

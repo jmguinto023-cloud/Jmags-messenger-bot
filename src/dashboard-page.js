@@ -39,16 +39,20 @@ ${body}
 </html>`;
 }
 
-function loginPage(error) {
+function loginPage(error, next) {
+  const ops = next === '/ops';
   const msg = error === 'missing'
     ? 'Dashboard password is not set on the server yet.'
     : error === 'bad'
       ? 'Wrong password.'
-      : 'Enter the dashboard password to see new videos and photos.';
+      : ops
+        ? 'Enter the dashboard password to open operations.'
+        : 'Enter the dashboard password to see new videos and photos.';
+  const nextField = ops ? '<input type="hidden" name="next" value="/ops">' : '';
   return shell({
-    title: "JMAG's Video Review",
+    title: ops ? "JMAG's Operations" : "JMAG's Video Review",
     refresh: false,
-    body: `<header><h1>JMAG's Video Review</h1><p class="lede">${esc(msg)}</p></header>
+    body: `<header><h1>${ops ? "JMAG's Operations" : "JMAG's Video Review"}</h1><p class="lede">${esc(msg)}</p></header>
 <main>
   <form method="post" action="/dashboard/login">
     <label for="password">Password</label>
@@ -62,6 +66,7 @@ function loginPage(error) {
         </svg>
       </button>
     </div>
+    ${nextField}
     <div class="row"><button type="submit">Log in</button></div>
   </form>
 </main>`,
@@ -99,7 +104,24 @@ function messageList(history) {
   return `<ol class="thread">${rows.map((m) => `<li class="${m.role === 'user' ? 'from-customer' : 'from-us'}"><span class="who-line">${esc(m.who)} · ${esc(m.time)}</span><p>${esc(m.text)}</p></li>`).join('')}</ol>`;
 }
 
-function reviewCard(row, pageId, thread, now, windowMs) {
+function jobPicker(row, thread, jobs) {
+  const list = jobs || [];
+  const linked = list.find((j) => j.psid && row.psid && j.psid === row.psid);
+  const suggestion = !linked && thread && thread.jobSuggestion;
+  const suggested = suggestion && list.find((j) => j.id === suggestion.jobId);
+  if (!list.length) return '<p class="meta"><a href="/ops">Operations</a> has no jobs to link yet.</p>';
+  const options = list.slice(0, 100).map((j) => `<option value="${esc(j.id)}">${esc(j.id)} · ${esc(j.customerName)} · ${esc(j.city)} · ${esc(j.status)}</option>`).join('');
+  const current = linked ? `<p class="meta">Linked: ${esc(linked.id)} · ${esc(linked.customerName)}</p>` : '';
+  const hint = suggested ? `<p class="meta">Suggested: ${esc(suggested.id)} · ${esc(suggested.customerName)} (${esc(suggestion.reason)})</p>` : '';
+  return `${current}${hint}<form method="post" action="/dashboard/link-job" class="link-job">
+    <input type="hidden" name="review" value="${esc(row.id)}">
+    <label for="job-${esc(row.id)}">Link to job</label>
+    <select id="job-${esc(row.id)}" name="jobId">${options}</select>
+    <div class="row"><button type="submit">Link</button></div>
+  </form>`;
+}
+
+function reviewCard(row, pageId, thread, now, windowMs, jobs) {
   const summary = row.summary || {};
   const named = String(row.customerName || '').trim();
   const who = customerLabel(named, row.psidLast4);
@@ -140,19 +162,21 @@ function reviewCard(row, pageId, thread, now, windowMs) {
       <div class="row"><button type="button" class="send-reply"${disabled}>Send</button></div>
       <p class="send-note" role="status">${esc(note)}</p>
     </div>
+    ${jobPicker(row, thread, jobs)}
     ${copyButton}
     <p><a class="inbox-fallback" href="${esc(genericInboxUrl(pageId))}">Buksan ang Inbox</a></p>
     ${button}
   </article>`;
 }
 
-function listPage(cfg, reviews, threads, now = Date.now()) {
+function listPage(cfg, reviews, threads, now = Date.now(), jobs = []) {
   const rows = [...(reviews || [])].sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
   const fresh = rows.filter((r) => r.status !== 'reviewed').length;
   const title = fresh ? `(${fresh}) JMAG's Video Review` : "JMAG's Video Review";
   const windowMs = (cfg.replyWindowHours || 23.5) * 3600 * 1000;
+  const jobList = [...(jobs || [])].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   const cards = rows.length
-    ? rows.map((r) => reviewCard(r, cfg.pageId, (threads || {})[r.psid], now, windowMs)).join('\n')
+    ? rows.map((r) => reviewCard(r, cfg.pageId, (threads || {})[r.psid], now, windowMs, jobList)).join('\n')
     : '<p class="empty">No photos or videos yet.</p>';
   return shell({
     title,
@@ -164,6 +188,7 @@ function listPage(cfg, reviews, threads, now = Date.now()) {
     <main>
       <div class="row">
         <button id="enable-notifications" type="button">Enable notifications</button>
+        <a class="ops-link" href="/ops">Operations</a>
         <form method="post" action="/dashboard/logout"><button class="ghost" type="submit">Log out</button></form>
       </div>
       <p id="status" class="status"></p>
