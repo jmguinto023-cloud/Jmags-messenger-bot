@@ -15,6 +15,7 @@ const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
 const { summarizeConversation } = require('../src/summary');
 const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
+const { genericInboxUrl, businessSuiteThreadUrl, messengerAppHref } = require('../src/inbox-link');
 
 const SECRET = 'test_app_secret';
 const PAGE = '102622881557025';
@@ -42,6 +43,16 @@ async function setup(extraEnv = {}, mockOpts = {}) {
   };
   const close = async () => { await app.bot.idle(); app.server.close(); await mock.close(); };
   return { app, mock, base, post, close };
+}
+
+async function dashCookie(base, password = 'secret') {
+  const login = await fetch(`${base}/dashboard/login`, {
+    method: 'POST', redirect: 'manual',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `password=${encodeURIComponent(password)}`,
+  });
+  const setCookie = login.headers.get('set-cookie') || '';
+  return { status: login.status, cookie: (setCookie.match(/jmags_dash=[^;]+/) || [])[0] || '' };
 }
 
 let n = 0;
@@ -1121,6 +1132,8 @@ test('dashboard login lists videos without the full PSID and marks them reviewed
     assert.match(html, /Messenger links can expire/);
     assert.match(html, /Open chat in Business Suite/);
     assert.match(html, new RegExp(`asset_id=${PAGE}`));
+    assert.doesNotMatch(html, /selected_item_id/);
+    assert.doesNotMatch(html, /Open in Messenger app/);
     assert.match(html, /Mark reviewed/);
     assert.match(html, /1 new/);
     assert.equal(html.includes('cust-7771'), false);
@@ -1136,6 +1149,8 @@ test('dashboard login lists videos without the full PSID and marks them reviewed
     const after = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: pair } })).text();
     assert.match(after, /0 new/);
     assert.match(after, /Reviewed/);
+    assert.equal(s.mock.calls.conversations.length, 1);
+    assert.equal(s.app.store.data.reviews[0].conversationId, '');
   } finally { await s.close(); }
 });
 
@@ -1150,5 +1165,120 @@ test('an empty dashboard password cannot log in', async () => {
     assert.equal(res.status, 401);
     assert.match(await res.text(), /not set/);
     assert.equal(res.headers.get('set-cookie'), null);
+  } finally { await s.close(); }
+});
+
+test('Business Suite thread URL uses the PSID and the Messenger app link drops m.me', () => {
+  const deep = `https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}&selected_item_id=cust-7771&mailbox_id=${PAGE}&thread_type=FB_MESSAGE`;
+  assert.equal(businessSuiteThreadUrl(PAGE, 'cust-7771'), deep);
+  assert.equal(businessSuiteThreadUrl(PAGE, ''), genericInboxUrl(PAGE));
+  assert.equal(genericInboxUrl(''), 'https://business.facebook.com/latest/inbox/all');
+  assert.equal(
+    messengerAppHref(`/${PAGE}/inbox/555001/`),
+    `https://www.facebook.com/${PAGE}/inbox/555001/`,
+  );
+  assert.equal(messengerAppHref('https://www.messenger.com/t/555001'), 'https://www.messenger.com/t/555001');
+  assert.equal(messengerAppHref('https://m.me/102622881557025'), '');
+  assert.equal(messengerAppHref('https://example.com/inbox/1'), '');
+  assert.equal(messengerAppHref(''), '');
+});
+
+test('a stored conversation deep-links Business Suite and the Messenger app', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm' });
+  s.mock.state.profiles = { 'cust-7771': { name: 'Maria Cruz' } };
+  s.mock.state.conversations = {
+    'cust-7771': {
+      id: 't_9988',
+      link: `/${PAGE}/inbox/555001/`,
+      updated_time: '2026-05-02T01:02:03+0000',
+    },
+  };
+  try {
+    await s.post(msg('cust-7771', {
+      text: 'Samsung 55 inch walang display',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/thread.mp4' } }],
+    }));
+    const saved = s.app.store.data.reviews[0];
+    assert.equal(saved.conversationId, 't_9988');
+    assert.equal(saved.conversationLink, `/${PAGE}/inbox/555001/`);
+    assert.equal(saved.conversationUpdatedTime, '2026-05-02T01:02:03+0000');
+    assert.equal(s.mock.calls.conversations.length, 1);
+    assert.equal(s.mock.calls.conversations[0].platform, 'messenger');
+    assert.equal(s.mock.calls.conversations[0].user_id, 'cust-7771');
+    assert.equal(s.mock.calls.conversations[0].fields, 'id,link,updated_time');
+
+    await s.post(msg('cust-7771', {
+      attachments: [{ type: 'image', payload: { url: 'https://cdn.example/again.jpg' } }],
+    }));
+    assert.equal(s.mock.calls.conversations.length, 1, 'a second item for the same PSID uses the cache');
+
+    const { cookie } = await dashCookie(s.base);
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    const href = businessSuiteThreadUrl(PAGE, 'cust-7771').replaceAll('&', '&amp;');
+    assert.match(html, /Open chat in Business Suite/);
+    assert.ok(html.includes(`href="${href}"`));
+    assert.match(html, /Open in Messenger app/);
+    assert.ok(html.includes(`https://www.facebook.com/${PAGE}/inbox/555001/`));
+    assert.equal(s.mock.calls.conversations.length, 1);
+    const rows = await (await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } })).json();
+    assert.equal(JSON.stringify(rows).includes('cust-7771'), false);
+    assert.equal(rows[0].conversationId, 't_9988');
+    assert.equal(Object.hasOwn(rows[0], 'psid'), false);
+  } finally { await s.close(); }
+});
+
+test('a Graph conversation error keeps the generic inbox link', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', LOG_LEVEL: 'warn' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => logged.push(a.map(String).join(' '));
+  s.mock.state.conversationFail = 'boom';
+  try {
+    await s.post(msg('cust-404', {
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/miss.mp4' } }],
+    }));
+    const { cookie } = await dashCookie(s.base);
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.equal(html.includes('selected_item_id'), false);
+    assert.equal(html.includes('Open in Messenger app'), false);
+    assert.ok(html.includes(`https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}`));
+    assert.equal(s.app.store.data.reviews[0].conversationId, '');
+    assert.ok(logged.some((l) => /conversation lookup failed/.test(l) && /boom/.test(l)));
+    await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } });
+    assert.equal(s.mock.calls.conversations.length, 1);
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
+});
+
+test('the dashboard fills a missing conversation id on first load', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret' });
+  s.mock.state.conversations = {
+    'lazy-9001': { id: 't_lazy', link: 'https://m.me/102622881557025', updated_time: '2026-05-03T00:00:00+0000' },
+  };
+  try {
+    s.app.store.addReview({
+      id: 'rev-lazy',
+      timestamp: new Date().toISOString(),
+      psid: 'lazy-9001',
+      psidLast4: '9001',
+      customerName: 'Lazy User',
+      summary: { brand: 'TCL' },
+      status: 'new',
+      type: 'video',
+      url: 'https://cdn.example/lazy.mp4',
+      snippet: '',
+    }, Date.now());
+    const { cookie } = await dashCookie(s.base);
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    const href = businessSuiteThreadUrl(PAGE, 'lazy-9001').replaceAll('&', '&amp;');
+    assert.ok(html.includes(`href="${href}"`));
+    assert.equal(html.includes('Open in Messenger app'), false);
+    assert.equal(s.app.store.data.reviews[0].conversationId, 't_lazy');
+    assert.equal(s.app.store.data.reviews[0].conversationLink, 'https://m.me/102622881557025');
+    assert.equal(s.mock.calls.conversations.length, 1);
+    await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } });
+    assert.equal(s.mock.calls.conversations.length, 1);
   } finally { await s.close(); }
 });

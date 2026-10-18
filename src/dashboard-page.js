@@ -1,5 +1,6 @@
 'use strict';
 // Server-rendered Ivan dashboard. No build step.
+const { genericInboxUrl, businessSuiteThreadUrl, messengerAppHref } = require('./inbox-link');
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -79,7 +80,10 @@ function reviewCard(row, pageId) {
   const summary = row.summary || {};
   const who = row.customerName || `…${row.psidLast4 || ''}`;
   const status = row.status === 'reviewed' ? 'Reviewed' : 'New';
-  const inbox = `https://business.facebook.com/latest/inbox/all?asset_id=${encodeURIComponent(pageId || '')}`;
+  const inbox = row.conversationId && row.psid
+    ? businessSuiteThreadUrl(pageId, row.psid)
+    : genericInboxUrl(pageId);
+  const appHref = messengerAppHref(row.conversationLink);
   const fields = [
     ['Size', summary.size],
     ['Brand', summary.brand],
@@ -98,6 +102,7 @@ function reviewCard(row, pageId) {
     ${dl}
     ${mediaBlock(row)}
     <p><a href="${esc(inbox)}">Open chat in Business Suite</a></p>
+    ${appHref ? `<p><a href="${esc(appHref)}">Open in Messenger app</a></p>` : ''}
     ${button}
   </article>`;
 }

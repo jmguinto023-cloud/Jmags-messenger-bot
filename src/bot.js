@@ -300,6 +300,7 @@ class Bot {
     const summary = summarizeConversation(t.history);
     let customerName = '';
     try { customerName = await this.graph.userName(psid); } catch { customerName = ''; }
+    const convo = await this.graph.findConversation(psid);
     for (const m of items) {
       const type = m.type === 'image' ? 'photo' : m.type;
       this.store.addReview({
@@ -314,6 +315,9 @@ class Bot {
         type,
         url: m.url || '',
         snippet,
+        conversationId: convo?.id || '',
+        conversationLink: convo?.link || '',
+        conversationUpdatedTime: convo?.updatedTime || '',
       }, this.now());
       await this.alertWebhook(psid, { type, url: m.url || '' }, snippet, when);
       if (this.push) {
@@ -610,6 +614,22 @@ class Bot {
       this.store.thread(psid).followupPending = false;
       this.store.save();
     }
+  }
+
+  // Fill conversation id/link for reviews saved before a lookup succeeded.
+  async hydrateReviewConversations() {
+    const rows = this.store.data.reviews || [];
+    let changed = false;
+    for (const row of rows) {
+      if (!row || !row.psid || row.conversationId) continue;
+      const found = await this.graph.findConversation(row.psid);
+      if (!found || !found.id) continue;
+      row.conversationId = found.id;
+      row.conversationLink = found.link || '';
+      row.conversationUpdatedTime = found.updatedTime || '';
+      changed = true;
+    }
+    if (changed) this.store.save();
   }
 
   // Admin: let the bot answer this customer again.

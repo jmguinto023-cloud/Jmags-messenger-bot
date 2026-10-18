@@ -7,6 +7,7 @@ class Graph {
     this.cfg = cfg;
     this.log = log;
     this.labelIds = new Map();
+    this.conversationCache = new Map(); // psid -> { at, value }
   }
   url(pathPart, params = {}) {
     const u = new URL(`${this.cfg.graphBase}/${this.cfg.graphVersion}/${pathPart}`);
@@ -64,6 +65,32 @@ class Graph {
     return this.call('POST', `${this.pageNode()}/take_thread_control`, {
       body: { recipient: { id: psid }, metadata: String(metadata || '').slice(0, 1000) },
     });
+  }
+  // Page conversation for one PSID. Cached for 10 minutes, including a miss, so the
+  // dashboard refresh does not call Graph again. Null on error or an empty list.
+  async findConversation(psid) {
+    const key = String(psid || '');
+    if (!key) return null;
+    const hit = this.conversationCache.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
+    let value = null;
+    try {
+      const json = await this.call('GET', `${this.pageNode()}/conversations`, {
+        params: { platform: 'messenger', user_id: key, fields: 'id,link,updated_time' },
+      });
+      const row = (json.data || [])[0];
+      if (row && row.id) {
+        value = {
+          id: String(row.id),
+          link: String(row.link || ''),
+          updatedTime: String(row.updated_time || ''),
+        };
+      }
+    } catch (e) {
+      this.log.warn('conversation lookup failed', e.message);
+    }
+    this.conversationCache.set(key, { at: Date.now(), value });
+    return value;
   }
   // Best-effort public name. Missing permission or a failed lookup just returns ''.
   async userName(psid) {
