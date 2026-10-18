@@ -81,6 +81,15 @@ npm start           # run (needs env, see .env.example)
   Blank BOT_ACTIVE_HOURS means the bot is always on (the process logs `hours=24/7`). Follow-ups are not
   limited by those hours. The check runs in-process every minute and the counters live in `/data`, so a
   restart does not send a second copy.
+- After the standard reply to a customer video, if they send nothing more, a separate follow-up goes out
+  VIDEO_FOLLOWUP_MINUTES later (default 30). A second, gentler one goes out VIDEO_FOLLOWUP2_MINUTES after the first
+  (default 240; 0 disables it). At most two per video. The line asks only for the brand, size, issue, or location
+  still missing, and offers to book a check-up when those are already known. No discount. It is not sent while
+  BOT_ENABLED is off, while Ivan has the thread (human pause, handoff, or standby), after the customer replies,
+  or outside the messaging window. From 9:00 PM to 7:00 AM Manila it waits until 7:00 AM if that is still inside
+  the window. The schedule is stored on the thread, so a restart does not forget it. Each send, skip, and deferral
+  is logged. The older quiet-customer follow-up stays off while this video follow-up is still open, and also
+  if it was dropped because 7:00 AM would fall outside the messaging window.
 - Each turn is appended to `DATA_DIR/conversations.jsonl` (timestamp, sha256 prefix and last 4 of the PSID,
   role, text, handoff reason). Lines older than 60 days are dropped. `GET /admin/conversations?since=ISO`
   with `Authorization: Bearer ADMIN_TOKEN` returns them as JSON.

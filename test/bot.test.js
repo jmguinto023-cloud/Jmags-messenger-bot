@@ -14,6 +14,7 @@ const { parseHandoff, normalizeTurns } = require('../src/llm');
 const { sanitizeOutgoing } = require('../src/messages');
 const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
 const { summarizeConversation } = require('../src/summary');
+const { videoFollowupText, quietDeferUntil } = require('../src/video-followup');
 const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
 const { visibleHistory, asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
@@ -1942,4 +1943,212 @@ test('isAutomatedEchoText matches saved-reply templates and custom patterns only
   assert.equal(isAutomatedEchoText('Maraming salamat po.'), false);
   assert.equal(isAutomatedEchoText('Salamat sa pag message sa JMAG', ['pag message sa jmag']), true);
   assert.equal(isAutomatedEchoText('', []), false);
+});
+
+const VIDEO_ASK = "Hello po 😊 Na-review na po ba ni Ivan yung video? Habang hinihintay po, pwede po bang malaman ang brand, size at location ng TV para ma-check namin agad ang schedule?";
+const VIDEO_BOOK = "Hello po 😊 Na-review na po ba ni Ivan yung video? Kung okay lang po, pwede na po nating i-book ang home service check-up. Sabihin lang po kung kailan kayo available.";
+const VIDEO_ASK_2 = "Hello po ulit 😊 Pasensya na po sa abala. Pag may oras lang po, pwede po bang malaman ang brand, size at location ng TV? Para lang po ma-check namin agad ang schedule.";
+const VIDEO_BOOK_2 = "Hello po ulit 😊 Kung gusto niyo na pong ipa-check, pwede po nating i-book ang home service check-up. Sabihin lang po kung kailan kayo available.";
+const NOON = Date.parse('2026-10-18T04:00:00Z'); // 12:00 Asia/Manila
+
+test('video follow-up text asks only for missing facts and offers a check-up when they are known', () => {
+  const ask = videoFollowupText({ history: [{ role: 'user', content: 'walang display po' }] });
+  assert.equal(ask, VIDEO_ASK);
+  const book = videoFollowupText({ history: [{ role: 'user', content: 'Samsung 55 inch walang display taga San Pablo Laguna' }] });
+  assert.equal(book, VIDEO_BOOK);
+  assert.equal(videoFollowupText({ history: [{ role: 'user', content: 'walang display po' }] }, { second: true }), VIDEO_ASK_2);
+  assert.equal(videoFollowupText({ history: [{ role: 'user', content: 'Samsung 55 inch walang display taga San Pablo Laguna' }] }, { second: true }), VIDEO_BOOK_2);
+  const issueOnly = videoFollowupText({ history: [{ role: 'user', content: 'Samsung 55 inch taga Binan' }] });
+  assert.match(issueOnly, /ang issue ng TV/);
+  assert.doesNotMatch(`${ask}\n${book}\n${VIDEO_ASK_2}\n${VIDEO_BOOK_2}`, /discount|tawad|promo|slot|₱/i);
+  assert.equal(loadConfig({}).videoFollowupMinutes, 30);
+  assert.equal(loadConfig({}).videoFollowup2Minutes, 240);
+  assert.equal(loadConfig({ VIDEO_FOLLOWUP2_MINUTES: '0' }).videoFollowup2Minutes, 0);
+  const night = Date.parse('2026-10-18T13:30:00Z'); // 21:30 Manila
+  const morning = quietDeferUntil(night, 'Asia/Manila');
+  assert.equal(new Date(morning).toISOString(), '2026-10-18T23:00:00.000Z');
+  assert.equal(quietDeferUntil(Date.parse('2026-10-18T23:00:00Z'), 'Asia/Manila'), Date.parse('2026-10-18T23:00:00Z'));
+  assert.equal(quietDeferUntil(Date.parse('2026-10-18T22:59:00Z'), 'Asia/Manila'), Date.parse('2026-10-18T23:00:00Z'));
+});
+
+test('a quiet customer gets one video follow-up at 30 minutes and a gentler one 4 hours later', async () => {
+  const s = await setup({ LOG_LEVEL: 'info' });
+  const logged = [];
+  const orig = console.log;
+  console.log = (...a) => logged.push(a.map(String).join(' '));
+  let now = NOON;
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('vidfu', { text: 'walang display po' }, now));
+    await s.post(msg('vidfu', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/quiet.mp4' } }] }, now));
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Ipapacheck ko po sa technician/);
+    assert.equal(s.app.store.thread('vidfu').videoReplyAt, now);
+    assert.ok(logged.some((l) => /video follow-up scheduled/.test(l)));
+    const before = s.mock.calls.messages.length;
+    now = NOON + 29 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, before);
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.at(-1).message.text, VIDEO_ASK);
+    assert.equal(s.app.store.thread('vidfu').videoFollowupCount, 1);
+    assert.equal(s.app.store.thread('vidfu').awaitingVideo, false);
+    assert.ok(logged.some((l) => /video follow-up 1 sent/.test(l)));
+    const llmAfter = s.mock.calls.llm.length;
+    now = NOON + 120 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.llm.length, llmAfter, 'generic quiet follow-up stays off while the video follow-up is open');
+    now = s.app.store.thread('vidfu').videoFollowupAt + 240 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.at(-1).message.text, VIDEO_ASK_2);
+    assert.equal(s.app.store.thread('vidfu').videoFollowupCount, 2);
+    const capped = s.mock.calls.messages.length;
+    now += 240 * 60 * 1000;
+    s.app.store.thread('vidfu').lastUserTs = now;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, capped);
+  } finally {
+    console.log = orig;
+    await s.close();
+  }
+});
+
+test('video follow-up offers a check-up when brand, size, issue, and location are known', async () => {
+  const s = await setup();
+  let now = NOON;
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('known', { text: 'Samsung 55 inch walang display taga San Pablo Laguna' }, now));
+    await s.post(msg('known', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/known.mp4' } }] }, now));
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.at(-1).message.text, VIDEO_BOOK);
+  } finally { await s.close(); }
+});
+
+test('video follow-up survives a restart and the second nudge can be disabled', async () => {
+  const s = await setup({ VIDEO_FOLLOWUP2_MINUTES: '0' });
+  let now = NOON;
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('restart', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/re.mp4' } }] }, now));
+    s.app.store.flush();
+    now = NOON + 30 * 60 * 1000;
+    const store2 = new Store(s.app.cfg.dataDir, { historyTurns: 20 });
+    const bot2 = new Bot({
+      cfg: s.app.cfg, store: store2, graph: s.app.graph, llm: s.app.llm, log: s.app.log, push: s.app.push, now: () => now,
+    });
+    const before = s.mock.calls.messages.length;
+    await bot2.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, before + 1);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Na-review na po ba ni Ivan yung video/);
+    assert.equal(store2.thread('restart').videoFollowupCount, 1);
+    now += 240 * 60 * 1000;
+    store2.thread('restart').lastUserTs = NOON;
+    await bot2.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, before + 1);
+  } finally { await s.close(); }
+});
+
+test('video follow-up is cancelled when the customer replies, Ivan pauses, the bot is off, or the thread is handed off or on standby', async () => {
+  const s = await setup({ LOG_LEVEL: 'info' });
+  const logged = [];
+  const orig = console.log;
+  console.log = (...a) => logged.push(a.map(String).join(' '));
+  let now = NOON;
+  s.app.bot.now = () => now;
+  const video = (psid) => s.post(msg(psid, { attachments: [{ type: 'video', payload: { url: `https://cdn.example/${psid}.mp4` } }] }, now));
+  try {
+    await video('reply');
+    now = NOON + 10 * 60 * 1000;
+    await s.post(msg('reply', { text: 'Samsung 55 po' }, now));
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.app.store.thread('reply').videoReplyAt, 0);
+    assert.ok(logged.some((l) => /video follow-up skipped/.test(l) && /customer replied/.test(l)));
+    assert.equal(s.mock.calls.messages.filter((m) => /Na-review na po ba/.test(m.message.text)).length, 0);
+
+    now = NOON;
+    await video('ivan');
+    now = NOON + 20 * 60 * 1000;
+    s.app.store.thread('ivan').lastUserTs = Date.now() - 60e3;
+    await s.post(echo('ivan', '263902037430900', 'ako na po dito'));
+    assert.equal(s.app.store.thread('ivan').videoReplyAt, 0);
+    assert.ok(logged.some((l) => /video follow-up skipped/.test(l) && /paused for a human/.test(l)));
+
+    now = NOON;
+    await video('off');
+    s.app.cfg.botEnabled = false;
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.app.store.thread('off').videoReplyAt, 0);
+    s.app.cfg.botEnabled = true;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'off' && /Na-review na po ba/.test(m.message.text)).length, 0);
+
+    now = NOON;
+    await video('hand');
+    s.app.store.thread('hand').handedOff = true;
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.app.store.thread('hand').videoReplyAt, 0);
+    assert.ok(logged.some((l) => /handed to Ivan/.test(l)));
+
+    now = NOON;
+    await video('stand');
+    s.app.store.thread('stand').standby = true;
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.app.store.thread('stand').videoReplyAt, 0);
+    assert.ok(logged.some((l) => /standby, another app owns the thread/.test(l)));
+  } finally {
+    console.log = orig;
+    await s.close(); }
+});
+
+test('video follow-up waits until 7 AM Manila and is dropped when that is outside the 24h window', async () => {
+  const s = await setup({ LOG_LEVEL: 'info' });
+  const logged = [];
+  const orig = console.log;
+  console.log = (...a) => logged.push(a.map(String).join(' '));
+  let now = Date.parse('2026-10-18T13:00:00Z'); // 21:00 Manila
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('night', { text: 'walang display po' }, now));
+    await s.post(msg('night', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/night.mp4' } }] }, now));
+    const n = s.mock.calls.messages.length;
+    now = Date.parse('2026-10-18T13:30:00Z');
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, n);
+    assert.ok(logged.some((l) => /deferred/.test(l) && /07:00 Asia\/Manila/.test(l)));
+    now = Date.parse('2026-10-18T23:00:00Z'); // 07:00 Manila
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.at(-1).message.text, VIDEO_ASK);
+
+    now = Date.parse('2026-10-17T14:00:00Z'); // 22:00 Manila
+    await s.post(msg('late', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/late.mp4' } }] }, now));
+    const lateCount = s.mock.calls.messages.length;
+    now = Date.parse('2026-10-18T13:00:00Z'); // next 21:00, 7 AM would miss the window
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, lateCount);
+    assert.equal(s.app.store.thread('late').videoReplyAt, 0);
+    assert.ok(logged.some((l) => /quiet hours past the 24h window/.test(l)));
+  } finally {
+    console.log = orig;
+    await s.close();
+  }
+});
+
+test('a photo does not schedule a video follow-up', async () => {
+  const s = await setup();
+  let now = NOON;
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('pic', { attachments: [{ type: 'image', payload: { url: 'https://cdn.example/pic.jpg' } }] }, now));
+    assert.equal(s.app.store.thread('pic').videoReplyAt, 0);
+    const n = s.mock.calls.messages.length;
+    now = NOON + 30 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, n);
+  } finally { await s.close(); }
 });
