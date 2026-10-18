@@ -20,6 +20,7 @@ services:
         value: "false"
       - key: BOT_TEST_PSIDS
         sync: false
+      # Empty means always on. Startup logs hours=24/7.
       - key: BOT_ACTIVE_HOURS
         sync: false
       - key: BOT_ALWAYS_ON_DAYS
@@ -43,7 +44,19 @@ services:
       - key: PAGE_INBOX_APP_ID
         value: "263902037430900"
       - key: NEEDS_IVAN_LABEL
-        value: ""
+        value: "Video for review"
+      - key: ALERT_WEBHOOK_URL
+        sync: false
+      - key: FOLLOWUP_AFTER_MIN
+        value: "120"
+      - key: FOLLOWUP_MAX
+        value: "2"
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: mailto:bot@jmags.local
       - key: LLM_BASE_URL
         sync: false
       - key: LLM_API_KEY

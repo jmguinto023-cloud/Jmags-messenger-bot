@@ -7,7 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
-const { isActiveNow, keywordHit } = require('../src/bot');
+const { Bot, isActiveNow, keywordHit } = require('../src/bot');
+const { Store } = require('../src/store');
 const { parseHandoff, normalizeTurns } = require('../src/llm');
 const { sanitizeOutgoing } = require('../src/messages');
 
@@ -457,6 +458,7 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.doesNotMatch(prompt, /don't repair refrigerator/i);
   assert.match(prompt, /A photo or video is not a handoff/);
   assert.doesNotMatch(prompt, /They send a photo or video/);
+  assert.match(prompt, /at most two short follow-ups/);
   const example = prompt.slice(prompt.indexOf('Example quote'), prompt.indexOf('Send the schedule form'));
   assert.doesNotMatch(example, /travel fee|within 50 km|\bkm\b/i);
 });
@@ -553,5 +555,292 @@ test('retention purge and forget remove stored chats', async () => {
     assert.equal(s.app.store.data.threads.stale, undefined);
     const res = await fetch(`${s.base}/admin/forget?psid=keep`, { method: 'POST' });
     assert.equal(res.status, 403, 'admin disabled without ADMIN_TOKEN');
+  } finally { await s.close(); }
+});
+
+test('quiet-customer follow-up fires once at 120 minutes, again only inside 23h, then stops', async () => {
+  const s = await setup();
+  assert.equal(s.app.bot._followTimer, undefined);
+  const MIN = 60 * 1000;
+  const HOUR = 3600 * 1000;
+  let now = Date.now();
+  s.app.bot.now = () => now;
+  s.mock.state.llmResponder = (body) => {
+    const sys = body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+    if (/Write ONE short human Taglish follow-up/.test(sys)) {
+      return 'Sir may slot pa po this week. Paki-reply lang po 🙏\n[HANDOFF: quiet]';
+    }
+    return 'Paki-send po ng video ng TV na naka-plug.';
+  };
+  try {
+    const t0 = now;
+    await s.post(msg('fu', { text: 'walang display po' }, t0));
+    assert.equal(s.app.store.thread('fu').awaitingVideo, true);
+    assert.equal(s.mock.calls.messages.length, 1);
+
+    now = t0 + 119 * MIN;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 1);
+
+    now = t0 + 120 * MIN;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 2);
+    assert.match(s.mock.calls.messages[1].message.text, /slot/);
+    assert.doesNotMatch(s.mock.calls.messages[1].message.text, /HANDOFF/);
+    assert.equal(s.mock.calls.pass.length, 0);
+    const followCall = s.mock.calls.llm.find((c) => c.body.messages.some((m) => /Write ONE short human Taglish follow-up/.test(m.content)));
+    const followText = followCall.body.messages.map((m) => m.content).join('\n');
+    assert.match(followText, /limited slots this week/);
+    assert.match(followText, /No discount/);
+    assert.match(followText, /Remind them to send the video/);
+    assert.equal(followCall.body.messages.at(-1).role, 'user');
+    assert.equal(s.app.store.thread('fu').followupCount, 1);
+
+    s.app.store.thread('fu').lastFollowupAt = t0;
+    now = t0 + 23 * HOUR + 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 2, 'no second follow-up after 23h from the customer');
+
+    const tUser2 = t0 + 6 * HOUR;
+    now = tUser2;
+    await s.post(msg('fu', { text: 'nandito pa po ako' }, tUser2));
+    assert.equal(s.app.store.thread('fu').followupCount, 1);
+    const t = s.app.store.thread('fu');
+    t.lastFollowupAt = tUser2 - 22 * HOUR;
+    const beforeSecond = s.mock.calls.messages.length;
+    now = t.lastFollowupAt + 24 * HOUR;
+    assert.ok(now - tUser2 <= 23 * HOUR);
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, beforeSecond + 1);
+    assert.equal(s.app.store.thread('fu').followupCount, 2);
+
+    const capped = s.app.store.thread('fu');
+    const beforeThird = s.mock.calls.messages.length;
+    now += 24 * HOUR;
+    capped.lastUserTs = now;
+    capped.history.push({ role: 'assistant', content: 'still waiting po', ts: now });
+    capped.lastFollowupAt = now - 24 * HOUR;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, beforeThird);
+    assert.equal(capped.followupCount, 2);
+
+    s.app.store.flush();
+    const store2 = new Store(s.app.cfg.dataDir, { historyTurns: 20 });
+    const bot2 = new Bot({
+      cfg: s.app.cfg, store: store2, graph: s.app.graph, llm: s.app.llm, log: s.app.log, push: s.app.push, now: () => now,
+    });
+    await bot2.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, beforeThird);
+    assert.equal(store2.thread('fu').followupCount, 2);
+  } finally { await s.close(); }
+});
+
+test('follow-ups skip handoff, human pause, allowlist, a disabled bot, and a submitted booking', async () => {
+  const s = await setup({ BOT_TEST_PSIDS: 'allowed' });
+  let now = Date.now();
+  s.app.bot.now = () => now;
+  s.mock.state.llmResponder = () => 'May slot pa po this week.';
+  const seed = (psid, extra = {}) => {
+    const t = s.app.store.thread(psid);
+    t.history = [
+      { role: 'user', content: 'hm po', ts: now },
+      { role: 'assistant', content: 'Taga saan po?', ts: now },
+    ];
+    t.lastUserTs = now;
+    Object.assign(t, extra);
+  };
+  try {
+    seed('handed', { handedOff: true });
+    seed('paused', { pausedUntil: now + 5 * 3600e3 });
+    seed('outsider');
+    seed('allowed');
+    seed('booked', { bookingDone: true });
+    now += 121 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.app.store.thread('allowed').followupCount, 1);
+    assert.equal(s.app.store.thread('handed').followupCount, 0);
+    assert.equal(s.app.store.thread('booked').followupCount, 0);
+
+    s.app.cfg.botEnabled = false;
+    const allowed = s.app.store.thread('allowed');
+    allowed.lastUserTs = now;
+    allowed.history.push({ role: 'assistant', content: 'follow up po', ts: now });
+    allowed.lastFollowupAt = now - 24 * 3600e3;
+    const before = s.mock.calls.messages.length;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, before);
+  } finally { await s.close(); }
+});
+
+test('follow-ups are not limited by BOT_ACTIVE_HOURS', async () => {
+  const s = await setup({ BOT_ACTIVE_HOURS: '00:00-00:01' });
+  let now = new Date('2026-10-19T04:00:00Z').getTime();
+  s.app.bot.now = () => now;
+  s.mock.state.llmResponder = () => 'May slot pa po this week sir.';
+  const t = s.app.store.thread('night');
+  t.history = [
+    { role: 'user', content: 'hm po', ts: now },
+    { role: 'assistant', content: 'Taga saan po sila?', ts: now },
+  ];
+  t.lastUserTs = now;
+  now += 120 * 60 * 1000;
+  try {
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(isActiveNow(s.app.cfg, new Date(now)), false);
+  } finally { await s.close(); }
+});
+
+test('no follow-up after the booking form was sent and the customer says it is done', async () => {
+  const s = await setup();
+  let now = Date.now();
+  s.app.bot.now = () => now;
+  const url = 'https://jmagscutomerform.netlify.app/';
+  s.mock.state.llmResponder = () => `Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊\n\n${url}`;
+  try {
+    await s.post(msg('bk', { text: 'sige po bukas' }, now));
+    assert.equal(s.app.store.thread('bk').bookingFormSent, true);
+    now += 1000;
+    await s.post(msg('bk', { text: 'na-fill ko na po' }, now));
+    assert.equal(s.app.store.thread('bk').bookingDone, true);
+    const n = s.mock.calls.messages.length;
+    now += 121 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, n);
+  } finally { await s.close(); }
+});
+
+test('a sent video clears the outstanding video request', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Paki-send po ng video.';
+  try {
+    await s.post(msg('vv', { text: 'walang display' }));
+    assert.equal(s.app.store.thread('vv').awaitingVideo, true);
+    await s.post(msg('vv', { attachments: [{ type: 'video', payload: { url: 'https://example.com/v.mp4' } }] }));
+    assert.equal(s.app.store.thread('vv').awaitingVideo, false);
+    assert.equal(s.mock.calls.pass.length, 0);
+  } finally { await s.close(); }
+});
+
+test('photo posts an alert webhook and a dashboard review without the full PSID', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  s.app.cfg.alertWebhookUrl = `${s.mock.base}/alert`;
+  try {
+    await s.post(msg('psid-secret-9999', {
+      text: 'ito po yung tv',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/a.mp4' } }],
+    }));
+    assert.equal(s.mock.calls.alerts.length, 1);
+    const alert = s.mock.calls.alerts[0];
+    assert.equal(alert.psid, 'psid-secret-9999');
+    assert.equal(alert.type, 'video');
+    assert.equal(alert.url, 'https://cdn.example/a.mp4');
+    assert.match(alert.snippet, /ito po yung tv/);
+    assert.equal(Number.isNaN(Date.parse(alert.timestamp)), false);
+    const reviews = await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } });
+    assert.equal(reviews.status, 200);
+    const rows = await reviews.json();
+    assert.equal(rows[0].type, 'video');
+    assert.equal(rows[0].url, 'https://cdn.example/a.mp4');
+    assert.equal(rows[0].psidLast4, '9999');
+    assert.equal(JSON.stringify(rows).includes('psid-secret-9999'), false);
+    assert.equal((await fetch(`${s.base}/dashboard/api/reviews`)).status, 403);
+  } finally { await s.close(); }
+});
+
+test('dashboard is an installable PWA and push is skipped until VAPID keys exist', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  try {
+    const page = await fetch(`${s.base}/dashboard`);
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, /rel="manifest"/);
+    assert.match(html, /Enable notifications/);
+    assert.match(html, /apple-mobile-web-app-capable/);
+    assert.match(html, /theme-color/);
+    const manifest = await (await fetch(`${s.base}/manifest.webmanifest`)).json();
+    assert.equal(manifest.name, "JMAG's Video Review");
+    assert.equal(manifest.short_name, 'JMAG Videos');
+    assert.equal(manifest.display, 'standalone');
+    assert.equal(manifest.theme_color, '#10243f');
+    assert.ok(manifest.icons.some((i) => i.sizes === '192x192' && i.type === 'image/png'));
+    assert.ok(manifest.icons.some((i) => i.sizes === '512x512'));
+    const sw = await (await fetch(`${s.base}/sw.js`)).text();
+    assert.match(sw, /cache the app shell/i);
+    assert.match(sw, /network-first for data/i);
+    const icon = Buffer.from(await (await fetch(`${s.base}/icons/icon-192.png`)).arrayBuffer());
+    assert.equal(icon.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    const icon512 = Buffer.from(await (await fetch(`${s.base}/icons/icon-512.png`)).arrayBuffer());
+    assert.equal(icon512.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+
+    const status = await fetch(`${s.base}/dashboard/api/push-status`, { headers: { Authorization: 'Bearer adm' } });
+    assert.deepEqual(await status.json(), { enabled: false, publicKey: '' });
+    const sub = await fetch(`${s.base}/dashboard/api/subscribe`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'https://push.example/1', keys: { p256dh: 'a', auth: 'b' } }),
+    });
+    assert.equal(sub.status, 200);
+    assert.equal((await sub.json()).enabled, false);
+    assert.equal(s.app.store.readSubscriptions()[0].endpoint, 'https://push.example/1');
+    assert.equal((await fetch(`${s.base}/dashboard/api/subscribe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })).status, 403);
+
+    await s.post(msg('quiet-push', { attachments: [{ type: 'image', payload: { url: 'https://cdn.example/p.jpg' } }] }));
+    assert.equal(s.mock.calls.pass.length, 0);
+
+    s.app.cfg.vapidPublicKey = 'pub';
+    s.app.cfg.vapidPrivateKey = 'priv';
+    const sent = [];
+    s.app.push._client = { sendNotification: async (_sub, body) => { sent.push(JSON.parse(body)); } };
+    await s.post(msg('pushy', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/z.mp4' } }] }));
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].title, /video/i);
+    assert.equal(sent[0].url, '/dashboard');
+    assert.match(sent[0].body, /sent a video/);
+  } finally { await s.close(); }
+});
+
+test('conversation export hashes the PSID, requires the admin token, and drops lines older than 60 days', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  try {
+    await s.post(msg('customer-abc1234', { text: 'hello po export' }));
+    await s.post(msg('customer-abc1234', { text: 'pa tawag na lang' }));
+    const file = path.join(s.app.cfg.dataDir, 'conversations.jsonl');
+    assert.equal(fs.readFileSync(file, 'utf8').includes('customer-abc1234'), false);
+    const res = await fetch(`${s.base}/admin/conversations`, { headers: { Authorization: 'Bearer adm' } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.some((r) => r.role === 'user' && r.text.includes('hello po export') && r.psidLast4 === '1234' && r.handoffReason === ''));
+    assert.ok(body.every((r) => typeof r.psidHash === 'string' && r.psidHash.length === 16));
+    assert.equal(JSON.stringify(body).includes('customer-abc1234'), false);
+    const handoff = body.find((r) => r.handoffReason);
+    assert.match(handoff.handoffReason, /tawag/);
+    assert.equal(s.app.store.thread('customer-abc1234').history.some((h) => h.content === s.mock.calls.messages.at(-1).message.text), false);
+    const future = await fetch(`${s.base}/admin/conversations?since=${encodeURIComponent(new Date(Date.now() + 86400e3).toISOString())}`, { headers: { Authorization: 'Bearer adm' } });
+    assert.deepEqual(await future.json(), []);
+    assert.equal((await fetch(`${s.base}/admin/conversations?since=not-a-date`, { headers: { Authorization: 'Bearer adm' } })).status, 400);
+    assert.equal((await fetch(`${s.base}/admin/conversations`)).status, 403);
+    const wrong = await fetch(`${s.base}/admin/conversations`, { headers: { Authorization: 'Bearer nope' } });
+    assert.equal(wrong.status, 403);
+
+    fs.appendFileSync(file, `${JSON.stringify({ timestamp: new Date(Date.now() - 61 * 86400e3).toISOString(), psidHash: 'aaaaaaaaaaaaaaaa', psidLast4: '0000', role: 'user', text: 'ancient line', handoffReason: '' })}\n`);
+    s.app.store.addTurn('rot', 'user', 'fresh line', Date.now());
+    const after = fs.readFileSync(file, 'utf8');
+    assert.equal(after.includes('ancient line'), false);
+    assert.match(after, /fresh line/);
+  } finally { await s.close(); }
+});
+
+test('the follow-up scheduler is started only by the main process', async () => {
+  const s = await setup();
+  try {
+    assert.equal(s.app.bot._followTimer, undefined);
+    s.app.bot.startFollowups();
+    assert.ok(s.app.bot._followTimer);
+    s.app.bot.startFollowups();
+    clearInterval(s.app.bot._followTimer);
   } finally { await s.close(); }
 });

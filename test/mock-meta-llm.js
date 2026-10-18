@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startMock({ llmResponder } = {}) {
-  const calls = { messages: [], typing: [], pass: [], labels: [], labelCreates: [], llm: [] };
+  const calls = { messages: [], typing: [], pass: [], labels: [], labelCreates: [], llm: [], alerts: [] };
   const state = { llmResponder: llmResponder || (() => 'Noted po maam/sir 😊 Taga saan po sila?'), llmFail: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -15,6 +15,7 @@ function startMock({ llmResponder } = {}) {
       try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {}; } catch {}
       const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 
+      if (url.pathname.endsWith('/alert')) { calls.alerts.push(body); return json(200, { ok: true }); }
       if (url.pathname.endsWith('/chat/completions')) {
         calls.llm.push({ body, auth: req.headers.authorization });
         if (typeof state.llmGate === 'function') {

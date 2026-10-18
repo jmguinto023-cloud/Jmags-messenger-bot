@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10243f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="JMAG Videos">
+  <title>JMAG's Video Review</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>JMAG's Video Review</h1>
+    <p class="lede">Photos and videos customers send. Install this page, then turn on alerts.</p>
+  </header>
+  <main>
+    <label for="token">Admin token</label>
+    <input id="token" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
+    <div class="row">
+      <button id="save-token" type="button">Save token</button>
+      <button id="enable-notifications" type="button">Enable notifications</button>
+      <button id="refresh" class="ghost" type="button">Refresh</button>
+    </div>
+    <p id="status" class="status"></p>
+    <section id="list"></section>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>

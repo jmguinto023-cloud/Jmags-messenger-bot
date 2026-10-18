@@ -27,7 +27,11 @@ function loadConfig(env = process.env) {
     graphVersion: env.GRAPH_API_VERSION || 'v26.0',
     pageInboxAppId: String(env.PAGE_INBOX_APP_ID || '263902037430900'),
     ignoreEchoAppIds: list(env.IGNORE_ECHO_APP_IDS),
-    needsIvanLabel: env.NEEDS_IVAN_LABEL || '', // empty = don't label
+    needsIvanLabel: env.NEEDS_IVAN_LABEL || '', // empty = don't label on handoff; photo/video uses "Video for review"
+    alertWebhookUrl: env.ALERT_WEBHOOK_URL || '',
+    vapidPublicKey: env.VAPID_PUBLIC_KEY || '',
+    vapidPrivateKey: env.VAPID_PRIVATE_KEY || '',
+    vapidSubject: env.VAPID_SUBJECT || 'mailto:bot@jmags.local',
     // LLM (any OpenAI-compatible chat completions API)
     llmBaseUrl: (env.LLM_BASE_URL || '').replace(/\/+$/, ''),
     llmApiKey: env.LLM_API_KEY || '',
@@ -49,6 +53,8 @@ function loadConfig(env = process.env) {
     humanPauseHours: num(env.HUMAN_PAUSE_HOURS, 12),
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 72),
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
+    followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
+    followupMax: num(env.FOLLOWUP_MAX, 2),
     replyWindowHours: num(env.REPLY_WINDOW_HOURS, 23.5), // stay safely inside Meta's 24h window
     handoffKeywords: env.HANDOFF_KEYWORDS
       ? list(env.HANDOFF_KEYWORDS)

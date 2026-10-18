@@ -4,12 +4,17 @@
   "private": true,
   "description": "Ivan-style Messenger auto-reply bot for JMAG's Appliances (official Messenger Platform webhooks + Send API).",
   "main": "src/index.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/bot.test.js",
     "simulate": "node scripts/simulate.js",
     "sync-prompt": "node scripts/sync-prompt.js"
   },
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
 }

@@ -1,10 +1,11 @@
 # JMAG's Messenger bot (developer notes)
 
 Ivan-style auto-reply for the JMAG's Appliances Facebook Page, built only on Meta's official
-Messenger Platform (webhooks + Send API + Conversation Routing). Node.js 20, **zero npm dependencies**.
+Messenger Platform (webhooks + Send API + Conversation Routing). Node.js 20. The only npm dependency
+is `web-push`, used by the video-review app.
 
 ```
-npm test            # 31 automated tests (mock Graph API + mock LLM, no internet)
+npm test            # 40 automated tests (mock Graph API + mock LLM, no internet)
 npm run simulate    # end-to-end: real server process + mocks + 3 Taglish customer messages
 npm run sync-prompt # refresh prompts/system-prompt.md from ../ivan-bot-system-prompt.md
 npm start           # run (needs env, see .env.example)
@@ -37,9 +38,29 @@ npm start           # run (needs env, see .env.example)
 - Human takeover: a `message_echo` whose `app_id` is not ours (or missing) pauses that chat for HUMAN_PAUSE_HOURS.
 - Resume: `messaging_handovers` with `new_owner_app_id` = our app, or HANDOFF_RESUME_HOURS later, or
   `POST /admin/resume?psid=` (Bearer ADMIN_TOKEN).
-- Never sends outside the 24 h window (REPLY_WINDOW_HOURS=23.5). No proactive follow-ups at all.
+- Replies stay inside the 24 h window (REPLY_WINDOW_HOURS=23.5). A separate follow-up may go out when the
+  bot's last message was a real reply and the customer has been quiet for FOLLOWUP_AFTER_MIN (default 120).
+  At most FOLLOWUP_MAX (default 2) per conversation. The second is about 24 hours after the first, and only
+  if the customer's last message is still within 23 hours. The line is one short Taglish note from the model
+  (limited slots this week, no discount). If a video was requested and not sent, the follow-up reminds them.
+  Nothing is sent when the thread is handed off, paused for a human, the bot is disabled, the PSID is outside
+  BOT_TEST_PSIDS, or the customer already sent the booking form and said they filled it in.
+  Blank BOT_ACTIVE_HOURS means the bot is always on (the process logs `hours=24/7`). Follow-ups are not
+  limited by those hours. The check runs in-process every minute and the counters live in `/data`, so a
+  restart does not send a second copy.
+- Each turn is appended to `DATA_DIR/conversations.jsonl` (timestamp, sha256 prefix and last 4 of the PSID,
+  role, text, handoff reason). Lines older than 60 days are dropped. `GET /admin/conversations?since=ISO`
+  with `Authorization: Bearer ADMIN_TOKEN` returns them as JSON.
 - Safety: BOT_ENABLED (default false), BOT_TEST_PSIDS allowlist, BOT_ACTIVE_HOURS / BOT_ALWAYS_ON_DAYS (Asia/Manila).
+  An empty BOT_ACTIVE_HOURS is 24/7.
 - Storage: `DATA_DIR/state.json` (atomic writes); chats purged after DATA_RETENTION_DAYS of inactivity.
+- `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
+  Chrome or Edge. The shell is cached by the service worker; review data is network-first.
+  New photos and videos can send a Web Push if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set.
+  Generate a pair with `npx web-push generate-vapid-keys` and put both values in the host env (never commit
+  the private key). Subscriptions are stored in `/data/push-subscriptions.json`. The page has an
+  **Enable notifications** button. If the keys are missing, the dashboard still loads and says notifications
+  are not set up. Optional `ALERT_WEBHOOK_URL` receives `POST {psid, type, url, snippet, timestamp}` as well.
 
 ## Deploy (Render)
 `render.yaml` = Docker web service, Starter plan, Singapore, `/health` check, 1 GB disk at `/data`, `autoDeploy: false`.
