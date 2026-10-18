@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startMock({ llmResponder } = {}) {
-  const calls = { messages: [], typing: [], pass: [], labels: [], labelCreates: [], llm: [] };
+  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [] };
   const state = { llmResponder: llmResponder || (() => 'Noted po maam/sir 😊 Taga saan po sila?'), llmFail: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -15,6 +15,7 @@ function startMock({ llmResponder } = {}) {
       try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {}; } catch {}
       const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 
+      if (url.pathname.endsWith('/alert')) { calls.alerts.push(body); return json(200, { ok: true }); }
       if (url.pathname.endsWith('/chat/completions')) {
         calls.llm.push({ body, auth: req.headers.authorization });
         if (typeof state.llmGate === 'function') {
@@ -32,12 +33,21 @@ function startMock({ llmResponder } = {}) {
         return json(200, { recipient_id: body.recipient.id, message_id: `m_${calls.messages.length}` });
       }
       if (url.pathname.endsWith('/pass_thread_control')) { calls.pass.push(body); return json(200, { success: true }); }
+      if (url.pathname.endsWith('/take_thread_control')) {
+        calls.take.push(body);
+        if (state.takeFail) return json(400, { error: { message: state.takeFail } });
+        return json(200, { success: true });
+      }
       if (url.pathname.endsWith('/custom_labels') && req.method === 'GET') return json(200, { data: state.customLabels || [] });
       if (url.pathname.endsWith('/custom_labels') && req.method === 'POST') {
         calls.labelCreates.push(body);
         return json(200, { id: 'label123' });
       }
       if (url.pathname.endsWith('/label')) { calls.labels.push({ ...body, path: url.pathname }); return json(200, { success: true }); }
+      if (req.method === 'GET') {
+        const id = decodeURIComponent(url.pathname.split('/').pop() || '');
+        if (state.profiles && state.profiles[id]) return json(200, state.profiles[id]);
+      }
       return json(404, { error: { message: 'mock: unknown path ' + url.pathname } });
     });
   });

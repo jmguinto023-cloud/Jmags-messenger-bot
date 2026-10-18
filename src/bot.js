@@ -1,19 +1,37 @@
 'use strict';
-// Core logic: turns Messenger webhook events into Ivan-style replies or handoffs.
-// TODO: remind a quiet customer about 2 hours after their last message (max 2 follow-ups).
-// No scheduler yet — the prompt only reminds on the next inbound message.
+// Core logic: turns Messenger webhook events into Ivan-style replies, handoffs, or follow-ups.
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
 const { sanitizeOutgoing, bookingFormMessage } = lines;
 const { short } = require('./log');
+const { psidHash } = require('./store');
+const { summarizeConversation } = require('./summary');
+const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
+const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
+const crypto = require('node:crypto');
 
 // Model sometimes emits [HANDOFF: Customer ready to book] instead of the form.
 function isBookingIntentHandoff(reason) {
   return /ready to book|wants to book|agreed to (the )?price|asked to (be )?schedul|gave a (date|time)|booking intent|pa-book|pa-schedule/i.test(reason || '');
 }
 
+function isFilledUp(text) {
+  return /na-?fill|filled(?: it up)?|\bdone\b|submitted|tapos na|na fill/i.test(text || '');
+}
+
 function isCannedLine(text) {
   return text === lines.fallback || text === lines.holding || text === lines.holdingMedia || text === lines.holdingPerson;
+}
+
+function latestUserText(thread) {
+  const users = (thread.history || []).filter((h) => h.role === 'user');
+  return users.length ? users[users.length - 1].content : '';
+}
+
+function mediaStatus(thread) {
+  const notes = thread.mediaNotes || [];
+  if (!notes.length) return '';
+  return `${notes.slice(-5).join(' ')} NEVER say a video or photo was not received. NEVER ask the customer to send it again.`;
 }
 
 function mediaKind(items) {
@@ -21,8 +39,8 @@ function mediaKind(items) {
   return items.some((m) => m.type === 'video') ? 'video' : 'photo';
 }
 
-function mediaNote(kind) {
-  return kind ? `[Customer sent a ${kind}]` : '';
+function mediaNote(kind, ts, tz) {
+  return kind ? mediaReceivedNote(kind, ts, tz) : '';
 }
 
 // Guarantee the technician acknowledgement even when the model answers with something else.
@@ -64,11 +82,13 @@ function keywordHit(text, keywords) {
 }
 
 class Bot {
-  constructor({ cfg, store, graph, llm, log, now = () => Date.now() }) {
-    Object.assign(this, { cfg, store, graph, llm, log, now });
+  constructor({ cfg, store, graph, llm, log, push = null, now = () => Date.now() }) {
+    Object.assign(this, { cfg, store, graph, llm, log, push, now });
     this.pending = new Map(); // psid -> { texts:[], timer, latestTs }
     this.chains = new Map(); // psid -> promise (keeps one reply at a time per customer)
     this.inflight = new Set();
+    this.rev = new Map(); // bumps when a new customer message should be included in the reply
+    this.repliedRev = new Map(); // last revision we already answered
   }
 
   // Entry point for a verified webhook body. Never throws.
@@ -130,21 +150,32 @@ class Bot {
       return; // other event types (optins, referrals without text, etc.)
     }
 
-    const kind = mediaKind(media);
-    const note = mediaNote(kind);
-    if (note) text = text ? `${text}\n${note}` : note;
-
+    const spoken = text;
     const ts = Number(ev.timestamp) || this.now();
+    const kind = mediaKind(media);
+    const note = mediaNote(kind, ts, this.cfg.timezone);
+    if (note) text = text ? `${text}\n${note}` : note;
     const logText = forceReason ? `${text ? text + ' ' : ''}[${forceReason}]` : text;
     if (!logText) return;
     this.store.addTurn(psid, 'user', logText, ts);
 
-    if (isStandby) { this.log.info(`standby msg from ${short(psid)} (another app owns thread) – no reply`); return; }
-
     const t = this.store.thread(psid);
+    if (note) {
+      t.mediaNotes = t.mediaNotes || [];
+      t.mediaNotes.push(note);
+      if (t.mediaNotes.length > 8) t.mediaNotes.splice(0, t.mediaNotes.length - 8);
+      t.problemViaVideo = true;
+      t.awaitingVideo = false;
+    }
+    if (isStandby) return this.onStandby(psid, t);
     if (media.length) {
       t.pendingMedia = [...(t.pendingMedia || []), ...media];
       t.attachmentNote = note;
+      t.awaitingVideo = false;
+    }
+    if (t.bookingFormSent && isFilledUp(text)) {
+      t.bookingDone = true;
+      this.store.save();
     }
     const now = this.now();
 
@@ -168,11 +199,12 @@ class Bot {
 
     if (!forceReason) {
       // "bot ka ba? / tao ka ba?" is a question about the bot – let the AI answer honestly instead.
-      const askingIfBot = /\b(ka ba|bot|robot|ai|automated)\b/i.test(text);
-      const kw = askingIfBot ? null : keywordHit(text, this.cfg.handoffKeywords);
+      const askingIfBot = /\b(ka ba|bot|robot|ai|automated)\b/i.test(spoken);
+      const kw = askingIfBot ? null : keywordHit(spoken, this.cfg.handoffKeywords);
       if (kw) forceReason = `asked for a person (keyword "${kw}")`;
     }
     if (forceReason) {
+      this.bump(psid); // drop an in-flight AI reply; this handoff is the one response
       this.cancelPending(psid);
       const holding = forceReason.startsWith('customer sent') ? lines.holdingMedia : lines.holdingPerson;
       return this.enqueue(psid, async () => {
@@ -180,7 +212,31 @@ class Bot {
         return this.handoff(psid, forceReason, holding);
       });
     }
+    // Text and attachments share one debounce. A later attachment resets the timer
+    // instead of starting its own reply.
+    this.bump(psid);
     this.queueText(psid, ts);
+  }
+
+  bump(psid) {
+    const n = (this.rev.get(psid) || 0) + 1;
+    this.rev.set(psid, n);
+    return n;
+  }
+
+  async onStandby(psid, t) {
+    const age = this.now() - (t.handoffAt || 0);
+    const stale = this.cfg.handoffResumeHours > 0 && t.handoffAt && age > this.cfg.handoffResumeHours * HOUR;
+    // A fresh handoff stays with the Page Inbox. Otherwise try to take the thread back.
+    if (!t.handedOff || stale) {
+      try {
+        await this.graph.takeThreadControl(psid, 'Customer message while standby');
+        this.log.info(`take_thread_control ok for ${short(psid)}`);
+      } catch (e) {
+        this.log.warn(`take_thread_control failed for ${short(psid)} (routing may be off, #27 is ok): ${e.message}`);
+      }
+    }
+    this.log.info(`standby msg from ${short(psid)} (another app owns thread) – no reply`);
   }
 
   // Why the bot must stay quiet for this customer right now (or '' if it may reply).
@@ -239,66 +295,198 @@ class Bot {
     } catch (e) {
       this.log.warn('label failed (optional)', e.message);
     }
+    const snippet = String((t.history || []).filter((h) => h.role === 'user').at(-1)?.content || '').slice(0, 200);
+    const when = new Date(this.now()).toISOString();
+    const summary = summarizeConversation(t.history);
+    let customerName = '';
+    try { customerName = await this.graph.userName(psid); } catch { customerName = ''; }
+    for (const m of items) {
+      const type = m.type === 'image' ? 'photo' : m.type;
+      this.store.addReview({
+        id: crypto.randomBytes(8).toString('hex'),
+        timestamp: when,
+        psid,
+        psidHash: psidHash(psid),
+        psidLast4: String(psid).slice(-4),
+        customerName,
+        summary,
+        status: 'new',
+        type,
+        url: m.url || '',
+        snippet,
+      }, this.now());
+      await this.alertWebhook(psid, { type, url: m.url || '' }, snippet, when);
+      if (this.push) {
+        try {
+          await this.push.notify({
+            title: type === 'video' ? 'New video to review' : 'New photo to review',
+            body: `…${String(psid).slice(-4)} sent a ${type}`,
+            url: '/dashboard',
+          });
+        } catch (e) { this.log.warn('push notify failed', e.message); }
+      }
+    }
+  }
+
+  async alertWebhook(psid, item, snippet, timestamp) {
+    const hook = this.cfg.alertWebhookUrl;
+    if (!hook) return;
+    const payload = { psid, type: item.type, url: item.url, snippet, timestamp };
+    try {
+      await fetch(hook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (e) {
+      this.log.warn('alert webhook failed', e.message);
+    }
   }
 
   async replyWithAI(psid, ts) {
-    const t = this.store.thread(psid);
-    const block = this.blockReason(psid, t, ts); // re-check: Ivan may have jumped in meanwhile
-    if (block) {
-      t.pendingMedia = []; t.attachmentNote = '';
-      this.log.info(`skip reply to ${short(psid)}: ${block}`);
-      return;
-    }
-
-    const hadMedia = Boolean((t.pendingMedia || []).length);
-    const attachmentNote = t.attachmentNote || '';
-    t.attachmentNote = '';
-    await this.flagPendingMedia(psid);
-
-    this.graph.typingOn(psid).catch((e) => this.log.warn('typing_on failed', e.message));
-    let raw;
-    try {
-      raw = await this.llm.reply(t.history, { nowText: this.nowText(), attachmentNote });
-    } catch (e) {
-      if (hadMedia) {
-        this.log.error(`LLM failed for media from ${short(psid)} (staying in chat):`, e.message);
-        return this.send(psid, lines.mediaAck);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const rev = this.rev.get(psid) || 0;
+      if (this.repliedRev.get(psid) === rev) return; // a newer pass already covered these messages
+      const t = this.store.thread(psid);
+      const block = this.blockReason(psid, t, ts); // re-check: Ivan may have jumped in meanwhile
+      if (block) {
+        t.pendingMedia = []; t.attachmentNote = '';
+        this.log.info(`skip reply to ${short(psid)}: ${block}`);
+        return;
       }
-      const status = Number(e.status) || 0;
-      if (status >= 400 && status < 500) {
-        this.log.error(`LLM config error for ${short(psid)}: HTTP ${status} (not handing off). ${e.message}`);
+      updateIntake(t, '', Boolean((t.pendingMedia || []).length) || t.problemViaVideo);
+
+      const hadMedia = Boolean((t.pendingMedia || []).length);
+      const attachmentNote = t.attachmentNote || '';
+      t.attachmentNote = '';
+      await this.flagPendingMedia(psid);
+      if ((this.rev.get(psid) || 0) !== rev) {
+        this.cancelPending(psid);
+        this.log.info(`newer message from ${short(psid)} before reply, combining`);
+        continue;
+      }
+
+      const latestUser = latestUserText(t);
+      if (asksCheckupFee(latestUser)) {
+        this.repliedRev.set(psid, rev);
+        if (hadMedia) await this.sendMediaAck(psid, CHECKUP_FEE_PLAIN, true);
+        else await this.send(psid, CHECKUP_FEE_PLAIN);
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
+
+      if (t.intakeClosed && !t.intakeCloseSent) {
+        t.intakeCloseSent = true;
+        t.lastAskedTopic = '';
+        t.awaitingVideo = false;
+        if (hadMedia) t.lastMediaAckAt = this.now();
+        this.repliedRev.set(psid, rev);
+        await this.send(psid, CLOSE_LINE);
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
+
+      this.graph.typingOn(psid).catch((e) => this.log.warn('typing_on failed', e.message));
+      let raw;
+      try {
+        raw = await this.llm.reply(t.history, {
+          nowText: this.nowText(),
+          attachmentNote,
+          intakeNote: intakeContext(t),
+          mediaStatus: mediaStatus(t),
+        });
+      } catch (e) {
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if (hadMedia) {
+          this.log.error(`LLM failed for media from ${short(psid)} (staying in chat):`, e.message);
+          this.repliedRev.set(psid, rev);
+          await this.sendMediaAck(psid, lines.mediaAck, hadMedia);
+          return;
+        }
+        const status = Number(e.status) || 0;
+        if (status >= 400 && status < 500) {
+          this.log.error(`LLM config error for ${short(psid)}: HTTP ${status} (not handing off). ${e.message}`);
+          this.repliedRev.set(psid, rev);
+          return this.send(psid, lines.fallback);
+        }
+        this.log.error(`LLM failed for ${short(psid)}:`, e.message);
+        t.fallbackCount = (t.fallbackCount || 0) + 1;
+        this.repliedRev.set(psid, rev);
+        if (t.fallbackCount >= 2) return this.handoff(psid, 'AI unavailable twice', lines.holding);
         return this.send(psid, lines.fallback);
       }
-      this.log.error(`LLM failed for ${short(psid)}:`, e.message);
-      t.fallbackCount = (t.fallbackCount || 0) + 1;
-      if (t.fallbackCount >= 2) return this.handoff(psid, 'AI unavailable twice', lines.holding);
-      return this.send(psid, lines.fallback);
+      if ((this.rev.get(psid) || 0) !== rev) {
+        this.cancelPending(psid);
+        this.log.info(`discarding in-flight reply for ${short(psid)}; a newer message arrived`);
+        continue;
+      }
+      t.fallbackCount = 0;
+      const { text, handoff, reason } = parseHandoff(raw);
+      if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
+      const guarded = applyCustomerGuard(t, applyReplyGuard(t, text), latestUserText(t));
+      this.repliedRev.set(psid, rev);
+      // A photo or video never passes the thread. A keyword in the caption already handed off above.
+      if (hadMedia && !t.intakeCloseSent) {
+        await this.sendMediaAck(psid, guarded, true);
+      } else if (hadMedia) {
+        await this.send(psid, guarded);
+        t.awaitingVideo = false;
+      } else if (guarded === CLOSE_LINE || (t.intakeClosed && t.intakeCloseSent && guarded === CLOSE_LINE)) {
+        await this.send(psid, guarded);
+      } else {
+        const formUrl = this.cfg.bookingFormUrl;
+        const formAlreadySent = formUrl && t.history.some((h) => h.role === 'assistant' && h.content.includes(formUrl));
+        if (formUrl && text.includes(formUrl)) await this.send(psid, text);
+        else if (handoff && formUrl && !formAlreadySent && isBookingIntentHandoff(reason)) await this.send(psid, bookingFormMessage(formUrl));
+        else if (handoff && guarded === text) await this.handoff(psid, reason || 'model', text || lines.holding);
+        else await this.send(psid, guarded);
+      }
+      if ((this.rev.get(psid) || 0) !== rev) continue;
+      return;
     }
-    t.fallbackCount = 0;
-    const { text, handoff, reason } = parseHandoff(raw);
-    if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
-    // A photo or video never passes the thread. A keyword in the caption already handed off above.
-    if (hadMedia) return this.send(psid, mediaReply(text));
-    // The schedule form must go out before any handoff. A [HANDOFF] tag on that
-    // same reply used to silence the bot before the customer got the link.
-    const formUrl = this.cfg.bookingFormUrl;
-    const formAlreadySent = formUrl && t.history.some((h) => h.role === 'assistant' && h.content.includes(formUrl));
-    if (formUrl && text.includes(formUrl)) return this.send(psid, text);
-    if (handoff && formUrl && !formAlreadySent && isBookingIntentHandoff(reason)) {
-      return this.send(psid, bookingFormMessage(formUrl));
-    }
-    if (handoff) return this.handoff(psid, reason || 'model', text || lines.holding);
-    return this.send(psid, text);
   }
 
-  async send(psid, text) {
+  // One technician acknowledgement per short burst of attachments, not one per file.
+  async sendMediaAck(psid, text, hadMedia) {
+    const t = this.store.thread(psid);
+    const windowMs = Math.max(this.cfg.batchWindowMs || 0, 60 * 1000);
+    const recent = t.lastMediaAckAt && this.now() - t.lastMediaAckAt < windowMs;
+    const body = recent ? sanitizeOutgoing(text) : mediaReply(text);
+    if (hadMedia && !recent) t.lastMediaAckAt = this.now();
+    t.awaitingVideo = false;
+    await this.send(psid, body || lines.mediaAck);
+    t.awaitingVideo = false;
+  }
+
+  async send(psid, text, opts = {}) {
     const clean = sanitizeOutgoing(text);
     if (!clean) { this.log.warn(`empty reply to ${short(psid)} after sanitize`); return; }
     await this.graph.sendText(psid, clean);
+    const t = this.store.thread(psid);
+    if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
+    if (t.problemViaVideo || t.intakeClosed || opts.tips) t.awaitingVideo = false;
+    else if (/\bvideo\b/i.test(clean)) t.awaitingVideo = true;
     // Canned fallback/holding lines are not part of the chat the model sees,
     // or the next reply continues them ("Pasensya na po... Nandito pa po ako").
-    if (!isCannedLine(clean)) this.store.addTurn(psid, 'assistant', clean);
+    // They are still appended to the conversation export.
+    this.store.addTurn(psid, 'assistant', clean, this.now(), {
+      history: !isCannedLine(clean),
+      handoffReason: t.handoffReason || '',
+    });
     this.log.info(`replied to ${short(psid)} (${clean.length} chars)`);
+    if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
+  }
+
+  async sendTipsOnce(psid) {
+    const t = this.store.thread(psid);
+    if (t.tipsSent) return;
+    const tips = sanitizeOutgoing(this.cfg.tipsMessage || '');
+    if (!tips) return;
+    t.tipsSent = true;
+    t.awaitingVideo = false;
+    this.store.save();
+    await this.send(psid, tips, { tips: true });
   }
 
   async handoff(psid, reason, holdingText) {
@@ -327,7 +515,7 @@ class Bot {
     // A person (Ivan) or another tool replied from the Page: pause the bot here.
     const t = this.store.thread(psid);
     t.pausedUntil = this.now() + this.cfg.humanPauseHours * HOUR;
-    if (m.text) this.store.addTurn(psid, 'assistant', m.text);
+    if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
     this.cancelPending(psid);
     this.store.save();
     this.log.info(`human reply detected for ${short(psid)} (app_id ${appId || 'none'}) – bot paused ${this.cfg.humanPauseHours}h`);
@@ -348,6 +536,80 @@ class Bot {
       this.log.info(`thread control moved to ${newOwner} for ${short(psid)} – bot silent`);
     }
     this.store.save();
+  }
+
+  // Quiet-customer follow-up. One short LLM line, then at most one more about 24h later,
+  // and only while the customer's last message is still inside 23h.
+  startFollowups() {
+    if (this._followTimer) return;
+    const tick = () => { this.checkFollowups().catch((e) => this.log.error('follow-up tick', e.message)); };
+    tick();
+    this._followTimer = setInterval(tick, 60 * 1000);
+    this._followTimer.unref?.();
+  }
+
+  async checkFollowups() {
+    if (this._followRunning) return;
+    this._followRunning = true;
+    try {
+      const max = this.cfg.followupMax;
+      if (!max || max <= 0) return;
+      const afterMs = this.cfg.followupAfterMin * 60 * 1000;
+      const day = 24 * HOUR;
+      const windowMs = 23 * HOUR;
+      const now = this.now();
+      for (const [psid, t] of Object.entries(this.store.data.threads)) {
+        try { await this.maybeFollowUp(psid, t, { now, max, afterMs, day, windowMs }); }
+        catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
+      }
+    } finally {
+      this._followRunning = false;
+    }
+  }
+
+  followUpSkip(psid, t, now, windowMs, { ignorePending = false } = {}) {
+    if (!ignorePending && t.followupPending) return 'already sending a follow-up';
+    if ((t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
+    if (t.bookingDone) return 'booking form already submitted';
+    if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
+    if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
+    if (t.intakeCloseSent || t.tipsSent) return 'intake closed, waiting on the technician';
+    if (t.handedOff) return 'handed off';
+    if (t.pausedUntil && now < t.pausedUntil) return 'paused for a human';
+    if (now - (t.lastUserTs || 0) > windowMs) return 'outside 23h messaging window';
+    const last = (t.history || [])[(t.history || []).length - 1];
+    if (!last || last.role !== 'assistant') return 'customer spoke last';
+    return '';
+  }
+
+  async maybeFollowUp(psid, t, { now, max, afterMs, day, windowMs }) {
+    const skip = this.followUpSkip(psid, t, now, windowMs);
+    if (skip) return;
+    const count = t.followupCount || 0;
+    if (count >= max) return;
+    const last = t.history[t.history.length - 1];
+    if (count === 0) {
+      if (now - (last.ts || 0) < afterMs) return;
+    } else if (now - (t.lastFollowupAt || 0) < day) return;
+    t.followupPending = true;
+    this.store.save();
+    try {
+      const raw = await this.llm.followUp(t.history, { nowText: this.nowText(), videoMissing: Boolean(t.awaitingVideo) });
+      const { text } = parseHandoff(raw);
+      if (!sanitizeOutgoing(text)) return;
+      const fresh = this.store.thread(psid);
+      if (this.followUpSkip(psid, fresh, this.now(), windowMs, { ignorePending: true })) return;
+      await this.send(psid, text);
+      fresh.followupCount = (fresh.followupCount || 0) + 1;
+      fresh.lastFollowupAt = this.now();
+      this.store.save();
+      this.log.info(`follow-up ${fresh.followupCount} to ${short(psid)}`);
+    } catch (e) {
+      this.log.error(`follow-up failed for ${short(psid)}:`, e.message);
+    } finally {
+      this.store.thread(psid).followupPending = false;
+      this.store.save();
+    }
   }
 
   // Admin: let the bot answer this customer again.

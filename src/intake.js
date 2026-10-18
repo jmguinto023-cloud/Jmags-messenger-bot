@@ -1,0 +1,116 @@
+'use strict';
+// What we already know about a TV job, so the bot does not ask for it again.
+const { summarizeConversation } = require('./summary');
+
+const CLOSE_LINE = 'Salamat po. Si Ivan na po ang nagre-review ng video at ipapadala po namin ang all-in price shortly 😊';
+
+const QUESTIONS = {
+  brandSize: 'Anong brand at size po ng TV?',
+  age: 'Ilang taon na po ang TV?',
+  location: 'Pwede po malaman kung taga-saan po sila?',
+  repaired: 'Na-repair na po ba ito sa ibang shop?',
+  problem: 'Ano po ang problema ng TV?',
+};
+
+function problemClaim(text) {
+  return /nasa video|na-?sen[dt] ko na ang vide[oi]|nasend ko na ang vide[oi]|nandito sa video|kita sa video|makikita sa video|pinakita|pinadala ko na ang video|sent the video|problem.{0,40}video|video.{0,40}problem|sa video (?:po )?(?:ang|yung) (?:problema|issue|sira)/i.test(text || '');
+}
+
+function questionTopic(text) {
+  const t = String(text || '');
+  if (!/\?/.test(t)) return '';
+  if (/problema|ano po ang (?:issue|sira|problema)|anong (?:issue|problema)|what's wrong/i.test(t)) return 'problem';
+  if (/brand|size|pulgada|ilang inch|anong tv/i.test(t)) return 'brandSize';
+  if (/ilang taon|gaano katagal|how old|edad ng tv|kailan (?:ito )?(?:binili|nabili)/i.test(t)) return 'age';
+  if (/taga-saan|saan po|anong lugar|location|address/i.test(t)) return 'location';
+  if (/ibang shop|another shop|na-repair na ba|binuksan na ba/i.test(t)) return 'repaired';
+  return '';
+}
+
+function updateIntake(thread, latestText, hasMedia) {
+  const blob = (thread.history || []).filter((h) => h.role === 'user').map((h) => h.content).join('\n');
+  const summary = summarizeConversation([{ content: blob }]);
+  const slots = thread.slots || { brandSize: '', problemOrVideo: false, problemText: '', age: '', location: '', repairedElsewhere: '' };
+  if (summary.brand || summary.size) slots.brandSize = [summary.brand, summary.size].filter(Boolean).join(' ');
+  if (summary.problem) {
+    slots.problemOrVideo = true;
+    slots.problemText = summary.problem;
+  }
+  if (summary.location) slots.location = summary.location;
+  if (hasMedia || /\[Customer sent a (?:video|photo)\]/i.test(blob) || problemClaim(blob) || problemClaim(latestText)) {
+    thread.problemViaVideo = true;
+    slots.problemOrVideo = true;
+  }
+  const age = blob.match(/\b\d+\s*(?:taon|years?|yrs?|buwan|months?)\b/i)
+    || blob.match(/\b(?:matagal na|bago lang|bagong bili|how old)\b/i);
+  if (age) slots.age = age[0];
+  if (/ibang shop|another shop|na-?repair|binuksan na|pinaayos|hindi pa na(?:ayos|repair)|di pa naayos|wala pang ibang/i.test(blob)) {
+    slots.repairedElsewhere = 'answered';
+  }
+  thread.slots = slots;
+  thread.intakeClosed = Boolean(thread.problemViaVideo && slots.location && slots.age);
+  return thread;
+}
+
+function intakeContext(thread) {
+  const s = thread.slots || {};
+  const lines = [
+    'Collected intake slots. Never ask for a slot that is already filled.',
+    `Brand/size: ${s.brandSize || 'missing'}.`,
+    `Problem: ${thread.problemViaVideo ? 'PROVIDED via the customer video. Never ask what the problem is.' : (s.problemOrVideo ? 'provided in text' : 'missing')}.`,
+    `TV age: ${s.age || 'missing'}.`,
+    `Location: ${s.location || 'missing'}.`,
+    `Repaired at another shop: ${s.repairedElsewhere || 'missing'}.`,
+  ];
+  if (thread.intakeClosed) {
+    lines.push('Intake is complete: a video was sent and they gave location and TV age. Do not ask any intake question. Only answer what they just asked. The price will come from Ivan after he reviews the video.');
+  } else {
+    lines.push('Ask only ONE still-missing item, in order: brand/size, TV age, location, whether another shop already repaired it. Do not repeat the question you asked last.');
+  }
+  return lines.join(' ');
+}
+
+function nextQuestion(thread, skip) {
+  const s = thread.slots || {};
+  const order = [
+    ['brandSize', !s.brandSize, QUESTIONS.brandSize],
+    ['age', !s.age, QUESTIONS.age],
+    ['location', !s.location, QUESTIONS.location],
+    ['repaired', !s.repairedElsewhere, QUESTIONS.repaired],
+  ];
+  for (const [key, missing, q] of order) {
+    if (missing && key !== skip) return q;
+  }
+  if (!thread.problemViaVideo && !s.problemOrVideo && skip !== 'problem') return QUESTIONS.problem;
+  return '';
+}
+
+// Drop a repeated intake question, a problem question after a video, and any intake question once intake is closed.
+function applyReplyGuard(thread, text) {
+  const clean = String(text || '').trim();
+  if (thread.intakeClosed && !thread.intakeCloseSent) {
+    thread.intakeCloseSent = true;
+    thread.lastAskedTopic = '';
+    return CLOSE_LINE;
+  }
+  let topic = questionTopic(clean);
+  if (thread.problemViaVideo && topic === 'problem') {
+    const q = nextQuestion(thread, 'problem');
+    thread.lastAskedTopic = questionTopic(q);
+    return q || CLOSE_LINE;
+  }
+  if (topic && topic === thread.lastAskedTopic) {
+    const q = nextQuestion(thread, topic);
+    thread.lastAskedTopic = questionTopic(q);
+    return q || clean;
+  }
+  if (thread.intakeClosed && topic) {
+    const kept = clean.split(/(?<=[.!?])\s+/).filter((part) => !questionTopic(part)).join(' ').trim();
+    thread.lastAskedTopic = '';
+    return kept || 'Noted po. Si Ivan na po ang titingin sa video at magpapadala ng all-in price shortly 😊';
+  }
+  thread.lastAskedTopic = topic;
+  return clean;
+}
+
+module.exports = { updateIntake, intakeContext, applyReplyGuard, questionTopic, problemClaim, CLOSE_LINE, QUESTIONS };

@@ -29,13 +29,36 @@ class LLM {
     return this._prompt;
   }
 
-  async reply(history, { nowText, attachmentNote } = {}) {
+  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const messages = [
       { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form.` },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
       ...normalizeTurns(history, { attachmentNote }),
     ];
+    return this.chat(messages);
+  }
+
+  async followUp(history, { nowText, videoMissing } = {}) {
+    if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
+    const turns = normalizeTurns(history, { keepTrailingAssistant: true });
+    const nudge = videoMissing
+      ? '[No reply yet. They still have not sent the video.]'
+      : '[No reply yet]';
+    if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', content: nudge });
+    else if (!turns[turns.length - 1].content.includes('[No reply yet]')) turns[turns.length - 1].content += `\n${nudge}`;
+    const extra = videoMissing
+      ? ' They were asked for a video and have not sent it. Remind them to send the video.'
+      : '';
+    const messages = [
+      { role: 'system', content: this.systemPrompt() },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Do not output [HANDOFF].${extra}` },
+      ...turns,
+    ];
+    return this.chat(messages);
+  }
+
+  async chat(messages) {
     try {
       return await this.complete(messages);
     } catch (e) {
@@ -80,7 +103,7 @@ class LLM {
 // Merge back-to-back turns of the same role, drop assistant turns that landed after the
 // customer's last message (our reply, an echo, a human reply), and if they only sent an
 // attachment, close with a user turn such as "[Customer sent a video]".
-function normalizeTurns(history, { attachmentNote } = {}) {
+function normalizeTurns(history, { attachmentNote, keepTrailingAssistant } = {}) {
   const turns = [];
   for (const h of history || []) {
     const role = h.role === 'assistant' ? 'assistant' : 'user';
@@ -90,7 +113,9 @@ function normalizeTurns(history, { attachmentNote } = {}) {
     if (prev && prev.role === role) prev.content += `\n${content}`;
     else turns.push({ role, content });
   }
-  while (turns.length && turns[turns.length - 1].role === 'assistant') turns.pop();
+  if (!keepTrailingAssistant) {
+    while (turns.length && turns[turns.length - 1].role === 'assistant') turns.pop();
+  }
   const note = String(attachmentNote || '').trim();
   if (note) {
     const last = turns[turns.length - 1];
@@ -98,7 +123,7 @@ function normalizeTurns(history, { attachmentNote } = {}) {
       if (!last.content.includes(note)) last.content += `\n${note}`;
     } else turns.push({ role: 'user', content: note });
   }
-  if (!turns.length || turns[turns.length - 1].role !== 'user') {
+  if (!keepTrailingAssistant && (!turns.length || turns[turns.length - 1].role !== 'user')) {
     turns.push({ role: 'user', content: note || '[Customer sent a message]' });
   }
   return turns;

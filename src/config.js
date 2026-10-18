@@ -1,6 +1,7 @@
 'use strict';
 // All settings come from environment variables. See .env.example for explanations.
 const path = require('node:path');
+const { DEFAULT_TIPS } = require('./messages');
 
 function bool(v, def = false) {
   if (v === undefined || v === '') return def;
@@ -27,7 +28,11 @@ function loadConfig(env = process.env) {
     graphVersion: env.GRAPH_API_VERSION || 'v26.0',
     pageInboxAppId: String(env.PAGE_INBOX_APP_ID || '263902037430900'),
     ignoreEchoAppIds: list(env.IGNORE_ECHO_APP_IDS),
-    needsIvanLabel: env.NEEDS_IVAN_LABEL || '', // empty = don't label
+    needsIvanLabel: env.NEEDS_IVAN_LABEL || '', // empty = don't label on handoff; photo/video uses "Video for review"
+    alertWebhookUrl: env.ALERT_WEBHOOK_URL || '',
+    vapidPublicKey: env.VAPID_PUBLIC_KEY || '',
+    vapidPrivateKey: env.VAPID_PRIVATE_KEY || '',
+    vapidSubject: env.VAPID_SUBJECT || 'mailto:bot@jmags.local',
     // LLM (any OpenAI-compatible chat completions API)
     llmBaseUrl: (env.LLM_BASE_URL || '').replace(/\/+$/, ''),
     llmApiKey: env.LLM_API_KEY || '',
@@ -49,6 +54,8 @@ function loadConfig(env = process.env) {
     humanPauseHours: num(env.HUMAN_PAUSE_HOURS, 12),
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 72),
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
+    followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
+    followupMax: num(env.FOLLOWUP_MAX, 2),
     replyWindowHours: num(env.REPLY_WINDOW_HOURS, 23.5), // stay safely inside Meta's 24h window
     handoffKeywords: env.HANDOFF_KEYWORDS
       ? list(env.HANDOFF_KEYWORDS)
@@ -56,6 +63,9 @@ function loadConfig(env = process.env) {
     dataRetentionDays: num(env.DATA_RETENTION_DAYS, 90),
     dataDir: env.DATA_DIR || path.join(__dirname, '..', 'data'),
     adminToken: env.ADMIN_TOKEN || '',
+    dashboardPassword: env.DASHBOARD_PASSWORD || '',
+    // Optional full replacement. Empty keeps the built-in free-tips text. Literal \n becomes a line break.
+    tipsMessage: env.TIPS_MESSAGE ? String(env.TIPS_MESSAGE).replace(/\\n/g, '\n') : DEFAULT_TIPS,
     logLevel: env.LOG_LEVEL || 'info',
   };
 }

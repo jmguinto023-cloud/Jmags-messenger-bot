@@ -60,6 +60,21 @@ class Graph {
       body: { recipient: { id: psid }, target_app_id: targetAppId, metadata: metadata.slice(0, 1000) },
     });
   }
+  takeThreadControl(psid, metadata = '') {
+    return this.call('POST', `${this.pageNode()}/take_thread_control`, {
+      body: { recipient: { id: psid }, metadata: String(metadata || '').slice(0, 1000) },
+    });
+  }
+  // Best-effort public name. Missing permission or a failed lookup just returns ''.
+  async userName(psid) {
+    try {
+      const json = await this.call('GET', encodeURIComponent(psid), { params: { fields: 'name' } });
+      return String(json.name || '').trim();
+    } catch (e) {
+      this.log.warn('profile lookup failed', e.message);
+      return '';
+    }
+  }
   // Tag the customer with a Page Inbox label. A numeric value is already an id.
   // A name is created via custom_labels when missing, and the id is cached per name.
   async addLabel(psid, labelName) {
