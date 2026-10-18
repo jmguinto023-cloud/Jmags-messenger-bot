@@ -49,6 +49,9 @@ services:
       # Off until the sample morning message is approved. Empty keeps the code default (off).
       - key: DAILY_STATUS_UPDATES
         sync: false
+      # One ready-for-delivery text. Empty keeps the code default (off).
+      - key: DELIVERY_NOTIFICATIONS
+        sync: false
       - key: DATA_RETENTION_DAYS
         sync: false
       - key: BOOKING_FORM_URL

@@ -109,14 +109,18 @@ function todayTab(view) {
   const bal = view.attention.balance.map((j) => `<li>${jobLine(j)} · balance ${peso(j.balance)}</li>`).join('');
   const dupes = view.attention.dupes.map((group) => `<li>${esc(group[0].jobId)} · ${esc(group[0].date)} · ${peso(group[0].amount)} · ${esc(group[0].type)} × ${group.length}</li>`).join('');
   const texts = view.needsText.map((row) => `<li data-needs="text">${esc(row.jobId)} · ${esc(row.customerName)} · ${esc(row.phone)}</li>`).join('');
+  const deliveries = (view.needsDelivery || []).map((row) => `<li data-needs="delivery">${esc(row.jobId)} · ${esc(row.customerName)} · ${esc(row.phone)}</li>`).join('');
   const load = view.techLoad.map((row) => `<li>${esc(row.tech)} · ${row.open} open · ${row.visits} today</li>`).join('');
   const reorder = view.reorder.map((p) => `<li>${esc(p.name)} · ${esc(p.branch)} · stock ${esc(p.stock)}</li>`).join('');
   const daily = view.dailyOn ? '' : '<p class="note" id="daily-flag">Daily status updates are off.</p>';
+  const deliveryFlag = view.deliveryOn ? '' : '<p class="note" id="delivery-flag">Delivery notifications are off.</p>';
   return `<section>
     ${daily}
+    ${deliveryFlag}
     <div class="kpis">
       ${kpi('Open jobs', k.open, 'open')}
       ${kpi('Under repair', k.underRepair, 'under-repair')}
+      ${kpi('For delivery', k.forDelivery || 0, 'for-delivery')}
       ${kpi('Visits today', k.visitsToday, 'visits-today')}
       ${kpi('Collected today', peso(k.collectedToday), 'collected-today')}
       ${kpi('Collected this month', peso(k.collectedMonth), 'collected-month')}
@@ -133,6 +137,7 @@ function todayTab(view) {
     <h3>Completed with balance</h3>${bal ? `<ul>${bal}</ul>` : '<p class="empty">None.</p>'}
     <h3>Possible duplicate payments</h3>${dupes ? `<ul>${dupes}</ul>` : '<p class="empty">None.</p>'}
     <h3>Needs text update</h3>${texts ? `<ul>${texts}</ul>` : '<p class="empty">None.</p>'}
+    <h3>Needs text update (delivery)</h3>${deliveries ? `<ul>${deliveries}</ul>` : '<p class="empty">None.</p>'}
     <h2>Technician load</h2><ul>${load}</ul>
     <h2>Reorder soon</h2>${reorder ? `<ul>${reorder}</ul>` : '<p class="empty">None.</p>'}
   </section>`;

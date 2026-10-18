@@ -203,6 +203,7 @@ function createServer({ cfg, bot, log }) {
         now: bot.now(),
         tz: cfg.timezone,
         dailyOn: cfg.dailyStatusUpdates,
+        deliveryOn: cfg.deliveryNotifications,
         threads: bot.store.data.threads || {},
         reviews: bot.store.data.reviews || [],
         cfg,
@@ -213,11 +214,18 @@ function createServer({ cfg, bot, log }) {
       return opsPage(buildView(bot.store, viewOpts(u)));
     }
 
-    function opsAction(rq, raw) {
+    async function opsAction(rq, raw) {
       if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
       const params = new URLSearchParams(raw.toString('utf8'));
       const result = applyAction(bot.store, params, bot.now(), cfg.timezone);
       if (!result.ok) return send(400, result.error || 'Bad request');
+      if (result.notifyDelivery) {
+        try {
+          await bot.notifyForDelivery(result.id);
+        } catch (e) {
+          log.error('delivery notice failed', e.message);
+        }
+      }
       const tab = params.get('returnTab') || params.get('tab') || 'today';
       const branch = params.get('returnBranch') || params.get('branch') || 'ALL';
       const period = params.get('returnPeriod') || params.get('period') || 'month';

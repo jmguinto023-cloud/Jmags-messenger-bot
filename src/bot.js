@@ -10,7 +10,7 @@ const { summarizeConversation, firstCustomerSnippet, customerLabel, chatCustomer
 const { quietDeferUntil, videoFollowupText } = require('./video-followup');
 const {
   ensureOps, noteSuggestion, jobByPsid, asksJobStatus, asksWarrantyProblem,
-  inWarranty, warrantyText, jobStatusText, dailyStatusText, matchIdentity,
+  inWarranty, warrantyText, jobStatusText, dailyStatusText, DELIVERY_NOTICE, matchIdentity,
   linkCustomer, extractPhone, nameGuess, ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE,
   manilaStamp,
 } = require('./ops');
@@ -938,12 +938,12 @@ class Bot {
     return true;
   }
 
-  // One Taglish update per Under Repair job, around 10:00 Asia/Manila, inside the 24h window.
+  // One Taglish update per Under Repair job, from 8:00 Asia/Manila until 19:00, inside the 24h window.
   async maybeDailyStatus(now = this.now()) {
     if (!this.cfg.dailyStatusUpdates) return { sent: [], skipped: [] };
     const tz = this.cfg.timezone || 'Asia/Manila';
     const stamp = manilaStamp(now, tz);
-    if (stamp.hour < 10 || stamp.hour >= 19) return { sent: [], skipped: [] };
+    if (stamp.hour < 8 || stamp.hour >= 19) return { sent: [], skipped: [] };
     const ops = ensureOps(this.store);
     const sent = [];
     const skipped = [];
@@ -981,6 +981,37 @@ class Bot {
     }
     if (changed) this.store.save();
     return { sent, skipped };
+  }
+
+  // One delivery notice per job, only when the status just changed to For Delivery.
+  async notifyForDelivery(jobId) {
+    if (!this.cfg.deliveryNotifications) return { sent: false, reason: 'off' };
+    const job = ensureOps(this.store).jobs.find((j) => j.id === jobId);
+    if (!job || job.status !== 'For Delivery') return { sent: false, reason: 'status' };
+    if (job.deliveryNotifiedAt) return { sent: false, reason: 'already' };
+    if (!job.psid) return { sent: false, reason: 'unlinked' };
+    const now = this.now();
+    const thread = (this.store.data.threads || {})[job.psid];
+    if (thread && (thread.handedOff || this.humanPaused(thread, now))) return { sent: false, reason: 'paused' };
+    if (!this.cfg.botEnabled) return { sent: false, reason: 'disabled' };
+    if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) return { sent: false, reason: 'allowlist' };
+    const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
+    if (!last || now - last > this.cfg.replyWindowHours * HOUR) {
+      this.log.info(`delivery notice skipped for ${short(job.psid)}: outside 24h`);
+      return { sent: false, reason: 'window' };
+    }
+    job.deliveryNotifiedAt = new Date(now).toISOString();
+    this.store.save();
+    try {
+      await this.send(job.psid, DELIVERY_NOTICE, { ops: true });
+      this.log.info(`delivery notice sent to ${short(job.psid)}`);
+      return { sent: true, reason: 'sent' };
+    } catch (e) {
+      job.deliveryNotifiedAt = '';
+      this.store.save();
+      this.log.error(`delivery notice failed for ${short(job.psid)}:`, e.message);
+      return { sent: false, reason: 'error' };
+    }
   }
 
   // Quiet-customer follow-up. One short LLM line, then at most one more about 24h later,

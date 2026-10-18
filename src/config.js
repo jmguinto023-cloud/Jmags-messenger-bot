@@ -69,8 +69,10 @@ function loadConfig(env = process.env) {
     // After a video reply, one nudge, then an optional gentler one. 0 disables the second.
     videoFollowupMinutes: num(env.VIDEO_FOLLOWUP_MINUTES, 30),
     videoFollowup2Minutes: num(env.VIDEO_FOLLOWUP2_MINUTES, 240),
-    // One morning status text for Under Repair jobs. Off until the sample is approved.
+    // One morning status text for Under Repair jobs, from 8:00 Manila. Off until the sample is approved.
     dailyStatusUpdates: bool(env.DAILY_STATUS_UPDATES, false),
+    // One "ready for delivery" text when a job changes to For Delivery. Off until approved.
+    deliveryNotifications: bool(env.DELIVERY_NOTIFICATIONS, false),
     replyWindowHours: num(env.REPLY_WINDOW_HOURS, 23.5), // stay safely inside Meta's 24h window
     handoffKeywords: env.HANDOFF_KEYWORDS
       ? list(env.HANDOFF_KEYWORDS)
