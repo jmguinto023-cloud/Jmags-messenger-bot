@@ -1,6 +1,6 @@
 'use strict';
-// Video-review PWA: cache the app shell, network-first for data.
-const CACHE = 'jmags-video-shell-v4';
+// Video-review PWA: cache the app shell icons, network-first for data and for the dashboard page and script.
+const CACHE = 'jmags-video-shell-v5';
 const SHELL = [
   '/dashboard.css',
   '/dashboard.js',
@@ -14,6 +14,10 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
@@ -24,7 +28,11 @@ self.addEventListener('activate', (event) => {
 
 function isDataRequest(url) {
   // The dashboard HTML is the review list, so it stays network-first for data.
-  return url.pathname === '/dashboard' || url.pathname.startsWith('/dashboard/api/');
+  // The script and stylesheet used to be cache-first, which left phones on an old button.
+  return url.pathname === '/dashboard'
+    || url.pathname === '/dashboard.js'
+    || url.pathname === '/dashboard.css'
+    || url.pathname.startsWith('/dashboard/');
 }
 
 async function networkFirst(request) {

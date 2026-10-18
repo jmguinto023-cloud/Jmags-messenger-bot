@@ -1,6 +1,6 @@
 'use strict';
 // Server-rendered Ivan dashboard. No build step.
-const { inboxLinks } = require('./inbox-link');
+const { inboxLinks, inboxClientKind, primaryInboxHref } = require('./inbox-link');
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -76,11 +76,21 @@ function mediaBlock(row) {
     <p class="meta">Messenger links can expire. This address is saved with the item.</p>`;
 }
 
-function reviewCard(row, pageId) {
+function reviewCard(row, pageId, ua) {
   const summary = row.summary || {};
   const who = row.customerName || `…${row.psidLast4 || ''}`;
   const status = row.status === 'reviewed' ? 'Reviewed' : 'New';
   const links = inboxLinks(pageId, row);
+  const href = primaryInboxHref({
+    kind: inboxClientKind(ua, false),
+    suiteHref: links.suite,
+    androidHref: links.android,
+    messengerHref: links.messenger,
+  });
+  const thread = links.itemId ? `thread id: ${links.itemId}` : 'thread id: not found';
+  const debug = [thread, `button: ${href}`];
+  if (links.messenger) debug.push(`messenger: ${links.messenger}`);
+  debug.push(`desktop: ${links.suite}`);
   const fields = [
     ['Size', summary.size],
     ['Brand', summary.brand],
@@ -98,18 +108,19 @@ function reviewCard(row, pageId) {
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
     ${dl}
     ${mediaBlock(row)}
-    <p><a class="inbox-primary" href="${esc(links.suite)}" data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>
+    <p><a class="inbox-primary" href="${esc(href)}" data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>
     ${links.messenger ? `<p><a href="${esc(links.messenger)}">Open in Messenger</a></p>` : ''}
+    <p class="meta debug">${esc(debug.join(' · '))}</p>
     ${button}
   </article>`;
 }
 
-function listPage(cfg, reviews) {
+function listPage(cfg, reviews, ua) {
   const rows = [...(reviews || [])].sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
   const fresh = rows.filter((r) => r.status !== 'reviewed').length;
   const title = fresh ? `(${fresh}) JMAG's Video Review` : "JMAG's Video Review";
   const cards = rows.length
-    ? rows.map((r) => reviewCard(r, cfg.pageId)).join('\n')
+    ? rows.map((r) => reviewCard(r, cfg.pageId, ua)).join('\n')
     : '<p class="empty">No photos or videos yet.</p>';
   return shell({
     title,

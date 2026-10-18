@@ -54,7 +54,15 @@ function urlBase64ToUint8Array(base64) {
   return out;
 }
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+if ('serviceWorker' in navigator) {
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
+  navigator.serviceWorker.register('/sw.js');
+}
 
 // Same rules as inboxClientKind / primaryInboxHref in src/inbox-link.js.
 // Desktop keeps the https Business Suite link. Android opens the Business Suite

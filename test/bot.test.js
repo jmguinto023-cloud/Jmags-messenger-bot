@@ -226,8 +226,27 @@ test('a numeric NEEDS_IVAN_LABEL is applied as the label id', async () => {
     await s.post(msg('num', { attachments: [{ type: 'image', payload: { url: 'https://example.com/pic.jpg' } }] }));
     assert.equal(s.mock.calls.labelCreates.length, 0);
     assert.match(s.mock.calls.labels[0].path, /\/555001\/label$/);
+    assert.equal(s.mock.calls.labels[0].user, 'num');
     assert.equal(s.mock.calls.pass.length, 0);
   } finally { await s.close(); }
+});
+
+test('a custom label whose id is the PSID is not posted to /{psid}/label', async () => {
+  const s = await setup({ LOG_LEVEL: 'warn' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => logged.push(a.map(String).join(' '));
+  s.mock.state.customLabels = [{ id: '555', page_label_name: 'Video for review' }];
+  s.mock.state.labelId = '555';
+  try {
+    await s.post(msg('555', { attachments: [{ type: 'image', payload: { url: 'https://example.com/pic.jpg' } }] }));
+    assert.equal(s.mock.calls.labels.length, 0);
+    assert.equal(s.mock.calls.labelCreates[0].page_label_name, 'Video for review');
+    assert.ok(logged.some((l) => /refusing to POST \/555\/label/.test(l)));
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
 });
 
 test('audio still hands the thread to the Page Inbox', async () => {
@@ -1187,11 +1206,11 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.equal(links.messenger, `https://www.facebook.com/${PAGE}/inbox/555001/`);
   assert.equal(JSON.stringify(links).includes('cust-7771'), false);
   assert.equal(links.suite.includes('t_9988'), false);
-  assert.match(links.android, new RegExp(`^intent://business\\.facebook\\.com/latest/inbox/all\\?`));
-  assert.match(links.android, new RegExp(`package=${BUSINESS_SUITE_PACKAGE}`));
-  assert.match(links.android, new RegExp(`selected_item_id=555001`));
-  const fallback = encodeURIComponent(links.messenger);
-  assert.ok(links.android.includes(`S.browser_fallback_url=${fallback}`));
+  assert.equal(links.android, `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${BUSINESS_SUITE_PACKAGE};S.browser_fallback_url=${encodeURIComponent(links.messenger)};end`);
+  assert.equal(links.android.includes('business.facebook.com'), false);
+  const noThread = inboxLinks(PAGE, {});
+  assert.equal(noThread.android, `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${BUSINESS_SUITE_PACKAGE};end`);
+  assert.equal(noThread.android.includes('browser_fallback_url'), false);
   const fromThreadOnly = inboxLinks(PAGE, { psid: 'cust-7771', conversationId: 't_555001', conversationLink: 'https://m.me/102622881557025' });
   assert.equal(fromThreadOnly.itemId, '555001');
   assert.equal(fromThreadOnly.messenger, `https://www.facebook.com/${PAGE}/inbox/555001/`);
@@ -1212,6 +1231,14 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.match(js, /pointer:\s*coarse/);
   assert.match(js, /data-android-href/);
   assert.match(js, /data-messenger-href/);
+  assert.match(js, /controllerchange/);
+  assert.match(js, /location\.reload/);
+  const sw = fs.readFileSync(path.join(__dirname, '../public/sw.js'), 'utf8');
+  assert.match(sw, /jmags-video-shell-v5/);
+  assert.match(sw, /skipWaiting/);
+  assert.match(sw, /clients\.claim/);
+  assert.match(sw, /network-first for data/);
+  assert.match(sw, /\/dashboard\.js/);
 });
 
 test('a stored conversation deep-links Business Suite and the Messenger app', async () => {
@@ -1256,7 +1283,14 @@ test('a stored conversation deep-links Business Suite and the Messenger app', as
     assert.match(html, new RegExp(`package=${BUSINESS_SUITE_PACKAGE}`));
     assert.match(html, /Open in Messenger/);
     assert.ok(html.includes(`https://www.facebook.com/${PAGE}/inbox/555001/`));
+    assert.match(html, /thread id: 555001/);
     assert.equal(s.mock.calls.conversations.length, 1);
+    const phoneUa = 'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/120.0.0.0 Mobile Safari/537.36';
+    const phone = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie, 'User-Agent': phoneUa } })).text();
+    assert.match(phone, /<a class="inbox-primary" href="intent:#Intent;action=android\.intent\.action\.MAIN;category=android\.intent\.category\.LAUNCHER;package=com\.facebook\.pages\.app;/);
+    assert.doesNotMatch(phone, /<a class="inbox-primary" href="https:\/\/business\.facebook\.com/);
+    assert.match(phone, /thread id: 555001/);
+    assert.match(phone, new RegExp(`messenger: https://www.facebook.com/${PAGE}/inbox/555001/`));
     const rows = await (await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } })).json();
     assert.equal(JSON.stringify(rows).includes('cust-7771'), false);
     assert.equal(rows[0].conversationId, 't_9988');
@@ -1278,6 +1312,7 @@ test('a Graph conversation error keeps the generic inbox link', async () => {
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
     assert.equal(html.includes('selected_item_id'), false);
     assert.equal(html.includes('Open in Messenger'), false);
+    assert.match(html, /thread id: not found/);
     assert.ok(html.includes(`https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}`));
     assert.equal(s.app.store.data.reviews[0].conversationId, '');
     assert.ok(logged.some((l) => /conversation lookup failed/.test(l) && /boom/.test(l)));

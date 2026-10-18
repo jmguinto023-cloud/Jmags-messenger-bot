@@ -102,22 +102,32 @@ class Graph {
       return '';
     }
   }
-  // Tag the customer with a Page Inbox label. A numeric value is already an id.
-  // A name is created via custom_labels when missing, and the id is cached per name.
+  // Tag the customer with a Page Inbox label.
+  // Find or create via /{page-id}/custom_labels, then POST /{label-id}/label?user={psid}.
+  // Never POST /{psid}/label — that node rejects the method with "Unsupported request".
   async addLabel(psid, labelName) {
     const name = String(labelName || '').trim();
-    if (!name) return null;
-    let id = this.labelIds.get(name);
-    if (!id) {
-      if (/^\d+$/.test(name)) id = name;
-      else {
-        const list = await this.call('GET', `${this.pageNode()}/custom_labels`, { params: { fields: 'page_label_name', limit: '100' } });
-        const found = (list.data || []).find((l) => l.page_label_name === name);
-        id = found ? found.id : (await this.call('POST', `${this.pageNode()}/custom_labels`, { body: { page_label_name: name } })).id;
+    const user = String(psid || '').trim();
+    if (!name || !user) return null;
+    let labelId = this.labelIds.get(name);
+    if (!labelId) {
+      const page = this.pageNode();
+      if (/^\d+$/.test(name) && name !== user) labelId = name;
+      else if (!/^\d+$/.test(name)) {
+        const list = await this.call('GET', `${page}/custom_labels`, { params: { fields: 'id,name,page_label_name', limit: '100' } });
+        const found = (list.data || []).find((l) => l && (l.page_label_name === name || l.name === name) && l.id && String(l.id) !== user);
+        if (found) labelId = String(found.id);
+        else {
+          const created = await this.call('POST', `${page}/custom_labels`, { body: { page_label_name: name, name } });
+          labelId = created && created.id ? String(created.id) : '';
+        }
       }
-      if (id) this.labelIds.set(name, id);
+      if (labelId && labelId !== user) this.labelIds.set(name, labelId);
     }
-    return this.call('POST', `${id}/label`, { body: { user: psid } });
+    if (!labelId || labelId === user) {
+      throw new Error(`refusing to POST /${user}/label; no custom label id`);
+    }
+    return this.call('POST', `${labelId}/label`, { params: { user } });
   }
 }
 module.exports = { Graph };

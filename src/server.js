@@ -50,11 +50,12 @@ function createServer({ cfg, bot, log }) {
 
     if (req.method === 'GET' && url.pathname === '/dashboard') {
       if (!validSession(cfg, readCookie(req))) return send(200, loginPage(), 'text/html; charset=utf-8');
+      const ua = req.headers['user-agent'];
       bot.hydrateReviewConversations().then(() => {
-        send(200, listPage(cfg, bot.store.data.reviews || []), 'text/html; charset=utf-8');
+        send(200, listPage(cfg, bot.store.data.reviews || [], ua), 'text/html; charset=utf-8');
       }, (e) => {
         log.warn('conversation hydrate failed', e.message);
-        send(200, listPage(cfg, bot.store.data.reviews || []), 'text/html; charset=utf-8');
+        send(200, listPage(cfg, bot.store.data.reviews || [], ua), 'text/html; charset=utf-8');
       });
       return;
     }
