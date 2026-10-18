@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const CONV_KEEP_MS = 60 * 86400e3;
+// Technician photo/video cards. Same 60-day window as the conversation export.
+const REVIEW_KEEP_MS = 60 * 86400e3;
 
 function psidHash(psid) {
   return crypto.createHash('sha256').update(String(psid)).digest('hex').slice(0, 16);
@@ -26,6 +28,7 @@ class Store {
       this.data.threads ||= {};
       this.data.seenMids ||= [];
       this.data.reviews ||= [];
+      this.data.deletionCodes ||= {};
       for (const t of Object.values(this.data.threads)) t.followupPending = false;
     } catch (e) {
       console.error('Store load failed, starting empty:', e.message);
@@ -94,10 +97,20 @@ class Store {
     }
     return rows;
   }
-  addReview(review, now = Date.now()) {
+  pruneReviews(now = Date.now()) {
     this.data.reviews ||= [];
-    const keepAfter = now - CONV_KEEP_MS;
-    this.data.reviews = this.data.reviews.filter((r) => Date.parse(r.timestamp) >= keepAfter);
+    const keepAfter = now - REVIEW_KEEP_MS;
+    const before = this.data.reviews.length;
+    this.data.reviews = this.data.reviews.filter((r) => {
+      const ts = Date.parse(r.timestamp);
+      return !Number.isNaN(ts) && ts >= keepAfter;
+    });
+    const removed = before - this.data.reviews.length;
+    if (removed) this.save();
+    return removed;
+  }
+  addReview(review, now = Date.now()) {
+    this.pruneReviews(now);
     this.data.reviews.push(review);
     if (this.data.reviews.length > 500) this.data.reviews.splice(0, this.data.reviews.length - 500);
     this.save();
@@ -129,7 +142,9 @@ class Store {
     return list.length;
   }
   // Delete chats with no activity for `days` days (privacy: keep data only as long as needed).
+  // Photo and video review cards are always pruned at 60 days, even when chat purge is off.
   purge(days, now = Date.now()) {
+    this.pruneReviews(now);
     if (!days || days <= 0) return 0;
     let removed = 0;
     for (const [psid, t] of Object.entries(this.data.threads)) {
@@ -139,8 +154,56 @@ class Store {
     if (removed) this.save();
     return removed;
   }
-  // Remove one customer's data (deletion request).
-  forget(psid) { delete this.data.threads[psid]; this.save(); }
+  dropConversationLines(hash) {
+    if (!hash || !fs.existsSync(this.convFile)) return 0;
+    const kept = [];
+    let removed = 0;
+    for (const line of fs.readFileSync(this.convFile, 'utf8').split('\n')) {
+      if (!line) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row.psidHash === hash) { removed += 1; continue; }
+      } catch { /* keep unreadable lines */ }
+      kept.push(line);
+    }
+    if (removed) fs.writeFileSync(this.convFile, kept.length ? `${kept.join('\n')}\n` : '');
+    return removed;
+  }
+  rememberDeletion(code, record) {
+    this.data.deletionCodes ||= {};
+    this.data.deletionCodes[String(code)] = record;
+    this.flushNow();
+  }
+  deletionStatus(code) {
+    return (this.data.deletionCodes || {})[String(code || '')] || null;
+  }
+  flushNow() {
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    this.flush();
+  }
+  // Remove every stored record for one PSID. Returns counts of what was deleted.
+  forget(psid) {
+    const key = String(psid || '').trim();
+    const hash = key ? psidHash(key) : '';
+    const thread = key ? this.data.threads[key] : null;
+    const followups = thread && (thread.followupCount || thread.followupPending || thread.lastFollowupAt) ? 1 : 0;
+    const threads = thread ? 1 : 0;
+    if (thread) delete this.data.threads[key];
+    this.data.reviews ||= [];
+    const beforeReviews = this.data.reviews.length;
+    this.data.reviews = this.data.reviews.filter((r) => r.psid !== key && r.psidHash !== hash);
+    const reviews = beforeReviews - this.data.reviews.length;
+    const conversations = this.dropConversationLines(hash);
+    let pushSubscriptions = 0;
+    try {
+      const subs = this.readSubscriptions();
+      const kept = subs.filter((s) => !s || (s.psid !== key && s.psidHash !== hash));
+      pushSubscriptions = subs.length - kept.length;
+      if (pushSubscriptions) this.writeSubscriptions(kept);
+    } catch { pushSubscriptions = 0; }
+    this.flushNow();
+    return { threads, reviews, conversations, pushSubscriptions, followups };
+  }
   // Returns true if this message id was already processed (Meta can retry webhooks).
   seen(mid) {
     if (!mid) return false;
@@ -165,4 +228,4 @@ class Store {
     }
   }
 }
-module.exports = { Store, psidHash };
+module.exports = { Store, psidHash, REVIEW_KEEP_MS, CONV_KEEP_MS };

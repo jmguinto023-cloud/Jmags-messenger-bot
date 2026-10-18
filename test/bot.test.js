@@ -8,7 +8,8 @@ const path = require('node:path');
 const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { Bot, isActiveNow, keywordHit } = require('../src/bot');
-const { Store } = require('../src/store');
+const { Store, psidHash } = require('../src/store');
+const { parseSignedRequest } = require('../src/signed-request');
 const { parseHandoff, normalizeTurns } = require('../src/llm');
 const { sanitizeOutgoing } = require('../src/messages');
 const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
@@ -1645,5 +1646,181 @@ test('standby and paused videos are saved and pushed without a reply', async () 
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
     assert.match(html, /bot not replying, standby\/paused/);
     assert.equal(html.includes('stand-vid'), false);
+  } finally { await s.close(); }
+});
+
+function assertLegalPage(html, otherPath) {
+  assert.doesNotMatch(html, /\[[^\]\n]{0,80}\]/);
+  assert.equal(html.includes('['), false);
+  assert.doesNotMatch(html, /email/i);
+  assert.match(html, /October 18, 2026/);
+  assert.match(html, /San Pablo City, Laguna and General Trias, Cavite, Philippines/);
+  assert.match(html, /09386369374 \(Smart\)/);
+  assert.match(html, /09267229506 \(Globe\)/);
+  assert.match(html, /https:\/\/jmags-messenger-bot\.onrender\.com\/privacy/);
+  assert.match(html, /https:\/\/jmags-messenger-bot\.onrender\.com\/data-deletion/);
+  assert.match(html, new RegExp(`href="${otherPath}"`));
+  assert.match(html, /<footer>/);
+  assert.match(html, /href="\/privacy"/);
+  assert.match(html, /href="\/data-deletion"/);
+  assert.match(html, /name="viewport"/);
+}
+
+test('privacy and data-deletion pages are public and have no placeholders', async () => {
+  const s = await setup();
+  try {
+    for (const file of ['privacy.html', 'data-deletion.html']) {
+      const raw = fs.readFileSync(path.join(__dirname, '../public', file), 'utf8');
+      assert.equal(raw.includes('['), false);
+      assert.doesNotMatch(raw, /email/i);
+    }
+    const privacy = await fetch(`${s.base}/privacy`);
+    const privacyHtml = await privacy.text();
+    assert.equal(privacy.status, 200);
+    assert.match(privacy.headers.get('content-type'), /text\/html/);
+    assertLegalPage(privacyHtml, '/data-deletion');
+    assert.match(privacyHtml, /Render/);
+    assert.match(privacyHtml, /Anthropic \(Claude\)/);
+    assert.match(privacyHtml, /90 days/);
+    assert.match(privacyHtml, /60 days/);
+    assert.match(privacyHtml, /30 days/);
+    assert.equal(loadConfig({}).dataRetentionDays, 90);
+
+    const deletion = await fetch(`${s.base}/data-deletion`);
+    const deletionHtml = await deletion.text();
+    assert.equal(deletion.status, 200);
+    assert.match(deletion.headers.get('content-type'), /text\/html/);
+    assertLegalPage(deletionHtml, '/privacy');
+    assert.match(deletionHtml, /90 days/);
+    assert.match(deletionHtml, /60 days/);
+    assert.match(deletionHtml, /30 days/);
+    assert.doesNotMatch(deletionHtml, /type="password"/);
+  } finally { await s.close(); }
+});
+
+test('admin forget deletes every stored record for that PSID', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  try {
+    await s.post(msg('del-1', { text: 'please keep this until forget' }));
+    await s.post(msg('stay-2', { text: 'leave this customer' }));
+    const t = s.app.store.thread('del-1');
+    t.followupCount = 2;
+    t.lastFollowupAt = Date.now();
+    s.app.bot.rev.set('del-1', 4);
+    s.app.store.addReview({
+      id: 'rev-del',
+      timestamp: new Date().toISOString(),
+      psid: 'del-1',
+      psidHash: psidHash('del-1'),
+      psidLast4: 'el-1',
+      type: 'video',
+      url: 'https://cdn.example/del.mp4',
+      status: 'new',
+    });
+    s.app.store.addReview({
+      id: 'rev-stay',
+      timestamp: new Date().toISOString(),
+      psid: 'stay-2',
+      psidHash: psidHash('stay-2'),
+      type: 'photo',
+      url: 'https://cdn.example/stay.jpg',
+      status: 'new',
+    });
+    s.app.store.writeSubscriptions([
+      { endpoint: 'https://push.example/del', psid: 'del-1' },
+      { endpoint: 'https://push.example/keep' },
+    ]);
+    const file = path.join(s.app.cfg.dataDir, 'conversations.jsonl');
+    assert.match(fs.readFileSync(file, 'utf8'), new RegExp(psidHash('del-1')));
+    const res = await fetch(`${s.base}/admin/forget?psid=del-1`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm' },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.threads, 1);
+    assert.equal(body.reviews, 1);
+    assert.ok(body.conversations >= 1);
+    assert.equal(body.pushSubscriptions, 1);
+    assert.equal(body.followups, 1);
+    assert.equal(s.app.store.data.threads['del-1'], undefined);
+    assert.equal(s.app.store.data.reviews.some((r) => r.psid === 'del-1'), false);
+    assert.ok(s.app.store.data.threads['stay-2']);
+    assert.ok(s.app.store.data.reviews.some((r) => r.psid === 'stay-2'));
+    const left = fs.readFileSync(file, 'utf8');
+    assert.equal(left.includes(psidHash('del-1')), false);
+    assert.match(left, new RegExp(psidHash('stay-2')));
+    assert.equal(s.app.store.readSubscriptions().some((sub) => sub.psid === 'del-1'), false);
+    assert.equal(s.app.store.readSubscriptions().some((sub) => sub.endpoint === 'https://push.example/keep'), true);
+    assert.equal(s.app.bot.rev.has('del-1'), false);
+  } finally { await s.close(); }
+});
+
+test('review cards older than 60 days are pruned', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-reviews-'));
+  const store = new Store(dir);
+  const now = Date.now();
+  store.data.reviews = [
+    { id: 'old', timestamp: new Date(now - 61 * 86400e3).toISOString(), psid: 'old-1', type: 'video' },
+    { id: 'fresh', timestamp: new Date(now - 10 * 86400e3).toISOString(), psid: 'new-1', type: 'photo' },
+  ];
+  assert.equal(store.purge(90, now), 0);
+  assert.deepEqual(store.data.reviews.map((r) => r.id), ['fresh']);
+});
+
+function metaSignedRequest(payload, secret) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  return `${sig}.${body}`;
+}
+
+test('Meta data-deletion callback deletes the user and shows a confirmation page', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  try {
+    await s.post(msg('meta-user-9', { text: 'delete me later' }));
+    s.app.store.addReview({
+      id: 'rev-meta',
+      timestamp: new Date().toISOString(),
+      psid: 'meta-user-9',
+      psidHash: psidHash('meta-user-9'),
+      type: 'video',
+      url: 'https://cdn.example/meta.mp4',
+      status: 'new',
+    });
+    const bad = await fetch(`${s.base}/data-deletion-callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'signed_request=not-a-real-signature',
+    });
+    assert.equal(bad.status, 400);
+    assert.ok(s.app.store.data.threads['meta-user-9']);
+
+    const signed = metaSignedRequest({
+      algorithm: 'HMAC-SHA256',
+      user_id: 'meta-user-9',
+      issued_at: Math.floor(Date.now() / 1000),
+    }, SECRET);
+    assert.equal(parseSignedRequest(signed, SECRET).user_id, 'meta-user-9');
+    assert.equal(parseSignedRequest(signed, 'wrong-secret'), null);
+    const res = await fetch(`${s.base}/data-deletion-callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `signed_request=${encodeURIComponent(signed)}`,
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.match(body.url, /^https:\/\/jmags-messenger-bot\.onrender\.com\/data-deletion\?code=/);
+    assert.equal(body.confirmation_code, new URL(body.url).searchParams.get('code'));
+    assert.equal(s.app.store.data.threads['meta-user-9'], undefined);
+    assert.equal(s.app.store.data.reviews.some((r) => r.psid === 'meta-user-9'), false);
+    const page = await fetch(`${s.base}/data-deletion?code=${body.confirmation_code}`);
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, new RegExp(body.confirmation_code));
+    assert.match(html, /was received/);
+    assert.equal(html.includes('meta-user-9'), false);
+    const missing = await (await fetch(`${s.base}/data-deletion?code=does-not-exist`)).text();
+    assert.match(missing, /could not find confirmation code/i);
+    assert.match(missing, /does-not-exist/);
   } finally { await s.close(); }
 });
