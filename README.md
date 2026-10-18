@@ -140,6 +140,7 @@ npm start           # run (needs env, see .env.example)
   Real shop rows are not in git. After deploy, `POST /admin/ops/import` with `Authorization: Bearer ADMIN_TOKEN`
   accepts JSON `{ jobsCsv, paymentsCsv, adSpendCsv, customers, parts, bookings, expenses, otherIncome }`
   or `text/csv` with `?type=jobs|payments|ads`. The dashboard cookie cannot call import.
+  Payment rows that share a date, job, type, method, amount, and note are all kept. Importing the same file again does not add those rows a second time.
 - A linked customer who asks `ano na status`, `kumusta na TV ko`, or `tapos na po ba` is answered from that job
   (status + the status note) in Taglish. With no link, the bot asks for the booking name and phone and answers
   only when both match the same customer. Anything unsure is handed to Ivan. Another customer's name, phone,

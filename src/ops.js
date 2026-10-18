@@ -345,12 +345,22 @@ function upsertJobs(ops, incoming) {
 }
 
 function addPayments(ops, incoming) {
-  const seen = new Set(ops.payments.map(payKey));
+  // Same date, job, type, method, amount, and note can be two real payments.
+  // Match by how many times that key already exists, so a re-import does not
+  // add a second copy of each row and a first import does not drop repeats.
+  const remaining = new Map();
+  for (const row of ops.payments) {
+    const key = payKey(row);
+    remaining.set(key, (remaining.get(key) || 0) + 1);
+  }
   let n = 0;
   for (const row of incoming) {
     const key = payKey(row);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const left = remaining.get(key) || 0;
+    if (left > 0) {
+      remaining.set(key, left - 1);
+      continue;
+    }
     ops.payments.push(row);
     n += 1;
   }

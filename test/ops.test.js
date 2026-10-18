@@ -11,7 +11,7 @@ const { loadConfig } = require('../src/config');
 const { asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
 const {
   emptyOps, moneyReport, nextJobId, addMonths, jobStatusText, dailyStatusText, warrantyText,
-  asksJobStatus, asksWarrantyProblem, importOps, parseJobsCsv, jobBalance, duplicatePayments,
+  asksJobStatus, asksWarrantyProblem, importOps, parseJobsCsv, jobBalance, jobPaid, duplicatePayments,
   ensureOps, STATUSES, DELIVERY_NOTICE, DELIVERY_STATUS,
 } = require('../src/ops');
 
@@ -166,6 +166,43 @@ test('money totals, job ids, warranty date, and sample replies', () => {
   const sw = fs.readFileSync(path.join(__dirname, '../public/sw.js'), 'utf8');
   assert.match(sw, /jmags-video-shell-v7/);
   assert.match(sw, /\/ops/);
+});
+
+test('payment import keeps identical rows up to the CSV count and does not double them', () => {
+  const csv = [
+    'Date,JO number,Customer,Branch,Type,Method,Amount (₱),Note',
+    '2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,first visit',
+    '2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,first visit',
+    '2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Check-up fee,GCash,1500,first visit',
+  ].join('\n');
+  const store = { data: {}, save() {} };
+  const first = importOps(store, { paymentsCsv: csv });
+  assert.equal(first.payments, 3);
+  const repairs = () => store.data.ops.payments.filter((p) => p.type === 'Repair' && p.amount === 2500);
+  assert.equal(repairs().length, 2);
+  assert.equal(jobPaid({ id: 'JO-261018-001', importedPaid: 0 }, store.data.ops.payments), 6500);
+
+  const again = importOps(store, { paymentsCsv: csv });
+  assert.equal(again.payments, 0);
+  assert.equal(store.data.ops.payments.length, 3);
+
+  const oneShort = { data: { ops: { jobs: [], payments: [store.data.ops.payments[0]], expenses: [], ads: [], parts: [], bookings: [], customers: [], otherIncome: [] } }, save() {} };
+  const caughtUp = importOps(oneShort, { paymentsCsv: csv });
+  assert.equal(caughtUp.payments, 2);
+  assert.equal(oneShort.data.ops.payments.filter((p) => p.amount === 2500).length, 2);
+  assert.equal(oneShort.data.ops.payments.filter((p) => p.amount === 1500).length, 1);
+
+  const extra = importOps(store, {
+    paymentsCsv: `${csv}\n2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,first visit`,
+  });
+  assert.equal(extra.payments, 1);
+  assert.equal(repairs().length, 3);
+
+  const otherNote = importOps(store, {
+    paymentsCsv: 'Date,JO number,Customer,Branch,Type,Method,Amount (₱),Note\n2026-10-18,JO-261018-001,Liza Mercado,San Pablo,Repair,Cash,2500,second visit',
+  });
+  assert.equal(otherNote.payments, 1);
+  assert.equal(store.data.ops.payments.filter((p) => p.note === 'second visit').length, 1);
 });
 
 test('import requires the admin token and the operations page stays behind the dashboard login', async () => {
