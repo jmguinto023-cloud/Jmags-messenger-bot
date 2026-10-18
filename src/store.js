@@ -29,6 +29,14 @@ class Store {
       this.data.seenMids ||= [];
       this.data.reviews ||= [];
       this.data.deletionCodes ||= {};
+      this.data.ops ||= {
+        jobs: [], payments: [], expenses: [], ads: [], parts: [],
+        bookings: [], customers: [], otherIncome: [],
+      };
+      const ops = this.data.ops;
+      for (const key of ['jobs', 'payments', 'expenses', 'ads', 'parts', 'bookings', 'customers', 'otherIncome']) {
+        if (!Array.isArray(ops[key])) ops[key] = [];
+      }
       for (const t of Object.values(this.data.threads)) {
         t.followupPending = false;
         t.videoFollowupPending = false;
@@ -157,6 +165,7 @@ class Store {
     return list.length;
   }
   // Delete chats with no activity for `days` days (privacy: keep data only as long as needed).
+  // Job orders, payments, and parts in data.ops stay. They are the shop book, not a chat log.
   // Photo and video review cards are always pruned at 60 days, even when chat purge is off.
   purge(days, now = Date.now()) {
     this.pruneReviews(now);
@@ -204,6 +213,11 @@ class Store {
     const followups = thread && (thread.followupCount || thread.followupPending || thread.lastFollowupAt || thread.videoReplyAt || thread.videoFollowupCount) ? 1 : 0;
     const threads = thread ? 1 : 0;
     if (thread) delete this.data.threads[key];
+    if (this.data.ops && Array.isArray(this.data.ops.jobs)) {
+      for (const job of this.data.ops.jobs) {
+        if (job && job.psid === key) job.psid = '';
+      }
+    }
     this.data.reviews ||= [];
     const beforeReviews = this.data.reviews.length;
     this.data.reviews = this.data.reviews.filter((r) => r.psid !== key && r.psidHash !== hash);

@@ -8,6 +8,8 @@ const path = require('node:path');
 const { passwordOk, readCookie, validSession, sessionCookie, clearCookie } = require('./dash-session');
 const { loginPage, listPage, publicReview, threadsPayload } = require('./dashboard-page');
 const { parseSignedRequest } = require('./signed-request');
+const { buildView, applyAction, exportCsv, importOps, linkReviewToJob } = require('./ops');
+const { opsPage } = require('./ops-page');
 
 const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
 
@@ -17,6 +19,8 @@ const FILES = {
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
   '/dashboard.js': ['dashboard.js', 'text/javascript; charset=utf-8'],
   '/dashboard.css': ['dashboard.css', 'text/css; charset=utf-8'],
+  '/ops.js': ['ops.js', 'text/javascript; charset=utf-8'],
+  '/ops.css': ['ops.css', 'text/css; charset=utf-8'],
   '/icons/icon-192.png': ['icons/icon-192.png', 'image/png'],
   '/icons/icon-512.png': ['icons/icon-512.png', 'image/png'],
 };
@@ -58,6 +62,23 @@ function createServer({ cfg, bot, log }) {
     if (req.method === 'GET' && (url.pathname === '/privacy' || url.pathname === '/data-deletion')) {
       const file = url.pathname === '/privacy' ? 'privacy.html' : 'data-deletion.html';
       return send(200, legalHtml(file, url.searchParams.get('code') || ''), 'text/html; charset=utf-8');
+    }
+
+    if (req.method === 'GET' && url.pathname === '/ops') {
+      if (!validSession(cfg, readCookie(req))) return send(200, loginPage('', '/ops'), 'text/html; charset=utf-8');
+      return send(200, opsHtml(url), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/ops/export') {
+      if (!dashOk(cfg, req)) return send(403, 'Forbidden');
+      const kind = url.searchParams.get('kind') || 'jobs';
+      if (!['jobs', 'money', 'finance'].includes(kind)) return send(400, 'bad kind');
+      const csv = exportCsv(bot.store, kind, viewOpts(url));
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="jmags-${kind}.csv"`,
+      });
+      res.end(csv);
+      return;
     }
 
     if (req.method === 'GET' && url.pathname === '/dashboard') {
@@ -122,7 +143,7 @@ function createServer({ cfg, bot, log }) {
       return send(403, 'Forbidden');
     }
 
-    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply');
+    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply' || url.pathname === '/dashboard/link-job' || url.pathname === '/ops/action');
     if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || dashPost)) {
       const chunks = [];
       let size = 0;
@@ -133,6 +154,8 @@ function createServer({ cfg, bot, log }) {
         if (url.pathname === '/dashboard/logout') return dashboardLogout();
         if (url.pathname === '/dashboard/reviewed') return dashboardReviewed(req, raw);
         if (url.pathname === '/dashboard/api/reply') return dashboardReply(req, raw);
+        if (url.pathname === '/dashboard/link-job') return dashboardLinkJob(req, raw);
+        if (url.pathname === '/ops/action') return opsAction(req, raw);
         if (url.pathname === '/dashboard/api/subscribe') return subscribe(req, raw);
         if (url.pathname === '/data-deletion-callback') return dataDeletionCallback(raw);
         if (url.pathname.startsWith('/admin/')) return admin(url, req, raw);
@@ -151,10 +174,12 @@ function createServer({ cfg, bot, log }) {
     return send(404, 'Not found');
 
     function dashboardLogin(rq, raw) {
-      const password = new URLSearchParams(raw.toString('utf8')).get('password') || '';
-      if (!cfg.dashboardPassword) return send(401, loginPage('missing'), 'text/html; charset=utf-8');
-      if (!passwordOk(cfg, password)) return send(401, loginPage('bad'), 'text/html; charset=utf-8');
-      res.writeHead(303, { Location: '/dashboard', 'Set-Cookie': sessionCookie(cfg, rq) });
+      const params = new URLSearchParams(raw.toString('utf8'));
+      const password = params.get('password') || '';
+      const next = params.get('next') === '/ops' ? '/ops' : '/dashboard';
+      if (!cfg.dashboardPassword) return send(401, loginPage('missing', next), 'text/html; charset=utf-8');
+      if (!passwordOk(cfg, password)) return send(401, loginPage('bad', next), 'text/html; charset=utf-8');
+      res.writeHead(303, { Location: next, 'Set-Cookie': sessionCookie(cfg, rq) });
       res.end('');
     }
 
@@ -164,7 +189,49 @@ function createServer({ cfg, bot, log }) {
     }
 
     function dashboardHtml() {
-      return listPage(cfg, bot.store.data.reviews || [], bot.store.data.threads || {}, bot.now());
+      const jobs = (bot.store.data.ops && bot.store.data.ops.jobs) || [];
+      return listPage(cfg, bot.store.data.reviews || [], bot.store.data.threads || {}, bot.now(), jobs);
+    }
+
+    function viewOpts(u) {
+      return {
+        tab: u.searchParams.get('tab') || 'today',
+        branch: u.searchParams.get('branch') || 'ALL',
+        period: u.searchParams.get('period') || 'month',
+        status: u.searchParams.get('status') || '',
+        edit: u.searchParams.get('edit') || '',
+        now: bot.now(),
+        tz: cfg.timezone,
+        dailyOn: cfg.dailyStatusUpdates,
+        threads: bot.store.data.threads || {},
+        reviews: bot.store.data.reviews || [],
+        cfg,
+      };
+    }
+
+    function opsHtml(u) {
+      return opsPage(buildView(bot.store, viewOpts(u)));
+    }
+
+    function opsAction(rq, raw) {
+      if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
+      const params = new URLSearchParams(raw.toString('utf8'));
+      const result = applyAction(bot.store, params, bot.now(), cfg.timezone);
+      if (!result.ok) return send(400, result.error || 'Bad request');
+      const tab = params.get('returnTab') || params.get('tab') || 'today';
+      const branch = params.get('returnBranch') || params.get('branch') || 'ALL';
+      const period = params.get('returnPeriod') || params.get('period') || 'month';
+      res.writeHead(303, { Location: `/ops?tab=${encodeURIComponent(tab)}&branch=${encodeURIComponent(branch)}&period=${encodeURIComponent(period)}` });
+      res.end('');
+    }
+
+    function dashboardLinkJob(rq, raw) {
+      if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
+      const params = new URLSearchParams(raw.toString('utf8'));
+      const result = linkReviewToJob(bot.store, params.get('review') || '', params.get('jobId') || '');
+      if (!result.ok) return send(400, result.error || 'Bad request');
+      res.writeHead(303, { Location: '/dashboard' });
+      res.end('');
     }
 
     function dashboardReply(rq, raw) {
@@ -219,7 +286,27 @@ function createServer({ cfg, bot, log }) {
         if (!psid) return send(400, 'psid required');
         return sendJson(200, bot.forgetCustomer(psid));
       }
+      if (u.pathname === '/admin/ops/import') return importOpsRoute(rq, raw);
       return send(404, 'Not found');
+    }
+
+    function importOpsRoute(rq, raw) {
+      const type = uType(rq);
+      const ctype = String(rq.headers['content-type'] || '');
+      let payload;
+      if (ctype.includes('text/csv') || ctype.includes('text/plain')) {
+        if (!['jobs', 'payments', 'ads'].includes(type)) return send(400, 'type required');
+        payload = { csv: raw.toString('utf8'), type };
+      } else {
+        try { payload = JSON.parse(raw.toString('utf8') || '{}'); } catch { return send(400, 'Bad JSON'); }
+      }
+      return sendJson(200, { ok: true, ...importOps(bot.store, payload) });
+    }
+
+    function uType(rq) {
+      const header = rq.url || '';
+      const q = header.includes('?') ? header.slice(header.indexOf('?') + 1) : '';
+      return new URLSearchParams(q).get('type') || '';
     }
 
     function legalHtml(file, code) {

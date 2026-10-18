@@ -46,6 +46,9 @@ services:
         sync: false
       - key: VIDEO_FOLLOWUP2_MINUTES
         sync: false
+      # Off until the sample morning message is approved. Empty keeps the code default (off).
+      - key: DAILY_STATUS_UPDATES
+        sync: false
       - key: DATA_RETENTION_DAYS
         sync: false
       - key: BOOKING_FORM_URL

@@ -61,6 +61,7 @@ button {
   font-weight: 700;
 }
 button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+a.ops-link { align-self: center; color: var(--amber); font-weight: 700; padding: 12px 4px; }
 .status { min-height: 1.2em; color: var(--muted); font-size: 0.9rem; }
 .card {
   background: var(--card);

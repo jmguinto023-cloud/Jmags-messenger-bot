@@ -1285,7 +1285,7 @@ test('Business Suite uses the inbox thread id, and phones open the app or Messen
   assert.match(js, /controllerchange/);
   assert.match(js, /location\.reload/);
   const sw = fs.readFileSync(path.join(__dirname, '../public/sw.js'), 'utf8');
-  assert.match(sw, /jmags-video-shell-v6/);
+  assert.match(sw, /jmags-video-shell-v7/);
   assert.match(sw, /skipWaiting/);
   assert.match(sw, /clients\.claim/);
   assert.match(sw, /network-first for data/);

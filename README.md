@@ -99,6 +99,8 @@ npm start           # run (needs env, see .env.example)
 - Safety: BOT_ENABLED (default false), BOT_TEST_PSIDS allowlist, BOT_ACTIVE_HOURS / BOT_ALWAYS_ON_DAYS (Asia/Manila).
   An empty BOT_ACTIVE_HOURS is 24/7.
 - Storage: `DATA_DIR/state.json` (atomic writes); chats purged after DATA_RETENTION_DAYS of inactivity.
+  Job orders, payments, parts, and ad spend live in the same file (`data.ops`) and are not purged with chats.
+  `render.yaml` mounts a 1 GB disk at `/data` and sets `DATA_DIR=/data`, so this file survives restarts and deploys when that disk is attached to the service. The container disk by itself is ephemeral. There is no Postgres.
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
   Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
   name, Manila time, size, brand, problem, location, and the photo or video.
@@ -131,6 +133,22 @@ npm start           # run (needs env, see .env.example)
   the private key). Subscriptions are stored in `/data/push-subscriptions.json`. The page has an
   **Enable notifications** button. If the keys are missing, the dashboard still loads and says notifications
   are not set up. Optional `ALERT_WEBHOOK_URL` receives `POST {psid, type, url, snippet, timestamp}` as well.
+- `GET /ops` is JMAG's Operations (same dashboard password and cookie as `/dashboard`). It is a mobile-first
+  page with branch filters ALL / SAN PABLO / CAVITE and tabs Today, Jobs, Customers, Money, Finance, and Parts.
+  The video page links to Operations, and Operations links back to Videos. Each video card has **Link to job**.
+  Each job has a **Messenger chat** field and a **Status note for customer**.
+  Real shop rows are not in git. After deploy, `POST /admin/ops/import` with `Authorization: Bearer ADMIN_TOKEN`
+  accepts JSON `{ jobsCsv, paymentsCsv, adSpendCsv, customers, parts, bookings, expenses, otherIncome }`
+  or `text/csv` with `?type=jobs|payments|ads`. The dashboard cookie cannot call import.
+- A linked customer who asks `ano na status`, `kumusta na TV ko`, or `tapos na po ba` is answered from that job
+  (status + the status note) in Taglish. With no link, the bot asks for the booking name and phone and answers
+  only when both match the same customer. Anything unsure is handed to Ivan. Another customer's name, phone,
+  and address are never sent. A problem reported again while the unit is inside warranty (job date + 3 months)
+  gets the warranty end date, a request for the issue and a video, and a handoff, with no promise of coverage.
+- `DAILY_STATUS_UPDATES` defaults off. When on, Under Repair jobs with a linked chat get one short Taglish
+  update per Manila day from about 10:00 until 19:00, and only inside `REPLY_WINDOW_HOURS`. Outside that
+  window the send is skipped and Today lists **Needs text update** with the phone. Paused and handed-off chats
+  are skipped. Sample lines are in the pull request, not sent until the flag is turned on.
 
 ## Deploy (Render)
 `render.yaml` = Docker web service, Starter plan, Singapore, `/health` check, 1 GB disk at `/data`, `autoDeploy: false`.
