@@ -75,10 +75,13 @@ document.querySelectorAll('[data-filter]').forEach((input) => {
 });
 
 function areaFromAdName(name) {
-  const text = String(name || '').toUpperCase();
-  if (text.includes('CAVITE')) return 'CAVITE';
-  if (text.includes('LAGUNA')) return 'LAGUNA';
-  if (text.includes('BATANGAS')) return 'BATANGAS';
+  const text = String(name || '').trim();
+  if (/^cavite page ad$/i.test(text)) return 'CAVITE';
+  if (/^boosted posts?$/i.test(text)) return 'Boosted posts';
+  const upper = text.toUpperCase();
+  if (upper.includes('CAVITE')) return 'CAVITE';
+  if (upper.includes('LAGUNA')) return 'LAGUNA';
+  if (upper.includes('BATANGAS')) return 'BATANGAS';
   return '';
 }
 

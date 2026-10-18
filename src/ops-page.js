@@ -68,7 +68,7 @@ function adOptions(selected, extras) {
 
 function areaOptions(selected) {
   const current = !selected || selected === 'Not checked yet' ? '' : selected;
-  const list = ['', 'CAVITE', 'LAGUNA', 'BATANGAS'];
+  const list = ['', 'CAVITE', 'LAGUNA', 'BATANGAS', 'Boosted posts'];
   if (current && !list.includes(current)) list.push(current);
   return list.map((item) => `<option value="${esc(item)}"${item === current ? ' selected' : ''}>${esc(item || 'Not checked yet')}</option>`).join('');
 }
@@ -480,7 +480,7 @@ function jobFields(job, view) {
     ${field('How they found us', `<select name="leadSource">${options(LEAD_SOURCES, j.leadSource || 'Facebook')}</select>`)}
     ${field('Which ad brought them — required for Facebook (check the Messenger chat)', `<select name="ad">${adOptions(j.ad, ads)}</select>`)}
     ${field('Ad area', `<select name="adArea">${areaOptions(j.adArea)}</select>`)}
-    <p class="hint">Ad area fills in from the ad name: CAVITE, LAGUNA, or BATANGAS. LAGUNA and BATANGAS use the San Pablo ad budget, and CAVITE uses the Cavite budget. Edit the area when there is no ad.</p>
+    <p class="hint">Ad area fills in from the ad name: CAVITE, LAGUNA, or BATANGAS. Cavite Page ad uses the Cavite budget. LAGUNA and BATANGAS use the San Pablo budget. Boosted posts is its own budget and is not counted on either branch. Edit the area when there is no ad.</p>
     <div class="grid two">
       ${field('Repair total (₱)', `<input name="price" inputmode="decimal" value="${esc(j.price || '')}" placeholder="Includes the ₱1,000 check-up">`)}
       ${field('Date completed', `<input type="date" name="doneDate" value="${esc(j.doneDate || '')}">`)}
@@ -711,7 +711,7 @@ function budgetRow(view, key) {
 }
 
 function adBudgetFunnel(view) {
-  const order = [['Cavite', 'Cavite'], ['San Pablo', 'San Pablo'], ['Untraced', 'Untraced (no ad)']];
+  const order = [['Cavite', 'Cavite'], ['San Pablo', 'San Pablo'], ['Boosted posts', 'Boosted posts'], ['Untraced', 'Untraced (no ad)']];
   const total = (view.adBudget && view.adBudget.total) || { collected: 0, costs: 0, profit: 0, jobs: 0, adSpend: 0 };
   const cells = (pick) => order.map(([key]) => {
     const cls = key === 'Untraced' ? ' class="cream"' : '';
@@ -719,7 +719,7 @@ function adBudgetFunnel(view) {
   }).join('') + `<td>${pick(total)}</td>`;
   const count = view.adBudget ? view.adBudget.untraced : 0;
   return `<div class="table-wrap"><table class="funnel" data-group="ad-budget">
-    <tr><td></td><td>Cavite <span class="subline">Cavite ads</span></td><td>San Pablo <span class="subline">Laguna + Batangas</span></td><td class="cream">Untraced (no ad)</td><td>Total</td></tr>
+    <tr><td></td><td>Cavite <span class="subline">Cavite ads</span></td><td>San Pablo <span class="subline">Laguna + Batangas</span></td><td>Boosted posts <span class="subline">Not on either branch</span></td><td class="cream">Untraced (no ad)</td><td>Total</td></tr>
     <tr><td>Ad spend</td>${cells((row) => peso(row.adSpend))}</tr>
     <tr><td>Collected</td>${cells((row) => peso(row.collected))}</tr>
     <tr><td>Costs</td>${cells((row) => peso(row.costs))}</tr>
@@ -735,7 +735,7 @@ function untracedLink(view, count) {
 
 function crossBudget(view) {
   const cross = (view.adBudget && view.adBudget.cross) || {};
-  const budgets = [['Cavite', 'Cavite'], ['San Pablo', 'San Pablo'], ['Untraced', 'Untraced (no ad)']];
+  const budgets = [['Cavite', 'Cavite'], ['San Pablo', 'San Pablo'], ['Boosted posts', 'Boosted posts'], ['Untraced', 'Untraced (no ad)']];
   const shops = ['Cavite', 'San Pablo'];
   const rows = budgets.map(([key, label]) => {
     const values = shops.map((shop) => (cross[key] && cross[key][shop]) || { jobs: 0, collected: 0 });
@@ -850,7 +850,7 @@ function financeTab(view) {
     </table></div>
     ${view.group === 'ad' ? '' : untracedLink(view, view.adBudget ? view.adBudget.untraced : 0)}
     ${(view.money.expenses || []).length ? '' : '<p class="callout">No expenses recorded for this period, so profit is too high until they are entered (Money tab → + Add expense).</p>'}
-    <details class="card"><summary>How these numbers are counted</summary><p class="explain">Ad spend and chats come from the ad spend log. Bookings are schedule forms that were not dismissed. Money collected is payments in the period. Real profit is collections minus ad spend, expenses, and parts cost. Profit by ad budget uses the ad area on each job: LAGUNA and BATANGAS count on the San Pablo budget, and CAVITE counts on the Cavite budget. Jobs with no matching ad stay in Untraced (no ad).</p></details>
+    <details class="card"><summary>How these numbers are counted</summary><p class="explain">Ad spend and chats come from the ad spend log. Bookings are schedule forms that were not dismissed. Money collected is payments in the period. Real profit is collections minus ad spend, expenses, and parts cost. Profit by ad budget uses the ad area on each job: LAGUNA and BATANGAS count on the San Pablo budget, and CAVITE, including Cavite Page ad, counts on the Cavite budget. Boosted posts is a separate budget and is not counted on either branch. Jobs with no matching ad stay in Untraced (no ad).</p></details>
     ${crossBudget(view)}
     <section class="card">
       <h2>Profit by ad</h2>
@@ -876,7 +876,7 @@ function financeTab(view) {
         ${field('Period start *', `<input type="date" name="start" value="${esc(view.today)}" required>`)}
         ${field('Period end *', `<input type="date" name="end" value="${esc(view.today)}" required>`)}
       </div>
-      ${field('Branch / ad budget', `<select name="branch">${options(BRANCHES, 'San Pablo')}</select>`)}
+      ${field('Branch / ad budget', `<select name="branch">${options([...BRANCHES, 'Boosted posts'], 'San Pablo')}</select>`)}
       ${field('Amount spent (₱) *', '<input name="amount" inputmode="decimal" required>')}
       ${field('Chats (messaging conversations)', '<input name="chats" inputmode="numeric">')}
       ${field('Note', '<input name="note" placeholder="e.g. JUNE MESSAGING (Laguna) + Sony 65 post">')}

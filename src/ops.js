@@ -8,7 +8,8 @@ const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delive
 const TECHS = ['JM', 'Joshua', 'Unassigned'];
 const BRANCHES = ['San Pablo', 'Cavite'];
 const AD_AREAS = ['CAVITE', 'LAGUNA', 'BATANGAS'];
-const KNOWN_ADS = ['CAVITE - area ads', 'LAGUNA - area ads', 'BATANGAS - area ads', 'Not from an ad'];
+const KNOWN_ADS = ['CAVITE - area ads', 'Cavite Page ad', 'LAGUNA - area ads', 'BATANGAS - area ads', 'Not from an ad'];
+const BOOSTED_BUDGET = 'Boosted posts';
 const PAY_TYPES = ['Check-up fee', 'Repair', 'Parts', 'Other'];
 const METHODS = ['Cash', 'GCash', 'Maya', 'Bank transfer'];
 const TABS = ['today', 'jobs', 'customers', 'money', 'finance', 'parts'];
@@ -805,19 +806,28 @@ function financeReport(ops, { period = 'month', branch = 'ALL', now = Date.now()
   };
 }
 
+function isBoosted(value) {
+  return /^boosted posts?$/i.test(String(value || '').trim());
+}
+
 function areaFromAd(name) {
-  const text = String(name || '').toUpperCase();
+  const text = String(name || '').trim();
+  if (/^cavite page ad$/i.test(text)) return 'CAVITE';
+  if (isBoosted(text)) return BOOSTED_BUDGET;
+  const upper = text.toUpperCase();
   for (const area of AD_AREAS) {
-    if (text.includes(area)) return area;
+    if (upper.includes(area)) return area;
   }
   return '';
 }
 
 function adBudgetOf(record) {
   if (!record) return '';
+  if (isBoosted(record.adArea)) return BOOSTED_BUDGET;
   const fromArea = areaFromAd(record.adArea);
   if (fromArea === 'CAVITE') return 'Cavite';
   if (fromArea === 'LAGUNA' || fromArea === 'BATANGAS') return 'San Pablo';
+  if (isBoosted(record.ad)) return BOOSTED_BUDGET;
   const fromAd = areaFromAd(record.ad);
   if (fromAd === 'CAVITE') return 'Cavite';
   if (fromAd === 'LAGUNA' || fromAd === 'BATANGAS') return 'San Pablo';
@@ -825,11 +835,16 @@ function adBudgetOf(record) {
   return '';
 }
 
+function adSpendBudget(branch) {
+  if (isBoosted(branch)) return BOOSTED_BUDGET;
+  return canonBranch(branch) === 'Cavite' ? 'Cavite' : 'San Pablo';
+}
+
 function adBudgetReport(ops, { period = 'month', branch = 'ALL', now = Date.now(), tz = 'Asia/Manila' } = {}) {
   const range = periodRange(period, now, tz);
   const jobs = filterBranch(ops.jobs, branch);
   const byId = new Map(jobs.map((job) => [job.id, job]));
-  const keys = ['Cavite', 'San Pablo', 'Untraced'];
+  const keys = ['Cavite', 'San Pablo', BOOSTED_BUDGET, 'Untraced'];
   const buckets = Object.fromEntries(keys.map((key) => [key, { collected: 0, adSpend: 0, expenses: 0, parts: 0, jobs: 0 }]));
   const seen = new Set();
   const countJob = (job) => {
@@ -849,14 +864,13 @@ function adBudgetReport(ops, { period = 'month', branch = 'ALL', now = Date.now(
     countJob(job);
   }
   for (const ad of filterBranch(ops.ads, branch).filter((row) => adOverlaps(row, range))) {
-    const key = canonBranch(ad.branch) === 'Cavite' ? 'Cavite' : 'San Pablo';
-    buckets[key].adSpend += Number(ad.amount || 0);
+    buckets[adSpendBudget(ad.branch)].adSpend += Number(ad.amount || 0);
   }
   for (const exp of filterBranch(ops.expenses, branch).filter((row) => inRange(row.date, range))) {
     const linked = exp.jobId ? byId.get(exp.jobId) : null;
     const fromJob = linked ? adBudgetOf(linked) : '';
     const shop = canonBranch(exp.branch);
-    const key = fromJob || (shop === 'Cavite' || shop === 'San Pablo' ? shop : 'Untraced');
+    const key = fromJob || (isBoosted(exp.branch) ? BOOSTED_BUDGET : (shop === 'Cavite' || shop === 'San Pablo' ? shop : 'Untraced'));
     buckets[key].expenses += Number(exp.amount || 0);
   }
   const groups = {};
@@ -1459,7 +1473,7 @@ function exportCsv(store, kind, opts) {
     Section: 'ad', Label: a.note, Start: a.start, End: a.end, Branch: a.branch, Amount: a.amount, Chats: a.chats,
   }));
   const budget = view.adBudget || { groups: {}, untraced: 0 };
-  const budgetRows = ['Cavite', 'San Pablo', 'Untraced'].flatMap((key) => {
+  const budgetRows = ['Cavite', 'San Pablo', BOOSTED_BUDGET, 'Untraced'].flatMap((key) => {
     const row = (budget.groups && budget.groups[key]) || {};
     const label = key === 'Untraced' ? 'Untraced (no ad)' : key;
     return [
