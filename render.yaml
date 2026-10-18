@@ -1,6 +1,7 @@
 # Render Blueprint – one always-on web service (Starter plan, US$7/month) + 1 GB disk
 # (US$0.25/GB/month) so chat history and handoff status survive restarts and deploys.
-# Secrets marked "sync: false" are typed into the Render dashboard, never stored in this file.
+# sync: false keys are owned in the Render dashboard. A blueprint sync must not
+# overwrite them. Leave them without a value. Code defaults apply when unset.
 services:
   - type: web
     name: jmags-messenger-bot
@@ -17,16 +18,40 @@ services:
       - key: DATA_DIR
         value: /data
       - key: BOT_ENABLED
-        value: "false"
+        sync: false
       - key: BOT_TEST_PSIDS
         sync: false
-      # Empty means always on. Startup logs hours=24/7.
+      # Empty means always on. Startup logs hours=24/7. Code default timezone is Asia/Manila.
       - key: BOT_ACTIVE_HOURS
         sync: false
       - key: BOT_ALWAYS_ON_DAYS
         sync: false
       - key: BOT_TIMEZONE
-        value: Asia/Manila
+        sync: false
+      - key: BATCH_WINDOW_MS
+        sync: false
+      - key: REPLY_WINDOW_HOURS
+        sync: false
+      - key: HISTORY_TURNS
+        sync: false
+      - key: HUMAN_PAUSE_HOURS
+        sync: false
+      - key: HANDOFF_RESUME_HOURS
+        sync: false
+      - key: FOLLOWUP_AFTER_MIN
+        sync: false
+      - key: FOLLOWUP_MAX
+        sync: false
+      - key: DATA_RETENTION_DAYS
+        sync: false
+      - key: BOOKING_FORM_URL
+        sync: false
+      - key: HANDOFF_KEYWORDS
+        sync: false
+      - key: IGNORE_ECHO_APP_IDS
+        sync: false
+      - key: LOG_LEVEL
+        sync: false
       - key: VERIFY_TOKEN
         generateValue: true
       - key: ADMIN_TOKEN
@@ -49,28 +74,24 @@ services:
       - key: PAGE_INBOX_APP_ID
         value: "263902037430900"
       - key: NEEDS_IVAN_LABEL
-        value: "Video for review"
+        sync: false
       - key: ALERT_WEBHOOK_URL
         sync: false
-      - key: FOLLOWUP_AFTER_MIN
-        value: "120"
-      - key: FOLLOWUP_MAX
-        value: "2"
       - key: VAPID_PUBLIC_KEY
         sync: false
       - key: VAPID_PRIVATE_KEY
         sync: false
       - key: VAPID_SUBJECT
-        value: mailto:bot@jmags.local
+        sync: false
       - key: LLM_BASE_URL
         sync: false
       - key: LLM_API_KEY
         sync: false
       - key: LLM_MODEL
         sync: false
-      - key: HUMAN_PAUSE_HOURS
-        value: "12"
-      - key: HANDOFF_RESUME_HOURS
-        value: "72"
-      - key: DATA_RETENTION_DAYS
-        value: "90"
+      - key: LLM_TIMEOUT_MS
+        sync: false
+      - key: LLM_TEMPERATURE
+        sync: false
+      - key: LLM_MAX_TOKENS
+        sync: false
