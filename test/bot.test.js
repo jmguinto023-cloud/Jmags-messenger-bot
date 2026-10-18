@@ -291,6 +291,7 @@ test('human takeover: echo from another app (or no app_id) pauses the bot; own e
     await s.post(echo('888', APP, 'bot reply'));
     await s.post(msg('888', { text: 'hello po' }));
     assert.equal(s.mock.calls.messages.length, 1, 'own echo does not pause');
+    s.app.store.thread('888').lastUserTs -= 60e3; // Ivan types a minute later
     await s.post(echo('888', '263902037430900', '8500 po'));
     await s.post(msg('888', { text: 'sige po' }));
     assert.equal(s.mock.calls.messages.length, 1, 'paused after Ivan replied from inbox');
@@ -583,6 +584,7 @@ test('Mark as done: a normal message after our handoff resumes; standby does not
     assert.equal(t.pausedUntil, 0);
     assert.equal(t.passedByBot, false);
 
+    s.app.store.thread('mdone').lastUserTs -= 60e3;
     await s.post(echo('mdone', '263902037430900', 'ako na po'));
     await s.post(msg('mdone', { text: 'salamat po' }));
     assert.equal(s.mock.calls.llm.length, 1, 'human inbox reply still pauses the bot');
@@ -1823,4 +1825,121 @@ test('Meta data-deletion callback deletes the user and shows a confirmation page
     assert.match(missing, /could not find confirmation code/i);
     assert.match(missing, /does-not-exist/);
   } finally { await s.close(); }
+});
+
+const WELCOME = "Hello, Catherine Welcome sa JMAG's APPLIANCES Service. We're here to help you sa issue ng TV appliances po ninyo. Before we start, Ask ko lang po mga sumusunod for me to help you better.\n\nUnit/Brand:\nUnit Size:\nIssue:\nLocation:";
+
+test('automated Page Inbox echoes (welcome template, follow-up thanks) do not pause the bot', async () => {
+  const s = await setup({ LOG_LEVEL: 'info' });
+  const logged = [];
+  const orig = console.log;
+  console.log = (...a) => logged.push(a.map(String).join(' '));
+  try {
+    await s.post(msg('cath', { text: 'magkano pagawa tv 65' }));
+    assert.equal(s.mock.calls.messages.length, 1);
+    s.app.store.thread('cath').lastUserTs -= 5 * 60e3; // template is caught by text, not timing
+    await s.post(echo('cath', '263902037430900', WELCOME));
+    await s.post(echo('cath', '263902037430900', 'Maraming salamat po.'));
+    assert.equal(s.app.store.thread('cath').pausedUntil, 0);
+    assert.ok(logged.some((l) => /automated echo/.test(l) && /template/.test(l) && /not pausing/.test(l)));
+    assert.ok(logged.some((l) => /automated echo/.test(l) && /follows an automated echo/.test(l)));
+    await s.post(msg('cath', { text: 'san pablo laguna' }));
+    assert.equal(s.mock.calls.messages.length, 2, 'bot still answers after the automated greeting');
+  } finally {
+    console.log = orig;
+    await s.close();
+  }
+});
+
+test('Page Inbox echoes seconds after the customer (instant reply / Meta AI burst) do not pause', async () => {
+  const s = await setup();
+  try {
+    await s.post(msg('burst', { text: 'how much mag pagawa ng tv?' }));
+    await s.post(echo('burst', '263902037430900', 'Hello, Magandang araw po. Ano po ang brand ng TV at location po nila?'));
+    await s.post(echo('burst', '263902037430900', 'Depende po sa issue. Salamat po!'));
+    assert.equal(s.app.store.thread('burst').pausedUntil, 0);
+    await s.post(msg('burst', { text: 'nonood lng Balita Bigla namatay' }));
+    assert.equal(s.mock.calls.messages.length, 2);
+  } finally { await s.close(); }
+});
+
+test('own-app echoes are ignored; a genuine human echo minutes later still pauses', async () => {
+  const s = await setup({ AUTOMATED_ECHO_WINDOW_MS: '10000' });
+  try {
+    await s.post(msg('ivan', { text: 'hello po' }));
+    await s.post(echo('ivan', APP, 'Anong brand po?'));
+    assert.equal(s.app.store.thread('ivan').pausedUntil, 0);
+    assert.equal(s.app.store.thread('ivan').history.filter((h) => h.content === 'Anong brand po?').length, 0);
+    s.app.store.thread('ivan').lastUserTs -= 3 * 60e3;
+    await s.post(echo('ivan', '263902037430900', '8500 po all in na'));
+    const t = s.app.store.thread('ivan');
+    assert.ok(t.pausedUntil > Date.now() + 11 * 3600e3);
+    assert.match(t.pauseSource, /human echo/);
+    await s.post(msg('ivan', { text: 'sige po' }));
+    assert.equal(s.mock.calls.messages.length, 1);
+  } finally { await s.close(); }
+});
+
+test('human pause auto-expires after HUMAN_IDLE_RESUME_HOURS with no human reply', async () => {
+  const s = await setup();
+  try {
+    s.app.store.thread('idle').lastUserTs = Date.now() - 3600e3;
+    await s.post(echo('idle', '263902037430900', 'ako na po'));
+    assert.ok(s.app.store.thread('idle').pausedUntil > Date.now());
+    s.app.store.thread('idle').lastHumanEchoAt = Date.now() - 2.5 * 3600e3;
+    await s.post(msg('idle', { text: 'hello po nandyan pa kayo?' }));
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.app.store.thread('idle').pausedUntil, 0);
+    assert.equal(loadConfig({}).humanIdleResumeHours, 2);
+    assert.equal(loadConfig({ HUMAN_IDLE_RESUME_HOURS: '0' }).humanIdleResumeHours, 0);
+  } finally { await s.close(); }
+});
+
+test('startup clears legacy pauses set by automated echoes, keeps real ones; /admin/paused lists them', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  try {
+    const now = Date.now();
+    const start = now - 10 * 60e3;
+    const pausedUntil = start + 12 * 3600e3;
+    Object.assign(s.app.store.thread('legacy-tpl'), { pausedUntil, history: [
+      { role: 'user', content: '2yrs na po', ts: start - 7000 }, { role: 'assistant', content: WELCOME, ts: start },
+    ] });
+    Object.assign(s.app.store.thread('legacy-fast'), { pausedUntil, history: [
+      { role: 'user', content: 'how much?', ts: start - 2000 }, { role: 'assistant', content: 'Depende po sa issue.', ts: start },
+    ] });
+    Object.assign(s.app.store.thread('legacy-real'), { pausedUntil, history: [
+      { role: 'user', content: 'magkano po', ts: start - 5 * 60e3 }, { role: 'assistant', content: '8500 po', ts: start },
+    ] });
+    const res = await fetch(`${s.base}/admin/paused`, { headers: { Authorization: 'Bearer adm' } });
+    assert.equal((await res.json()).length, 3);
+    assert.equal((await fetch(`${s.base}/admin/paused`)).status, 403);
+    const cleared = s.app.bot.clearAutomatedPauses().sort();
+    assert.deepEqual(cleared, ['legacy-fast', 'legacy-tpl']);
+    assert.ok(s.app.store.thread('legacy-real').pausedUntil > now);
+    const left = await (await fetch(`${s.base}/admin/paused`, { headers: { Authorization: 'Bearer adm' } })).json();
+    assert.deepEqual(left.map((r) => r.psid), ['legacy-real']);
+    assert.equal(left[0].last4, 'real');
+  } finally { await s.close(); }
+});
+
+test('video after an automated greeting still gets the standard reply and a dashboard card', async () => {
+  const s = await setup();
+  try {
+    await s.post(msg('vidauto', { text: 'sira tv namin' }));
+    await s.post(echo('vidauto', '263902037430900', WELCOME));
+    assert.equal(s.app.store.thread('vidauto').pausedUntil, 0);
+    await s.post(msg('vidauto', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/auto.mp4' } }] }));
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Ipapacheck ko po sa technician/);
+    assert.ok(s.app.store.data.reviews.some((r) => r.url === 'https://cdn.example/auto.mp4' && !r.quietNote));
+  } finally { await s.close(); }
+});
+
+test('isAutomatedEchoText matches saved-reply templates and custom patterns only', () => {
+  const { isAutomatedEchoText } = require('../src/bot');
+  assert.equal(isAutomatedEchoText(WELCOME), true);
+  assert.equal(isAutomatedEchoText('Unit / Brand: Samsung'), true);
+  assert.equal(isAutomatedEchoText('8500 po all in'), false);
+  assert.equal(isAutomatedEchoText('Maraming salamat po.'), false);
+  assert.equal(isAutomatedEchoText('Salamat sa pag message sa JMAG', ['pag message sa jmag']), true);
+  assert.equal(isAutomatedEchoText('', []), false);
 });

@@ -28,6 +28,8 @@ if (require.main === module) {
   app.llm.systemPrompt(); // fail fast if prompt file is missing
   const purge = () => { const n = app.store.purge(cfg.dataRetentionDays); if (n) log.info(`purged ${n} inactive chats (> ${cfg.dataRetentionDays} days)`); };
   purge(); setInterval(purge, 24 * 3600e3).unref();
+  const unpaused = app.bot.clearAutomatedPauses();
+  if (unpaused.length) log.info(`resumed ${unpaused.length} chat(s) paused by automated Page echoes`);
   app.bot.startFollowups();
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'}`));
   const stop = async () => { log.info('shutting down'); app.server.close(); await app.bot.idle(); app.store.flush(); process.exit(0); };

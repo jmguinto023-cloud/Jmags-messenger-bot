@@ -46,6 +46,12 @@ npm start           # run (needs env, see .env.example)
   The log line includes `app_id=...`. `PAGE_AI_APP_IDS` (comma-separated, default empty) lists Meta automation
   app ids. An echo from one of those ids is logged as `page AI echo ... app_id=... – not pausing` and does not
   start the pause. `IGNORE_ECHO_APP_IDS` still drops an echo before that check.
+- Automated echoes never pause: a Page Inbox echo that matches a saved/instant-reply template ("Welcome sa JMAG",
+  "Unit/Brand:", ...; add more with `AUTOMATED_ECHO_PATTERNS`, separated by `||`), arrives within
+  `AUTOMATED_ECHO_WINDOW_MS` (default 10000) of the customer's message, or follows another automated echo that fast is
+  logged as `automated echo ... not pausing`. A real human pause also ends after `HUMAN_IDLE_RESUME_HOURS` (default 2)
+  with no new human reply. On startup, old pauses caused by automated echoes are cleared. `GET /admin/paused`
+  (Bearer ADMIN_TOKEN) lists chats where the bot is silent.
 - A photo or video is saved to the dashboard and push even when the bot is not replying: standby (another app
   owns the thread), a human pause, or a handoff. The card says `bot not replying, standby/paused`. The same
   message mid is not saved twice. Standby never sends a Messenger reply.
