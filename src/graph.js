@@ -2,10 +2,17 @@
 // Minimal client for Meta's official Graph API (Messenger Send API + Conversation Routing).
 const crypto = require('node:crypto');
 
-function participantName(row, pageId) {
+function participantRows(row) {
   const people = (row && row.participants && row.participants.data) || [];
-  const other = people.find((p) => p && p.name && String(p.id || '') !== String(pageId || ''));
-  return other ? String(other.name).trim() : '';
+  return people.map((p) => ({
+    id: String((p && p.id) || ''),
+    name: String((p && p.name) || '').trim(),
+  })).filter((p) => p.id || p.name);
+}
+
+function participantName(row, pageId) {
+  const other = participantRows(row).find((p) => p.name && p.id !== String(pageId || ''));
+  return other ? other.name : '';
 }
 
 class Graph {
@@ -105,9 +112,25 @@ class Graph {
         link: String(row.link || ''),
         updatedTime: String(row.updated_time || ''),
         name: participantName(row, this.cfg.pageId),
+        participants: participantRows(row),
       };
     }
     this.conversationCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+  // Business Manager id for this Page, if the token can read it. Cached 10 minutes.
+  // The desktop inbox redirect calls this id bpn_id. Null when the field is missing.
+  async pageBusiness() {
+    if (this.businessCache && Date.now() - this.businessCache.at < 10 * 60 * 1000) return this.businessCache.value;
+    let value = null;
+    try {
+      const json = await this.call('GET', this.pageNode(), { params: { fields: 'business' } });
+      const b = json && json.business;
+      if (b && b.id) value = { id: String(b.id), name: String(b.name || '') };
+    } catch (e) {
+      this.log.warn('page business lookup failed', e.message);
+    }
+    this.businessCache = { at: Date.now(), value };
     return value;
   }
   // Best-effort public name. Missing permission or a failed lookup just returns ''.

@@ -64,18 +64,23 @@ npm start           # run (needs env, see .env.example)
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
   Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
   name (or last 4 of the PSID), Manila time, size, brand, problem, location, the photo or video, and a link to
-  that customer's Business Suite thread. On a computer the button is
-  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}&selected_item_id={THREAD}&mailbox_id={PAGE_ID}&thread_type=FB_MESSAGE`.
-  `{THREAD}` is the bare number in Graph's conversation `link` (`/inbox/{THREAD}/`), or the digits after `t_`
-  when the link has no inbox id. It is not the customer's PSID and it does not include the `t_` prefix.
+  the Page inbox. On a computer and on iPhone the button is the inbox list,
+  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}`.
+  Putting the thread number in `selected_item_id` redirects to facebook.com
+  (`bpn_id`, `asset_id`, `nav_ref=manage_page_ap_plus_default`) and shows
+  "Sorry, this content isn't available right now", so that deep link is not the button.
+  The card shows the customer name and **Kopyahin ang pangalan**, which copies it for the inbox search.
+  `GET /admin/inbox-candidates?psid=` (Bearer `ADMIN_TOKEN`) returns the PSID, Graph conversation id,
+  `/inbox/{digits}/` thread number, participant ids, the Page business id, and candidate URLs
+  (`latest/inbox/all`, `latest/inbox/messenger`, with and without `bpn_id`, `facebook.com/messages/t/`).
   The Graph id and `link` come from
-  `GET /{page-id}/conversations?platform=messenger&user_id={PSID}&fields=id,link,updated_time` and are cached.
-  If that call fails, or the id is not numeric, the button falls back to the inbox list (`asset_id` only).
+  `GET /{page-id}/conversations?platform=messenger&user_id={PSID}&fields=id,link,updated_time,participants`
+  and are cached. The business id comes from `GET /{page-id}?fields=business`.
   On Android the button is a real link, chosen from the phone's User-Agent:
   `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.facebook.pages.app;end`.
   Package `com.facebook.pages.app` is the Meta Business Suite app. Tapping it copies the customer's name and shows
   `Nakopya ang pangalan ni {name} — i-paste sa search ng inbox`. A **Kopyahin ang pangalan** button does the same
-  without leaving the page. The name comes from the profile, or from the conversation participants when the profile
+  without leaving the page. The same button is on the desktop card. The name comes from the profile, or from the conversation participants when the profile
   has none. The phone does not show `facebook.com/{page}/inbox/{thread}`: that URL opens the personal Facebook feed.
   An intent whose data is `https://business.facebook.com/latest/inbox/...?selected_item_id=...` is also omitted.
   Samsung Internet unwraps that into the mobile site, whose thread pane fails, even with no `browser_fallback_url`.
