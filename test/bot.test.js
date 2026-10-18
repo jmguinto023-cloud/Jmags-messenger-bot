@@ -15,7 +15,10 @@ const { updateIntake, intakeContext, CLOSE_LINE } = require('../src/intake');
 const { summarizeConversation } = require('../src/summary');
 const { loadConfig } = require('../src/config');
 const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
-const { genericInboxUrl, businessSuiteThreadUrl, messengerAppHref } = require('../src/inbox-link');
+const {
+  genericInboxUrl, businessSuiteThreadUrl, messengerAppHref, inboxLinks, threadItemId,
+  inboxClientKind, primaryInboxHref, BUSINESS_SUITE_PACKAGE,
+} = require('../src/inbox-link');
 
 const SECRET = 'test_app_secret';
 const PAGE = '102622881557025';
@@ -1133,7 +1136,7 @@ test('dashboard login lists videos without the full PSID and marks them reviewed
     assert.match(html, /Open chat in Business Suite/);
     assert.match(html, new RegExp(`asset_id=${PAGE}`));
     assert.doesNotMatch(html, /selected_item_id/);
-    assert.doesNotMatch(html, /Open in Messenger app/);
+    assert.doesNotMatch(html, /Open in Messenger/);
     assert.match(html, /Mark reviewed/);
     assert.match(html, /1 new/);
     assert.equal(html.includes('cust-7771'), false);
@@ -1168,19 +1171,47 @@ test('an empty dashboard password cannot log in', async () => {
   } finally { await s.close(); }
 });
 
-test('Business Suite thread URL uses the PSID and the Messenger app link drops m.me', () => {
-  const deep = `https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}&selected_item_id=cust-7771&mailbox_id=${PAGE}&thread_type=FB_MESSAGE`;
-  assert.equal(businessSuiteThreadUrl(PAGE, 'cust-7771'), deep);
+test('Business Suite uses the inbox thread id, and phones open the app or Messenger', () => {
+  const deep = `https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}&selected_item_id=555001&mailbox_id=${PAGE}&thread_type=FB_MESSAGE`;
+  assert.equal(businessSuiteThreadUrl(PAGE, '555001'), deep);
   assert.equal(businessSuiteThreadUrl(PAGE, ''), genericInboxUrl(PAGE));
-  assert.equal(genericInboxUrl(''), 'https://business.facebook.com/latest/inbox/all');
-  assert.equal(
-    messengerAppHref(`/${PAGE}/inbox/555001/`),
-    `https://www.facebook.com/${PAGE}/inbox/555001/`,
-  );
+  assert.equal(threadItemId('t_9988', `/${PAGE}/inbox/555001/`), '555001');
+  assert.equal(threadItemId('t_555001', ''), '555001');
+  assert.equal(threadItemId('t_not-numeric', 'https://m.me/102622881557025'), '');
+  const links = inboxLinks(PAGE, {
+    psid: 'cust-7771',
+    conversationId: 't_9988',
+    conversationLink: `/${PAGE}/inbox/555001/`,
+  });
+  assert.equal(links.suite, deep);
+  assert.equal(links.messenger, `https://www.facebook.com/${PAGE}/inbox/555001/`);
+  assert.equal(JSON.stringify(links).includes('cust-7771'), false);
+  assert.equal(links.suite.includes('t_9988'), false);
+  assert.match(links.android, new RegExp(`^intent://business\\.facebook\\.com/latest/inbox/all\\?`));
+  assert.match(links.android, new RegExp(`package=${BUSINESS_SUITE_PACKAGE}`));
+  assert.match(links.android, new RegExp(`selected_item_id=555001`));
+  const fallback = encodeURIComponent(links.messenger);
+  assert.ok(links.android.includes(`S.browser_fallback_url=${fallback}`));
+  const fromThreadOnly = inboxLinks(PAGE, { psid: 'cust-7771', conversationId: 't_555001', conversationLink: 'https://m.me/102622881557025' });
+  assert.equal(fromThreadOnly.itemId, '555001');
+  assert.equal(fromThreadOnly.messenger, `https://www.facebook.com/${PAGE}/inbox/555001/`);
+  assert.equal(fromThreadOnly.messenger.includes('m.me'), false);
   assert.equal(messengerAppHref('https://www.messenger.com/t/555001'), 'https://www.messenger.com/t/555001');
   assert.equal(messengerAppHref('https://m.me/102622881557025'), '');
-  assert.equal(messengerAppHref('https://example.com/inbox/1'), '');
-  assert.equal(messengerAppHref(''), '');
+  assert.equal(inboxClientKind('Mozilla/5.0 (Linux; Android 14)', false), 'android');
+  assert.equal(inboxClientKind('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)', false), 'ios');
+  assert.equal(inboxClientKind('Mozilla/5.0 (X11; Linux x86_64)', false), '');
+  assert.equal(inboxClientKind('Mozilla/5.0 (X11; Linux x86_64)', true), 'coarse');
+  assert.equal(primaryInboxHref({ kind: 'android', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.android);
+  assert.equal(primaryInboxHref({ kind: 'ios', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.suite);
+  assert.equal(primaryInboxHref({ kind: 'coarse', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.messenger);
+  assert.equal(primaryInboxHref({ kind: '', suiteHref: links.suite, androidHref: links.android, messengerHref: links.messenger }), links.suite);
+  const js = fs.readFileSync(path.join(__dirname, '../public/dashboard.js'), 'utf8');
+  assert.match(js, /Android/);
+  assert.match(js, /iPhone\|iPad\|iPod/);
+  assert.match(js, /pointer:\s*coarse/);
+  assert.match(js, /data-android-href/);
+  assert.match(js, /data-messenger-href/);
 });
 
 test('a stored conversation deep-links Business Suite and the Messenger app', async () => {
@@ -1214,10 +1245,16 @@ test('a stored conversation deep-links Business Suite and the Messenger app', as
 
     const { cookie } = await dashCookie(s.base);
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
-    const href = businessSuiteThreadUrl(PAGE, 'cust-7771').replaceAll('&', '&amp;');
+    const links = inboxLinks(PAGE, s.app.store.data.reviews[0]);
+    const href = links.suite.replaceAll('&', '&amp;');
     assert.match(html, /Open chat in Business Suite/);
     assert.ok(html.includes(`href="${href}"`));
-    assert.match(html, /Open in Messenger app/);
+    assert.ok(html.includes('selected_item_id=555001'));
+    assert.equal(html.includes('selected_item_id=cust-7771'), false);
+    assert.equal(html.includes('cust-7771'), false);
+    assert.ok(html.includes(`data-android-href="${links.android.replaceAll('&', '&amp;')}"`));
+    assert.match(html, new RegExp(`package=${BUSINESS_SUITE_PACKAGE}`));
+    assert.match(html, /Open in Messenger/);
     assert.ok(html.includes(`https://www.facebook.com/${PAGE}/inbox/555001/`));
     assert.equal(s.mock.calls.conversations.length, 1);
     const rows = await (await fetch(`${s.base}/dashboard/api/reviews`, { headers: { Authorization: 'Bearer adm' } })).json();
@@ -1240,7 +1277,7 @@ test('a Graph conversation error keeps the generic inbox link', async () => {
     const { cookie } = await dashCookie(s.base);
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
     assert.equal(html.includes('selected_item_id'), false);
-    assert.equal(html.includes('Open in Messenger app'), false);
+    assert.equal(html.includes('Open in Messenger'), false);
     assert.ok(html.includes(`https://business.facebook.com/latest/inbox/all?asset_id=${PAGE}`));
     assert.equal(s.app.store.data.reviews[0].conversationId, '');
     assert.ok(logged.some((l) => /conversation lookup failed/.test(l) && /boom/.test(l)));
@@ -1255,7 +1292,7 @@ test('a Graph conversation error keeps the generic inbox link', async () => {
 test('the dashboard fills a missing conversation id on first load', async () => {
   const s = await setup({ DASHBOARD_PASSWORD: 'secret' });
   s.mock.state.conversations = {
-    'lazy-9001': { id: 't_lazy', link: 'https://m.me/102622881557025', updated_time: '2026-05-03T00:00:00+0000' },
+    'lazy-9001': { id: 't_4242', link: `/${PAGE}/inbox/777/`, updated_time: '2026-05-03T00:00:00+0000' },
   };
   try {
     s.app.store.addReview({
@@ -1272,11 +1309,12 @@ test('the dashboard fills a missing conversation id on first load', async () => 
     }, Date.now());
     const { cookie } = await dashCookie(s.base);
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
-    const href = businessSuiteThreadUrl(PAGE, 'lazy-9001').replaceAll('&', '&amp;');
+    const href = businessSuiteThreadUrl(PAGE, '777').replaceAll('&', '&amp;');
     assert.ok(html.includes(`href="${href}"`));
-    assert.equal(html.includes('Open in Messenger app'), false);
-    assert.equal(s.app.store.data.reviews[0].conversationId, 't_lazy');
-    assert.equal(s.app.store.data.reviews[0].conversationLink, 'https://m.me/102622881557025');
+    assert.match(html, /Open in Messenger/);
+    assert.equal(html.includes('lazy-9001'), false);
+    assert.equal(s.app.store.data.reviews[0].conversationId, 't_4242');
+    assert.equal(s.app.store.data.reviews[0].conversationLink, `/${PAGE}/inbox/777/`);
     assert.equal(s.mock.calls.conversations.length, 1);
     await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } });
     assert.equal(s.mock.calls.conversations.length, 1);

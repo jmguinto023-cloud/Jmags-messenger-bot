@@ -1,6 +1,6 @@
 'use strict';
 // Server-rendered Ivan dashboard. No build step.
-const { genericInboxUrl, businessSuiteThreadUrl, messengerAppHref } = require('./inbox-link');
+const { inboxLinks } = require('./inbox-link');
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -80,10 +80,7 @@ function reviewCard(row, pageId) {
   const summary = row.summary || {};
   const who = row.customerName || `…${row.psidLast4 || ''}`;
   const status = row.status === 'reviewed' ? 'Reviewed' : 'New';
-  const inbox = row.conversationId && row.psid
-    ? businessSuiteThreadUrl(pageId, row.psid)
-    : genericInboxUrl(pageId);
-  const appHref = messengerAppHref(row.conversationLink);
+  const links = inboxLinks(pageId, row);
   const fields = [
     ['Size', summary.size],
     ['Brand', summary.brand],
@@ -101,8 +98,8 @@ function reviewCard(row, pageId) {
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
     ${dl}
     ${mediaBlock(row)}
-    <p><a href="${esc(inbox)}">Open chat in Business Suite</a></p>
-    ${appHref ? `<p><a href="${esc(appHref)}">Open in Messenger app</a></p>` : ''}
+    <p><a class="inbox-primary" href="${esc(links.suite)}" data-android-href="${esc(links.android)}" data-ios-href="${esc(links.suite)}" data-messenger-href="${esc(links.messenger)}">Open chat in Business Suite</a></p>
+    ${links.messenger ? `<p><a href="${esc(links.messenger)}">Open in Messenger</a></p>` : ''}
     ${button}
   </article>`;
 }

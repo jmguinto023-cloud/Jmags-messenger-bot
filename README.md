@@ -64,12 +64,18 @@ npm start           # run (needs env, see .env.example)
 - `GET /dashboard` is an installable PWA ("JMAG's Video Review" / "JMAG Videos") for phones and desktop
   Chrome or Edge. It asks for `DASHBOARD_PASSWORD` and sets an HttpOnly cookie. The list is newest first:
   name (or last 4 of the PSID), Manila time, size, brand, problem, location, the photo or video, and a link to
-  that customer's Business Suite thread:
-  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}&selected_item_id={PSID}&mailbox_id={PAGE_ID}&thread_type=FB_MESSAGE`.
-  `selected_item_id` is the customer's PSID. The Graph thread id (`t_...`) and `link` come from
+  that customer's Business Suite thread. On a computer the button is
+  `https://business.facebook.com/latest/inbox/all?asset_id={PAGE_ID}&selected_item_id={THREAD}&mailbox_id={PAGE_ID}&thread_type=FB_MESSAGE`.
+  `{THREAD}` is the bare number in Graph's conversation `link` (`/inbox/{THREAD}/`), or the digits after `t_`
+  when the link has no inbox id. It is not the customer's PSID and it does not include the `t_` prefix.
+  The Graph id and `link` come from
   `GET /{page-id}/conversations?platform=messenger&user_id={PSID}&fields=id,link,updated_time` and are cached.
-  If that call fails, the button falls back to the inbox list (`asset_id` only). When Graph returns a `link`,
-  the card also has "Open in Messenger app". `m.me` is not used: it opens a visitor chat with the Page, not the Page's thread.
+  If that call fails, or the id is not numeric, the button falls back to the inbox list (`asset_id` only).
+  On Android the same button is an `intent://` link for package `com.facebook.pages.app` (Meta Business Suite),
+  which claims `business.facebook.com`. If that app is missing, the intent opens the Page inbox link instead
+  of the mobile website. On iPhone and iPad the button stays the https Business Suite URL so the Page app's
+  universal link can claim it. The card also has "Open in Messenger" when a Page inbox link is known.
+  `m.me` is not used: it opens a visitor chat with the Page, not the Page's thread.
   Mark reviewed drops it from the New count. The page refreshes every 30 seconds.
   The shell is cached by the service worker; the review list is network-first.
   New photos and videos can send a Web Push if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set.
