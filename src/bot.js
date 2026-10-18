@@ -197,6 +197,8 @@ class Bot {
     this.store.addTurn(psid, 'user', logText, ts);
 
     const t = this.store.thread(psid);
+    t.followupFails = 0;
+    t.followupNextAt = 0;
     noteSuggestion(this.store, psid);
     // A new customer message ends a closed video follow-up, so a later silence
     // can use the normal quiet-customer nudge again.
@@ -494,23 +496,7 @@ class Bot {
         });
       } catch (e) {
         if ((this.rev.get(psid) || 0) !== rev) continue;
-        if (hadMedia) {
-          this.log.error(`LLM failed for media from ${short(psid)} (staying in chat):`, e.message);
-          this.repliedRev.set(psid, rev);
-          await this.sendMediaAck(psid, lines.mediaAck, hadMedia, { armVideo: hadVideo });
-          return;
-        }
-        const status = Number(e.status) || 0;
-        if (status >= 400 && status < 500) {
-          this.log.error(`LLM config error for ${short(psid)}: HTTP ${status} (not handing off). ${e.message}`);
-          this.repliedRev.set(psid, rev);
-          return this.send(psid, lines.fallback);
-        }
-        this.log.error(`LLM failed for ${short(psid)}:`, e.message);
-        t.fallbackCount = (t.fallbackCount || 0) + 1;
-        this.repliedRev.set(psid, rev);
-        if (t.fallbackCount >= 2) return this.handoff(psid, 'AI unavailable twice', lines.holding);
-        return this.send(psid, lines.fallback);
+        return this.giveUpOnAi(psid, e, { rev, hadMedia, hadVideo });
       }
       if ((this.rev.get(psid) || 0) !== rev) {
         this.cancelPending(psid);
@@ -518,6 +504,8 @@ class Bot {
         continue;
       }
       t.fallbackCount = 0;
+      t.aiNeedsIvan = false;
+      t.aiHoldingSent = false;
       const { text, handoff, reason } = parseHandoff(raw);
       if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
       const guarded = guardStaleReply(
@@ -559,9 +547,56 @@ class Bot {
     t.awaitingVideo = false;
   }
 
+  aiOutageReason(e) {
+    const status = Number(e && e.status) || 0;
+    if (status) return `AI unavailable: HTTP ${status}`;
+    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'AI unavailable: timeout';
+    return 'AI unavailable';
+  }
+
+  // The canned greeting is never the answer to an AI failure, and never goes out twice.
+  async giveUpOnAi(psid, e, { rev, hadMedia, hadVideo }) {
+    const t = this.store.thread(psid);
+    const reason = this.aiOutageReason(e);
+    this.log.error(`LLM outage for ${short(psid)}: ${reason}. ${e && e.message ? e.message : ''} No canned greeting.`);
+    t.aiNeedsIvan = true;
+    t.handoffReason = reason;
+    this.repliedRev.set(psid, rev);
+    this.store.save();
+    if (hadMedia) {
+      await this.sendMediaAck(psid, lines.mediaAck, true, { armVideo: hadVideo });
+      return;
+    }
+    if (t.aiHoldingSent || t.handedOff) {
+      if (!t.handedOff) {
+        t.handedOff = true;
+        t.handoffAt = this.now();
+        t.passedByBot = true;
+        this.stopVideoFollowup(psid, 'handed to Ivan');
+        this.store.save();
+        try { await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`); }
+        catch (err) { this.log.error('pass_thread_control failed', err.message); }
+      }
+      this.log.error(`LLM outage for ${short(psid)} still down; not sending another holding line`);
+      return;
+    }
+    t.aiHoldingSent = true;
+    this.store.save();
+    return this.handoff(psid, reason, lines.holding);
+  }
+
   async send(psid, text, opts = {}) {
     const clean = sanitizeOutgoing(text);
     if (!clean) { this.log.warn(`empty reply to ${short(psid)} after sanitize`); return; }
+    const existing = this.store.thread(psid);
+    if (clean === sanitizeOutgoing(lines.fallback)) {
+      if (existing.fallbackSent) {
+        this.log.warn(`suppressed repeat fallback greeting for ${short(psid)}`);
+        return;
+      }
+      existing.fallbackSent = true;
+      this.store.save();
+    }
     await this.graph.sendText(psid, clean);
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
@@ -887,6 +922,7 @@ class Bot {
       fresh.videoFollowupNotBefore = 0;
       this.store.save();
       this.log.info(`video follow-up ${fresh.videoFollowupCount} sent to ${short(psid)}`);
+      return true;
     } catch (e) {
       this.log.error(`video follow-up failed for ${short(psid)}:`, e.message);
     } finally {
@@ -1039,7 +1075,7 @@ class Bot {
   startFollowups() {
     if (this._followTimer) return;
     const tick = () => { this.checkFollowups().catch((e) => this.log.error('follow-up tick', e.message)); };
-    tick();
+    // Wait for the first minute. An immediate pass would message every overnight chat at once.
     this._followTimer = setInterval(tick, 60 * 1000);
     this._followTimer.unref?.();
   }
@@ -1053,10 +1089,16 @@ class Bot {
       const day = 24 * HOUR;
       const windowMs = 23 * HOUR;
       const now = this.now();
+      let slots = 1;
       for (const [psid, t] of Object.entries(this.store.data.threads)) {
         try {
-          await this.maybeVideoFollowUp(psid, t, now);
-          if (max > 0) await this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
+          if (slots <= 0) break;
+          const sentVideo = await this.maybeVideoFollowUp(psid, t, now);
+          if (sentVideo) { slots -= 1; continue; }
+          if (max > 0) {
+            const outcome = await this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
+            if (outcome === 'sent' || outcome === 'failed') slots -= 1;
+          }
         } catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
       }
       await this.maybeDailyStatus(now);
@@ -1079,6 +1121,9 @@ class Bot {
     // through to the generic nudge, which has no quiet hours.
     if (videoFollowupHoldsGeneric(t)) return 'video follow-up closed without a send';
     if (this.humanPaused(t, now)) return 'paused for a human';
+    if (t.followupNextAt && now < t.followupNextAt) return 'follow-up backing off';
+    const ageMs = (this.cfg.followupMaxAgeHours || 6) * HOUR;
+    if (now - (t.lastUserTs || 0) > ageMs) return 'last customer message is older than the follow-up window';
     if (now - (t.lastUserTs || 0) > windowMs) return 'outside 23h messaging window';
     const last = (t.history || [])[(t.history || []).length - 1];
     if (!last || last.role !== 'assistant') return 'customer spoke last';
@@ -1087,29 +1132,45 @@ class Bot {
 
   async maybeFollowUp(psid, t, { now, max, afterMs, day, windowMs }) {
     const skip = this.followUpSkip(psid, t, now, windowMs);
-    if (skip) return;
+    if (skip) return 'skip';
     const count = t.followupCount || 0;
-    if (count >= max) return;
+    if (count >= max) return 'skip';
     const last = t.history[t.history.length - 1];
     if (count === 0) {
-      if (now - (last.ts || 0) < afterMs) return;
-    } else if (now - (t.lastFollowupAt || 0) < day) return;
+      if (now - (last.ts || 0) < afterMs) return 'skip';
+    } else if (now - (t.lastFollowupAt || 0) < day) return 'skip';
     t.followupPending = true;
     this.store.save();
     try {
       const followHistory = visibleHistory(t.history, this.now(), { pendingReview: reviewPending(t) });
       const raw = await this.llm.followUp(followHistory, { nowText: this.nowText(), videoMissing: Boolean(t.awaitingVideo) });
       const { text } = parseHandoff(raw);
-      if (!sanitizeOutgoing(text)) return;
+      if (!sanitizeOutgoing(text)) return 'skip';
       const fresh = this.store.thread(psid);
-      if (this.followUpSkip(psid, fresh, this.now(), windowMs, { ignorePending: true })) return;
+      if (this.followUpSkip(psid, fresh, this.now(), windowMs, { ignorePending: true })) return 'skip';
       await this.send(psid, text);
       fresh.followupCount = (fresh.followupCount || 0) + 1;
       fresh.lastFollowupAt = this.now();
+      fresh.followupFails = 0;
+      fresh.followupNextAt = 0;
       this.store.save();
       this.log.info(`follow-up ${fresh.followupCount} to ${short(psid)}`);
+      return 'sent';
     } catch (e) {
-      this.log.error(`follow-up failed for ${short(psid)}:`, e.message);
+      const row = this.store.thread(psid);
+      row.followupFails = (row.followupFails || 0) + 1;
+      if (row.followupFails >= 2) {
+        row.followupCount = (row.followupCount || 0) + 1;
+        row.lastFollowupAt = this.now();
+        row.followupFails = 0;
+        row.followupNextAt = 0;
+        this.log.error(`follow-up given up for ${short(psid)} after 2 tries: ${e.message}`);
+      } else {
+        const waitMin = Math.min(60, 5 * (2 ** (row.followupFails - 1)));
+        row.followupNextAt = this.now() + waitMin * 60 * 1000;
+        this.log.error(`follow-up failed for ${short(psid)}; next try in ${waitMin}m: ${e.message}`);
+      }
+      return 'failed';
     } finally {
       this.store.thread(psid).followupPending = false;
       this.store.save();

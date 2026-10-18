@@ -37,6 +37,7 @@ async function setup(extraEnv = {}, mockOpts = {}) {
     DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', ...extraEnv,
   };
   const app = build(env);
+  app.llm.sleep = async () => {};
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   const post = async (payload, { sign = true, secret = SECRET } = {}) => {
@@ -346,16 +347,51 @@ test('ignores delivery/read events and duplicate (retried) messages', async () =
   } finally { await s.close(); }
 });
 
-test('LLM failure sends Ivan-style fallback, second failure hands off', async () => {
-  const s = await setup();
+test('LLM failure does not send the canned greeting and hands the chat to Ivan once', async () => {
+  const s = await setup({ LOG_LEVEL: 'error', DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => { logged.push(a.map(String).join(' ')); };
   s.mock.state.llmFail = true;
+  s.mock.state.llmStatus = 429;
+  s.mock.state.llmError = 'resource exhausted';
   try {
-    await s.post(msg('fail', { text: 'hm po' }));
-    assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
-    await s.post(msg('fail', { text: 'hello?' }));
+    await s.post(msg('chat-ai-4401', { text: 'hm po' }));
+    assert.equal(s.mock.calls.llm.length, 3);
+    assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.match(s.mock.calls.messages[0].message.text, /Si Ivan na po ang tutuloy/);
     assert.equal(s.mock.calls.pass.length, 1);
-    assert.equal(s.mock.calls.pass[0].target_app_id, '263902037430900');
-  } finally { await s.close(); }
+    assert.equal(s.app.store.thread('chat-ai-4401').handedOff, true);
+    assert.equal(s.app.store.thread('chat-ai-4401').aiNeedsIvan, true);
+    assert.match(s.app.store.thread('chat-ai-4401').handoffReason, /HTTP 429/);
+    assert.ok(logged.some((l) => /\bERROR\b/.test(l) && /429/.test(l) && /No canned greeting/.test(l)));
+    const health = await (await fetch(`${s.base}/health`)).json();
+    assert.equal(health.llmErrors, 3);
+    assert.match(health.llmLastError, /429/);
+    assert.equal(health.llmLastError.includes('chat-ai-4401'), false);
+
+    await s.post(msg('chat-ai-4401', { text: 'hello ulit po' }));
+    assert.equal(s.mock.calls.messages.filter((m) => /Si Ivan na po ang tutuloy/.test(m.message.text)).length, 1);
+    assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
+
+    const lines = require('../src/messages');
+    await s.app.bot.send('chat-ai-4401', lines.fallback);
+    await s.app.bot.send('chat-ai-4401', lines.fallback);
+    assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 1);
+
+    const { cookie } = await dashCookie(s.base);
+    const ops = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: cookie } })).text();
+    assert.match(ops, /id="ai-handoffs"/);
+    assert.match(ops, /data-ai-handoff="4401"/);
+    assert.match(ops, /AI unavailable: HTTP 429/);
+    assert.equal(ops.includes('chat-ai-4401'), false);
+    const paused = await (await fetch(`${s.base}/admin/paused`, { headers: { Authorization: 'Bearer adm' } })).json();
+    assert.ok(paused.some((row) => row.handoffReason === 'AI unavailable: HTTP 429'));
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
 });
 
 test('24-hour window: old (delayed) messages are not answered', async () => {
@@ -404,48 +440,51 @@ test('markdown in an AI reply is stripped before it is sent', async () => {
   } finally { await s.close(); }
 });
 
-test('LLM fallback is not stored in the history sent back to the model', async () => {
+test('a 429 is retried and the canned greeting is never sent or stored for the model', async () => {
   const s = await setup();
-  let failed = false;
+  let fails = 0;
   s.mock.state.llmGate = () => {
-    if (!failed) { failed = true; return { status: 500, message: 'unavailable' }; }
+    fails += 1;
+    if (fails < 3) return { status: 429, message: 'resource exhausted', retryAfter: '0' };
     return null;
   };
   s.mock.state.llmResponder = (body) => {
     const prev = body.messages.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n');
-    if (/brand at size|Pasensya/.test(prev)) return 'Pasensya na po maam/sir 😊 Nandito pa po ako!';
+    if (/brand at size|Si Ivan na po ang tutuloy/.test(prev)) return 'SHOULD NOT SEE CANNED';
     return 'Samsung 55 po, all-in including home service. Taga saan po sila?';
   };
   try {
     await s.post(msg('fb', { text: 'hm po backlight' }));
-    assert.match(s.mock.calls.messages[0].message.text, /brand at size/);
+    assert.equal(s.mock.calls.llm.length, 3);
+    assert.match(s.mock.calls.messages[0].message.text, /Samsung 55/);
+    assert.doesNotMatch(s.mock.calls.messages[0].message.text, /brand at size/);
+    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(s.app.llm.errors, 2);
     await s.post(msg('fb', { text: 'Samsung 55 Biñan' }));
     const nonSystem = s.mock.calls.llm.at(-1).body.messages.filter((m) => m.role !== 'system');
-    assert.deepEqual(nonSystem.map((m) => m.role), ['user']);
-    assert.match(nonSystem[0].content, /hm po backlight/);
-    assert.match(nonSystem[0].content, /Samsung 55/);
-    assert.equal(nonSystem.some((m) => /brand at size|Pasensya/.test(m.content)), false);
-    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /Pasensya/);
-    assert.equal(s.mock.calls.pass.length, 0);
+    assert.equal(nonSystem.some((m) => /brand at size|Si Ivan na po ang tutuloy/.test(m.content)), false);
+    assert.match(nonSystem.map((m) => m.content).join('\n'), /hm po backlight/);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /brand at size/);
   } finally { await s.close(); }
 });
 
-test('LLM HTTP 4xx is logged at ERROR and does not hand off', async () => {
+test('billing and config errors hand off without the canned greeting', async () => {
   const s = await setup({ LOG_LEVEL: 'error' });
   const logged = [];
   const orig = console.error;
   console.error = (...a) => { logged.push(a.map(String).join(' ')); };
   s.mock.state.llmFail = true;
   s.mock.state.llmStatus = 400;
-  s.mock.state.llmError = 'invalid api key';
+  s.mock.state.llmError = 'credit balance too low';
   try {
     await s.post(msg('cfg', { text: 'hm po' }));
     await s.post(msg('cfg', { text: 'hello ulit po' }));
-    assert.equal(s.mock.calls.pass.length, 0);
-    assert.equal(s.mock.calls.llm.length, 2);
-    assert.equal(s.app.store.thread('cfg').handedOff, false);
+    assert.equal(s.mock.calls.pass.length, 2);
+    assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
+    assert.equal(s.mock.calls.messages.filter((m) => /Si Ivan na po ang tutuloy/.test(m.message.text)).length, 1);
+    assert.equal(s.app.store.thread('cfg').handedOff, true);
     assert.equal(s.app.store.thread('cfg').history.some((h) => h.role === 'assistant'), false);
-    assert.ok(logged.some((l) => /\bERROR\b/.test(l) && /400/.test(l) && /config error/i.test(l)));
+    assert.ok(logged.some((l) => /\bERROR\b/.test(l) && /400/.test(l) && /No canned greeting/.test(l)));
   } finally {
     console.error = orig;
     await s.close();
@@ -2489,7 +2528,7 @@ test('a reply timer started inside BOT_SCHEDULE does not send after the window c
   } finally { await s.close(); }
 });
 
-test('follow-ups scheduled inside BOT_SCHEDULE wait until the window opens again', async () => {
+test('follow-ups wait for BOT_SCHEDULE and skip chats older than the follow-up window', async () => {
   const s = await setup({ BOT_SCHEDULE: '22:00-07:00', FOLLOWUP_AFTER_MIN: '120' });
   let now = Date.parse('2026-10-18T15:00:00Z'); // 23:00 PHT
   s.app.bot.now = () => now;
@@ -2505,11 +2544,31 @@ test('follow-ups scheduled inside BOT_SCHEDULE wait until the window opens again
     await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.length, 0);
     assert.equal(t.followupCount || 0, 0);
-    now = Date.parse('2026-10-19T14:00:00Z'); // 22:00 PHT, still inside 23h
+    now = Date.parse('2026-10-19T14:00:00Z'); // 22:00 next night, older than 6h
     await s.app.bot.checkFollowups();
-    assert.equal(s.mock.calls.messages.length, 1);
-    assert.equal(s.app.store.thread('quiet').followupCount, 1);
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.app.store.thread('quiet').followupCount || 0, 0);
   } finally { await s.close(); }
+
+  const gap = await setup({ BOT_SCHEDULE: '08:00-10:00,12:00-18:00', FOLLOWUP_AFTER_MIN: '120' });
+  let at = Date.parse('2026-10-18T01:00:00Z'); // 09:00 PHT
+  gap.app.bot.now = () => at;
+  gap.mock.state.llmResponder = () => 'May slot pa po this week sir.';
+  const row = gap.app.store.thread('midday');
+  row.history = [
+    { role: 'user', content: 'hm po', ts: at },
+    { role: 'assistant', content: 'Taga saan po?', ts: at },
+  ];
+  row.lastUserTs = at;
+  try {
+    at = Date.parse('2026-10-18T03:00:00Z'); // 11:00 PHT, closed, still inside 6h
+    await gap.app.bot.checkFollowups();
+    assert.equal(gap.mock.calls.messages.length, 0);
+    at = Date.parse('2026-10-18T04:00:00Z'); // 12:00 PHT, open again
+    await gap.app.bot.checkFollowups();
+    assert.equal(gap.mock.calls.messages.length, 1);
+    assert.equal(gap.app.store.thread('midday').followupCount, 1);
+  } finally { await gap.close(); }
 });
 
 test('video follow-ups stay inside BOT_SCHEDULE and can send during the night window', async () => {
@@ -2533,6 +2592,80 @@ test('video follow-ups stay inside BOT_SCHEDULE and can send during the night wi
     assert.equal(s.app.store.thread('early').videoFollowupNotBefore, Date.parse('2026-10-19T14:00:00Z'));
     now = Date.parse('2026-10-19T14:00:00Z'); // 22:00 PHT
     await s.app.bot.checkFollowups();
+    // One follow-up per pass. The earlier night video is due for its second nudge first.
+    assert.equal(s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'early' && /Na-review na po ba/.test(m.message.text)).length, 0);
+    await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'early' && /Na-review na po ba/.test(m.message.text)).length, 1);
+  } finally { await s.close(); }
+});
+
+test('LLM retries honor Retry-After and Gemini retryDelay, and fresh replies go ahead of follow-ups', async () => {
+  const { LlmGate, retryDelayMs } = require('../src/llm-gate');
+  assert.equal(retryDelayMs({ retryAfter: '2' }, 0), 2000);
+  assert.equal(retryDelayMs({ body: JSON.stringify({ error: { details: [{ retryDelay: '30s' }] } }) }, 0), 30000);
+  assert.equal(retryDelayMs({ status: 500 }, 0), 2000);
+  assert.equal(retryDelayMs({ status: 500 }, 1), 4000);
+  assert.equal(loadConfig({}).llmMaxRpm, 8);
+  assert.equal(loadConfig({ LLM_MAX_RPM: '0' }).llmMaxRpm, 0);
+  assert.equal(loadConfig({}).followupMaxAgeHours, 6);
+
+  const order = [];
+  let release;
+  const blocker = new Promise((r) => { release = r; });
+  const gate = new LlmGate({ rpm: 0, sleep: async () => {} });
+  const low = gate.schedule(async () => { await blocker; order.push('low'); }, { priority: 'low' });
+  const high = gate.schedule(async () => { order.push('high'); }, { priority: 'high' });
+  const low2 = gate.schedule(async () => { order.push('low2'); }, { priority: 'low' });
+  release();
+  await Promise.all([low, high, low2]);
+  assert.deepEqual(order, ['low', 'high', 'low2']);
+});
+
+test('failed follow-ups back off, old chats are skipped, and startup does not send them all', async () => {
+  const s = await setup({ FOLLOWUP_AFTER_MIN: '120' });
+  let now = Date.parse('2026-10-18T04:00:00Z');
+  s.app.bot.now = () => now;
+  s.mock.state.llmFail = true;
+  s.mock.state.llmStatus = 429;
+  const seed = (psid, ageMin) => {
+    const t = s.app.store.thread(psid);
+    const ts = now - ageMin * 60 * 1000;
+    t.history = [
+      { role: 'user', content: 'hm po', ts },
+      { role: 'assistant', content: 'Taga saan po?', ts },
+    ];
+    t.lastUserTs = ts;
+  };
+  try {
+    seed('old-chat', 7 * 60);
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(s.mock.calls.messages.length, 0);
+
+    seed('due-a', 130);
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.app.store.thread('due-a').followupFails, 1);
+    assert.ok(s.app.store.thread('due-a').followupNextAt > now);
+    const callsAfterFirst = s.mock.calls.llm.length;
+    now = s.app.store.thread('due-a').followupNextAt - 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.llm.length, callsAfterFirst);
+    now = s.app.store.thread('due-a').followupNextAt;
+    await s.app.bot.checkFollowups();
+    assert.equal(s.app.store.thread('due-a').followupCount, 1);
+    assert.equal(s.mock.calls.messages.length, 0);
+
+    seed('due-b', 130);
+    seed('due-c', 130);
+    s.mock.state.llmFail = false;
+    s.mock.state.llmResponder = () => 'May slot pa po this week sir.';
+    s.app.bot.startFollowups();
+    assert.equal(s.mock.calls.messages.length, 0);
+    clearInterval(s.app.bot._followTimer);
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 1);
+    await s.app.bot.checkFollowups();
+    assert.equal(s.mock.calls.messages.length, 2);
   } finally { await s.close(); }
 });

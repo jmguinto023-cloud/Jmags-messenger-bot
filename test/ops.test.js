@@ -37,6 +37,7 @@ async function setup(extraEnv = {}) {
     ADMIN_TOKEN: 'adm', DASHBOARD_PASSWORD: 'secret', ...extraEnv,
   };
   const app = build(env);
+  app.llm.sleep = async () => {};
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   const post = async (payload) => {

@@ -368,8 +368,11 @@ function todayTab(view) {
   const activity = view.jobs.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''))).slice(0, 8);
   const feed = activity.map((job) => `<li><b>${job.status === 'Completed' ? 'Marked job done' : 'Added a job'}: ${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">${esc(ago(job.updatedAt || job.createdAt, view.now))}</div></li>`).join('');
   const flags = `${view.dailyOn ? '' : '<p class="note" id="daily-flag">Daily status updates are off.</p>'}${view.deliveryOn ? '' : '<p class="note" id="delivery-flag">Delivery notifications are off.</p>'}`;
+  const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div></li>`).join('');
+  const ivan = ivanRows ? `<section class="card" id="ai-handoffs"><header><h2>Needs Ivan</h2><span class="meta">The AI could not answer</span></header><ul>${ivanRows}</ul></section>` : '';
   return `<section>
     ${flags}
+    ${ivan}
     <div class="kpis">
       ${kpi('Open jobs', k.open, 'open', `${k.inquiries || 0} inquiries waiting`)}
       ${kpi('Under repair', k.underRepair, 'under-repair', 'in the shop now')}

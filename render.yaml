@@ -45,6 +45,9 @@ services:
         sync: false
       - key: FOLLOWUP_MAX
         sync: false
+      # Empty keeps the code default (6 hours). Older chats are not nudged.
+      - key: FOLLOWUP_MAX_AGE_HOURS
+        sync: false
       - key: VIDEO_FOLLOWUP_MINUTES
         sync: false
       - key: VIDEO_FOLLOWUP2_MINUTES
@@ -110,4 +113,7 @@ services:
       - key: LLM_TEMPERATURE
         sync: false
       - key: LLM_MAX_TOKENS
+        sync: false
+      # Empty keeps the code default (8 requests per minute). 0 turns the gap off.
+      - key: LLM_MAX_RPM
         sync: false

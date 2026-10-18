@@ -48,6 +48,8 @@ function loadConfig(env = process.env) {
     llmTimeoutMs: num(env.LLM_TIMEOUT_MS, 20000),
     llmTemperature: /^off$/i.test(env.LLM_TEMPERATURE || '') ? null : num(env.LLM_TEMPERATURE, 0.4),
     llmMaxTokens: num(env.LLM_MAX_TOKENS, 400),
+    // Global cap so a restart or a 429 retry loop cannot burst the free-tier quota. 0 disables the gap.
+    llmMaxRpm: num(env.LLM_MAX_RPM, 8),
     // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
@@ -69,6 +71,8 @@ function loadConfig(env = process.env) {
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
     followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
     followupMax: num(env.FOLLOWUP_MAX, 2),
+    // No quiet-customer nudge when their last message is older than this. Stops an overnight burst.
+    followupMaxAgeHours: num(env.FOLLOWUP_MAX_AGE_HOURS, 6),
     // After a video reply, one nudge, then an optional gentler one. 0 disables the second.
     videoFollowupMinutes: num(env.VIDEO_FOLLOWUP_MINUTES, 30),
     videoFollowup2Minutes: num(env.VIDEO_FOLLOWUP2_MINUTES, 240),

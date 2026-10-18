@@ -1,12 +1,28 @@
 'use strict';
 // Calls any OpenAI-compatible Chat Completions API (provider chosen via env vars).
 const fs = require('node:fs');
+const { LlmGate, retryDelayMs } = require('./llm-gate');
+
+const RETRIES = 3;
+const RETRY_BUDGET_MS = 90_000;
 
 class LLM {
   constructor(cfg) {
     this.cfg = cfg;
     this._prompt = null;
     this.omitTemperature = false;
+    this.errors = 0;
+    this.lastError = '';
+    this.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    this.gate = new LlmGate({
+      rpm: cfg.llmMaxRpm,
+      sleep: (ms) => this.sleep(ms),
+    });
+  }
+
+  noteError(e) {
+    this.errors += 1;
+    this.lastError = String((e && e.message) || e || 'LLM error').replace(/\s+/g, ' ').slice(0, 300);
   }
   payload(messages) {
     const p = { model: this.cfg.llmModel, messages };
@@ -36,7 +52,7 @@ class LLM {
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
       ...normalizeTurns(history, { attachmentNote }),
     ];
-    return this.chat(messages);
+    return this.chat(messages, { priority: 'high' });
   }
 
   async followUp(history, { nowText, videoMissing } = {}) {
@@ -55,16 +71,34 @@ class LLM {
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Do not output [HANDOFF].${extra}` },
       ...turns,
     ];
-    return this.chat(messages);
+    return this.chat(messages, { priority: 'low' });
   }
 
-  async chat(messages) {
+  async chat(messages, { priority = 'high' } = {}) {
+    const started = Date.now();
+    let last;
+    for (let attempt = 0; attempt < RETRIES; attempt++) {
+      try {
+        return await this.once(messages, priority);
+      } catch (e) {
+        last = e;
+        this.noteError(e);
+        if (attempt === RETRIES - 1) break;
+        const remain = RETRY_BUDGET_MS - (Date.now() - started);
+        if (remain < 250) break;
+        await this.sleep(Math.min(retryDelayMs(e, attempt), remain));
+      }
+    }
+    throw last;
+  }
+
+  async once(messages, priority) {
     try {
-      return await this.complete(messages);
+      return await this.gate.schedule(() => this.complete(messages), { priority });
     } catch (e) {
       if (!this.shouldDropTemperature(e)) throw e;
       this.omitTemperature = true;
-      return await this.complete(messages);
+      return await this.gate.schedule(() => this.complete(messages), { priority });
     }
   }
 
@@ -89,6 +123,7 @@ class LLM {
       const err = new Error(`LLM HTTP ${res.status}: ${raw.slice(0, 200)}`);
       err.status = res.status;
       err.body = raw;
+      err.retryAfter = res.headers.get('retry-after');
       throw err;
     }
     let json;

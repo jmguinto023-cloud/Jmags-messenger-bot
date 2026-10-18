@@ -64,6 +64,8 @@ function createServer({ cfg, bot, log }) {
         testMode: cfg.testPsids.length > 0,
         schedule: cfg.schedule || '',
         activeNow: activeNow(cfg, now),
+        llmErrors: bot.llm ? bot.llm.errors : 0,
+        llmLastError: bot.llm ? bot.llm.lastError : '',
       });
     }
 
