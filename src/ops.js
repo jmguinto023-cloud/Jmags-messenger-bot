@@ -971,6 +971,21 @@ function needsDeliveryUpdates(ops, threads, now, cfg, branch) {
   return rows;
 }
 
+function aiHandoffs(threads, jobs) {
+  const rows = [];
+  for (const [psid, thread] of Object.entries(threads || {})) {
+    if (!thread || !thread.aiNeedsIvan) continue;
+    const job = (jobs || []).find((item) => item.psid === psid);
+    rows.push({
+      last4: String(psid).slice(-4),
+      name: job && job.customerName ? job.customerName : 'Chat',
+      reason: thread.handoffReason || 'AI unavailable',
+    });
+  }
+  rows.sort((a, b) => a.last4.localeCompare(b.last4));
+  return rows.slice(0, 12);
+}
+
 function buildView(store, opts) {
   const ops = ensureOps(store);
   const tz = opts.tz || 'Asia/Manila';
@@ -1036,6 +1051,7 @@ function buildView(store, opts) {
       dupes: duplicatePayments(ops.payments, branch),
     },
     needsText: needsTextUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanIdleResumeHours: 2 }, branch),
+    aiHandoffs: aiHandoffs(opts.threads || {}, ops.jobs),
     needsDelivery: needsDeliveryUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanIdleResumeHours: 2 }, branch),
     techLoad: TECHS.map((tech) => ({
       tech,

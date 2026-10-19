@@ -13,14 +13,22 @@ function startMock({ llmResponder } = {}) {
       const url = new URL(req.url, 'http://x');
       let body = {};
       try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {}; } catch {}
-      const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+      const json = (code, obj, extraHeaders) => {
+        res.writeHead(code, { 'Content-Type': 'application/json', ...(extraHeaders || {}) });
+        res.end(JSON.stringify(obj));
+      };
 
       if (url.pathname.endsWith('/alert')) { calls.alerts.push(body); return json(200, { ok: true }); }
       if (url.pathname.endsWith('/chat/completions')) {
         calls.llm.push({ body, auth: req.headers.authorization });
         if (typeof state.llmGate === 'function') {
           const gate = state.llmGate(body);
-          if (gate) return json(gate.status || 500, { error: { message: gate.message || 'boom' } });
+          if (gate) {
+            const headers = gate.retryAfter != null ? { 'Retry-After': String(gate.retryAfter) } : {};
+            const error = { message: gate.message || 'boom' };
+            if (gate.retryDelay) error.details = [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: gate.retryDelay }];
+            return json(gate.status || 500, { error }, headers);
+          }
         }
         if (state.llmFail) return json(state.llmStatus || 500, { error: { message: state.llmError || 'boom' } });
         const content = await state.llmResponder(body);

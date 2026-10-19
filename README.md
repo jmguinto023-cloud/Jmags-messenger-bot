@@ -17,8 +17,11 @@ npm start           # run (needs env, see .env.example)
   then processes in the background. Ignores delivery/read/reaction events and Meta retries (dedupe by mid).
 - Customer text → 3 s batching → `typing_on` → LLM (OpenAI-compatible `/chat/completions`, system prompt from file
   + Manila date/time) → Send API `messaging_type: RESPONSE`. Outgoing text is plain (Markdown markers stripped).
-  A timeout or 5xx sends a canned fallback that is not written into the history sent back to the model; a second
-  failure in a row hands off to the Page Inbox. An HTTP 4xx from the LLM is logged at ERROR and does not hand off.
+  A 429, 5xx, timeout, billing error, or other LLM failure is retried up to 3 times within about 90 seconds.
+  The wait uses `Retry-After` or a Gemini `retryDelay` when the provider sends one. If it still fails, the customer
+  does not get the canned greeting. The chat is handed to Ivan (one holding line at most for that outage) and listed
+  on the operations Today tab under "Needs Ivan". `GET /health` includes `llmErrors` and `llmLastError`.
+  Calls are spaced by `LLM_MAX_RPM` (default 8; 0 turns the gap off). A fresh customer reply is served before a follow-up.
   A 400 that says temperature is rejected is retried once without temperature, then omitted for the process.
 - Schedule form (`BOOKING_FORM_URL`, default the Netlify form) is injected into the system prompt. The model sends it
   in the same reply when the customer agrees, asks to be scheduled, or gives a date/time — not on a first price question,
@@ -80,7 +83,10 @@ npm start           # run (needs env, see .env.example)
   if the customer's last message is still within 23 hours. The line is one short Taglish note from the model
   (limited slots this week, no discount). If a video was requested and not sent, the follow-up reminds them.
   Nothing is sent when the thread is handed off, paused for a human, the bot is disabled, the PSID is outside
-  BOT_TEST_PSIDS, or the customer already sent the booking form and said they filled it in.
+  BOT_TEST_PSIDS, the customer's last message is older than FOLLOWUP_MAX_AGE_HOURS (default 6), or the customer
+  already sent the booking form and said they filled it in. A failed follow-up waits (5 minutes, then gives up
+  after a second try) instead of retrying every minute. The scheduler does not run at startup, and each pass
+  sends at most one follow-up so a restart does not message every quiet chat at once.
   Blank BOT_ACTIVE_HOURS means the bot is always on (the process logs `hours=24/7`). Follow-ups are not
   limited by those hours. BOT_SCHEDULE is separate: when it is set (for example `22:00-07:00` in
   Asia/Manila, including a window that crosses midnight), auto replies and follow-ups run only inside
