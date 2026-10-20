@@ -8,7 +8,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
 COPY prompts ./prompts
+COPY knowledge ./knowledge
 COPY public ./public
+# Catch missing runtime files during build, before serving Messenger webhooks.
+RUN node -e "require('./src/index')"
 RUN mkdir -p /data && chown -R node:node /app /data
 USER node
 EXPOSE 3000
