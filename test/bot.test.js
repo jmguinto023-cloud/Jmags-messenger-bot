@@ -552,7 +552,7 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /NEVER say you did not see it/);
   assert.match(prompt, /NEVER ask them to send it again/);
   assert.match(prompt, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
-  assert.match(prompt, /If they ask how much the check-up is, answer plainly and only that: "₱1,000 check-up fee \(₱500 for 32" and 40" TVs\), waived if they proceed with the repair\."/);
+  assert.match(prompt, /If they ask about a HOME visit or agree to one, disclose clearly/);
   const example = prompt.slice(prompt.indexOf('Example quote'), prompt.indexOf('Send the schedule form'));
   assert.doesNotMatch(example, /travel fee|within 50 km|\bkm\b/i);
 });
