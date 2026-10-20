@@ -88,3 +88,19 @@ test('invalid provider response triggers backup', async () => {
   ) });
   assert.equal(await router.complete({ messages: [] }), 'Fallback');
 });
+
+test('Groq GPT-OSS uses low reasoning and enough completion tokens', async () => {
+  let payload;
+  const provider = buildProviders(cfg())[1];
+  const router = new AiRouter({
+    providers: [provider], fetcher: async (_url, opts) => {
+      payload = JSON.parse(opts.body);
+      return ok('Groq passed');
+    },
+  });
+  const reply = await router.complete({ messages: [{ role: 'user', content: 'hello' }], max_tokens: 60 });
+  assert.equal(reply, 'Groq passed');
+  assert.equal(payload.reasoning_effort, 'low');
+  assert.ok(payload.max_completion_tokens >= 512);
+  assert.equal(payload.max_tokens, undefined);
+});
