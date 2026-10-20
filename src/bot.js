@@ -18,6 +18,7 @@ const {
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
 const { quickReply } = require('./quick-replies');
+const { maybeReplyToTestChallenge } = require('./messenger-test');
 const {
   reviewPending, asksReviewStatus, isUnclearDuringReview, mentionsOldBooking,
   visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply,
