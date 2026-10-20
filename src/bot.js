@@ -18,6 +18,7 @@ const {
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
 const { quickReply } = require('./quick-replies');
+const { PrivateMessengerTest } = require('./private-messenger-test');
 const {
   reviewPending, asksReviewStatus, isUnclearDuringReview, mentionsOldBooking,
   visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply,
@@ -127,6 +128,13 @@ class Bot {
     this.repliedRev = new Map(); // last revision we already answered
     this.dashInflight = new Map(); // psid -> { text, promise } so a double-tap sends once
     this.dashRecent = new Map(); // psid -> { text, at } short repeat window after a dashboard send
+    this.privateTest = new PrivateMessengerTest(cfg, {
+      now: () => this.now(),
+      log: this.log,
+      graph: this.graph,
+      llm: this.llm,
+      nowText: () => this.nowText(),
+    });
   }
 
   // Entry point for a verified webhook body. Never throws.
@@ -195,6 +203,9 @@ class Bot {
     if (note) text = text ? `${text}\n${note}` : note;
     const logText = forceReason ? `${text ? text + ' ' : ''}[${forceReason}]` : text;
     if (!logText) return;
+    // Test enrollment and test messages are private, in-memory and isolated.
+    // Unapproved senders continue through the normal (disabled) bot path.
+    if (await this.privateTest.handle({ psid, text: spoken, media, isStandby })) return;
     this.store.addTurn(psid, 'user', logText, ts);
 
     const t = this.store.thread(psid);
