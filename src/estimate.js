@@ -1,6 +1,7 @@
 'use strict';
 // Preliminary ranges, the plain check-up fee, and guards for video-received chats.
 const { questionTopic } = require('./intake');
+const { HOME_VISIT_FEE_LINE, homeTerms } = require('./home-visit-fee');
 
 // Low and high of each size row on the price table (before the internal distance add-on).
 const PRICE_RANGE = {
@@ -19,9 +20,24 @@ const PRICE_RANGE = {
   85: [11500, 46000],
 };
 
-const CHECKUP_FEE_PLAIN = '₱1,000 check-up fee (₱500 for 32" and 40" TVs), waived if they proceed with the repair.';
+// Owner-confirmed service rates. Never imply a waiver for shop checkups.
+const SHOP_CHECKUP_PHP = 300;
+const SHOP_CHECKUP_FEE_PLAIN = '₱300 po ang check-up kapag dadalhin ninyo ang TV sa JMAGS shop.';
+const CHECKUP_FEE_PLAIN = '₱300 po ang check-up kung dadalhin ang TV sa shop. Kung home service naman, ₱1,000 po ang check-up; waived ito kapag itinuloy ang repair. Sa shop po ba o home service?';
+const CHECKUP_NUDGE = 'Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate. Pwede po tayong mag-request ng home-service check-up: ₱1,000 po, waived kung itutuloy ang repair.';
+const SHOP_TERMS = /\b(?:shop|branch|walk[\s-]?in|drop[\s-]?off)\b|\b(?:dadalhin|dalhin|dinala|magdadala|punta)\b.{0,35}\b(?:shop|branch)\b/i;
 
-const CHECKUP_NUDGE = 'Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate. Pwede po nating i-book ang home service check-up. ' + CHECKUP_FEE_PLAIN;
+function checkupFeeReply(latestUser, thread = {}) {
+  const current = String(latestUser || '');
+  // Prefer the explicitly requested option over older chat history.
+  if (homeTerms(current)) return HOME_VISIT_FEE_LINE;
+  if (SHOP_TERMS.test(current)) return SHOP_CHECKUP_FEE_PLAIN;
+  // On an ambiguous follow-up, consider the latest explicitly selected mode.
+  const recent = (thread.history || []).slice(-6).reverse().find((m) =>
+    m && m.role === 'user' && (homeTerms(m.content) || SHOP_TERMS.test(m.content)));
+  if (recent) return homeTerms(recent.content) ? HOME_VISIT_FEE_LINE : SHOP_CHECKUP_FEE_PLAIN;
+  return CHECKUP_FEE_PLAIN;
+}
 
 function peso(n) {
   return `₱${Number(n).toLocaleString('en-US')}`;
@@ -109,7 +125,7 @@ function mediaWasReceived(thread) {
 
 // Rewrite model text that denies a received video, re-asks a video-only problem, or skips the check-up nudge.
 function applyCustomerGuard(thread, text, latestUser) {
-  if (asksCheckupFee(latestUser)) return CHECKUP_FEE_PLAIN;
+  if (asksCheckupFee(latestUser)) return checkupFeeReply(latestUser, thread);
   let out = String(text || '').trim();
   const received = mediaWasReceived(thread);
   if (received && (deniesReceipt(out) || asksResend(out))) {
@@ -123,6 +139,9 @@ function applyCustomerGuard(thread, text, latestUser) {
 module.exports = {
   PRICE_RANGE,
   CHECKUP_FEE_PLAIN,
+  SHOP_CHECKUP_PHP,
+  SHOP_CHECKUP_FEE_PLAIN,
+  checkupFeeReply,
   CHECKUP_NUDGE,
   mediaReceivedNote,
   asksCheckupFee,
