@@ -10,6 +10,11 @@ const PROBE_MESSAGES = Object.freeze([
 
 function safeStatus(error) {
   const code = Number(error && error.status);
+  // Only classify known error shapes; never output the raw message or key.
+  const msg = String((error && error.message) || '');
+  if (/returned an empty response/.test(msg)) return 'EMPTY_RESPONSE';
+  if (/returned invalid JSON/.test(msg)) return 'INVALID_JSON';
+  if (error && /Timeout|Abort/.test(String(error.name || ''))) return 'TIMEOUT';
   if (code === 400) return 'BAD_REQUEST';
   if (code === 401 || code === 403) return 'AUTH_FAILED';
   if (code === 402) return 'BILLING_REQUIRED';
@@ -54,7 +59,7 @@ async function runProviderSmokeTest({ cfg, env = process.env, log,
         redactPII: true,
         fetcher,
       });
-      await router.ask(provider, { messages: PROBE_MESSAGES, max_tokens: 128 });
+      await router.ask(provider, { messages: PROBE_MESSAGES, max_tokens: 512 });
       results[name] = 'PASS';
       log.info('AI_SMOKE_' + name.toUpperCase() + '=PASS');
     } catch (error) {

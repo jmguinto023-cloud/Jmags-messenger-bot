@@ -10,7 +10,7 @@ function buildProviders(cfg) {
   const known = {
     gemini: cfg.geminiApiKey ? {
       name: 'gemini', baseUrl: GEMINI_ENDPOINT,
-      apiKey: cfg.geminiApiKey, model: cfg.geminiModel || 'gemini-2.5-flash-lite',
+      apiKey: cfg.geminiApiKey, model: cfg.geminiModel || 'gemini-3.1-flash-lite',
       thirdParty: true,
     } : null,
     groq: cfg.groqApiKey ? {
@@ -104,6 +104,13 @@ class AiRouter {
   async ask(provider, payload) {
     const reqPayload = sanitizePayload({ ...payload, model: provider.model },
       this.redactPII && provider.thirdParty);
+    // GPT-OSS reserves output tokens for reasoning. Low effort prevents a short
+    // budget being exhausted before any user-visible response is generated.
+    if (provider.name === 'groq' && /^openai\/gpt-oss-/i.test(provider.model)) {
+      reqPayload.reasoning_effort = 'low';
+      reqPayload.max_completion_tokens = Math.max(512, Number(reqPayload.max_tokens) || 0);
+      delete reqPayload.max_tokens;
+    }
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers.Authorization = 'Bearer ' + provider.apiKey;
     const res = await this.fetcher(provider.baseUrl.replace(/\/+$/, '') + '/chat/completions', {

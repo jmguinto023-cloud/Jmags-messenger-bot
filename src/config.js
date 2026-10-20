@@ -50,7 +50,7 @@ function loadConfig(env = process.env) {
     aiProviderTimeoutMs: num(env.AI_PROVIDER_TIMEOUT_MS, 12000),
     aiRedactPII: bool(env.AI_REDACT_PII, true),
     geminiApiKey: env.GEMINI_API_KEY || '',
-    geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+    geminiModel: env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
     groqApiKey: env.GROQ_API_KEY || '',
     groqModel: env.GROQ_MODEL || 'openai/gpt-oss-20b',
     // LLM (any OpenAI-compatible chat completions API)
