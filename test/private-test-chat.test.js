@@ -60,6 +60,17 @@ test('tester gets a Taglish AI reply and only synthetic test turns sent to provi
   assert.ok(h.queries[0].payload.messages.every(m=>!m.content.includes(code)));
   assert.equal(h.store.data.privateChat.history.length,2);
 });
+test('private simulator retrieves respectful guidance for unusual comments without storing them as policy',async()=>{
+  const h=harness();
+  await h.send(code);
+  await h.send('Suggestion ko po: sana mas malinaw ang update sa repair.');
+  const messages=h.queries.at(-1).payload.messages;
+  assert.match(messages[0].content,/JMAGS CUSTOMER-BEHAVIOR BANK/);
+  assert.match(messages[1].content,/suggestion/);
+  assert.match(messages[1].content,/balanced judgment/);
+  assert.ok(!JSON.stringify(h.store.data).includes('policyOverride'));
+});
+
 test('other customers cannot enter the simulator after someone enrolls',async()=>{
   const h=harness();
   await h.send(code);
