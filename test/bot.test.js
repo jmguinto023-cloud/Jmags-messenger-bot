@@ -521,7 +521,9 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /walang dagdag/);
   assert.match(prompt, /Never write "travel fee", "pamasahe", or "transpo"/);
   assert.match(prompt, /never tell the customer km/);
-  assert.match(prompt, /Check-up fee: ₱1,000, ₱500 for 32" and 40" TVs/);
+  assert.match(prompt, /HOME SERVICE CHECKUP RULE \(updated\): Once a customer agrees/);
+  assert.match(prompt, /₱1,000 home-visit check-up fee upfront/);
+  assert.match(prompt, /₱500 rate for 32" and 40" TVs applies only when this is NOT an agreed home visit/);
   assert.match(prompt, /Waived if the repair proceeds/);
   assert.match(prompt, /No \*\*bold\*\*/);
   assert.match(prompt, /Do not open with an apology/);
