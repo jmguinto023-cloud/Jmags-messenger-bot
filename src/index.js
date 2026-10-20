@@ -23,7 +23,10 @@ function build(env = process.env) {
 if (require.main === module) {
   const app = build();
   const { cfg, log } = app;
-  const missing = ['VERIFY_TOKEN', 'APP_SECRET', 'APP_ID', 'PAGE_ACCESS_TOKEN', 'LLM_BASE_URL', 'LLM_MODEL'].filter((k) => !process.env[k]);
+  const aiConfigured = cfg.aiRouterEnabled && app.llm.configured();
+  const mandatory = ['VERIFY_TOKEN', 'APP_SECRET', 'APP_ID', 'PAGE_ACCESS_TOKEN'];
+  const missing = mandatory.filter((k) => !process.env[k]);
+  if (!aiConfigured) missing.push(...['LLM_BASE_URL', 'LLM_MODEL'].filter((k) => !process.env[k]));
   if (missing.length) log.warn(`Missing env: ${missing.join(', ')} – bot will not work fully until set.`);
   app.llm.systemPrompt(); // fail fast if prompt file is missing
   const purge = () => { const n = app.store.purge(cfg.dataRetentionDays); if (n) log.info(`purged ${n} inactive chats (> ${cfg.dataRetentionDays} days)`); };
