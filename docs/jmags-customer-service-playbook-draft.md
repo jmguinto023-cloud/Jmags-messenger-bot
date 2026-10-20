@@ -39,7 +39,7 @@ The Claude report labels ten replies as verified but also states it edited some 
 
 **Owner confirmed (21 October conversation):** An agreed technician **home visit/checkup is ₱1,000**, disclosed before any booking can be represented as confirmed. Applies to home visits regardless of size unless the owner later approves an exception.
 
-**Code-confirmed but disputed treatment:** Existing code says the ₱1,000 checkup charge is *waived when repair proceeds*. The Claude report points out \`waived\` vs \`deducted from repair total\` ambiguity. **Resolve before teaching a new financial statement**. The current software may still say waived until corrected.
+**Owner confirmed, final fee treatment:** The ₱1,000 home-service checkup fee is **WAIVED** when the customer proceeds with the repair. There is **no separate ₱1,000 checkup charge** in addition to the approved repair price. **Do not describe this as a prepayment, deduction, credit, or deposit against the repair price.** This resolves the former waived-vs-deducted ambiguity. If no repair proceeds, the original ₱1,000 home-service checkup charge applies.
 
 **Unresolved size exception:** The old code and FAQ still say \`₱500 for 32" and 40" TVs\` for some general check-ups, although the confirmed home-visit rule is ₱1,000. Do not offer ₱500 for home visits.
 
@@ -69,7 +69,7 @@ The report praises direct but courteous corrections of customer misconceptions: 
 1. General inquiry: \`Hello po! Nagre-repair po kami ng TV. Ano pong brand at size ng unit?\`
 2. Symptom already known: \`Samsung 65-inch, may sound pero black screen po—noted. Taga-saang city po kayo para ma-check ang home-service area?\`
 3. Price depends on issue: \`Depende po sa actual sira at inspection. Iche-check muna ng technician bago magbigay ng exact price. Ano pong model ng TV?\`
-4. Agreed home visit: \`Bago po magpa-home service, ₱1,000 po ang check-up fee kapag pupunta ang technician sa bahay. Iko-confirm pa po ng staff ang schedule.\` **Fee treatment after repair remains under review.**
+4. Agreed home visit: `Bago po magpa-home service, ₱1,000 po ang check-up fee kapag pupunta ang technician sa bahay. Waived po ito kapag itinuloy ang repair—walang hiwalay na check-up charge. Iko-confirm pa po ng staff ang schedule.` **Fee treatment confirmed: waived, not deducted.**
 5. Video received: \`Natanggap po namin ang video. Staff po namin ang magre-review; paki-hintay po sa update.\` Only say this once the webhook actually confirms receipt. Do not claim it was forwarded unless that action completed.
 6. Unsupported part / uncertain repair option: \`Sa brand-new replacement po kami may approved offer. Iche-check ko po kung may ibang option; staff po namin ang sasagot sa inyo.\`
 7. Warranty/backjob: \`Pasensya po sa abala. Para ma-review nang tama ang warranty concern, ipapasa ko po ito sa staff namin.\`
@@ -96,7 +96,7 @@ The reported reserved backjob slot, 48-hour backjob SLA, 6 PM cutoff, 10 km inse
 
 ## Outstanding decisions for JMAGS owner
 
-1. For home service: is ₱1,000 **credited/deducted from the final repair price**, or **waived** if the repair proceeds? How is this calculated at the point of billing?
+1. **RESOLVED by owner:** ₱1,000 home-service checkup is waived when the repair proceeds, with no separate fee. It is not credited/deducted against the repair price.
 2. Is the ₱500 32"/40" checkup rate still offered for any **non-home-service** scenario?
 3. Priority booking: ₱800, ₱1,000 or disabled?
 4. Confirm customer-facing \`staff po namin\` everywhere; keep actual internal agent/technician assignment names only in staff tools.
