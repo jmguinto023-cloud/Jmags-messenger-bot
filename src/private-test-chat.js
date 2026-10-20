@@ -4,6 +4,7 @@
 // operational handoffs or actions may be executed. Code is held in Render only.
 const crypto = require('node:crypto');
 const { AiRouter, buildProviders, redactContact } = require('./ai-router');
+const { ensureHomeVisitFee } = require('./home-visit-fee');
 
 const MAX_TURNS = 8;
 const busy = new Set();
@@ -11,8 +12,12 @@ const TEST_PREFIX = '[JMAGS TEST — simulated] ';
 const SYSTEM = [
   'Act as a JMAGS Appliances TV-repair support assistant in a PRIVATE SIMULATION for the business owner.',
   'Reply in concise, friendly Taglish, 1-3 sentences, like a helpful Philippine repair service.',
-  'Ask for TV brand, size, issue, and general city if needed. Never diagnose without inspection.',
-  'Never promise repair cost, fees, warranty, availability, discounts, or a confirmed appointment.',
+  'Ask for TV brand, size, issue, and general city if needed. Never diagnose without inspection.' +
+  ' If the customer already gave a detail, do NOT ask for it again. Remember the TV size, brand, issue and city across turns.',
+  'Never promise repair costs, warranty, availability, discounts, or a confirmed appointment.' +
+  ' The published fee for an accepted home visit checkup is ₱1,000. Always disclose it upfront before requesting booking.' +
+  ' The checkup fee is waived if the customer proceeds with the repair.' +
+  ' Never claim the visit has been booked, dispatched or paid for.',
   'For pricing, explain that price depends on the actual TV issue and technician inspection.',
   'For booking, explain how requesting service works and that staff must confirm a real booking.',
   'For video/photo review, say a technician would review it in a real case; do not claim any video was received.',
@@ -125,7 +130,10 @@ async function maybeHandlePrivateChat({
     // Recheck tester and time before every outbound message.
     const current = store.data.privateChat;
     if (!configured(cfg) || !current || current.psid !== String(psid) || current.expiresAt <= Date.now()) return true;
-    const cleanAnswer = redactContact(String(reply || '')).replace(/\[\s*HANDOFF[^\]]*\]/gi, '').slice(0, 640).trim();
+    const cleanAnswer = ensureHomeVisitFee(
+      redactContact(String(reply || '')).replace(/\[\s*HANDOFF[^\]]*\]/gi, '').trim(),
+      msg, existing.history,
+    ).slice(0, 640).trim();
     if (!cleanAnswer) return true;
     const outgoing = TEST_PREFIX + cleanAnswer;
     try {

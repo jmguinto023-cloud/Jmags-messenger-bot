@@ -521,8 +521,10 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /walang dagdag/);
   assert.match(prompt, /Never write "travel fee", "pamasahe", or "transpo"/);
   assert.match(prompt, /never tell the customer km/);
-  assert.match(prompt, /Check-up fee: ₱1,000, ₱500 for 32" and 40" TVs/);
-  assert.match(prompt, /Waived if the repair proceeds/);
+  assert.match(prompt, /HOME SERVICE CHECKUP RULE \(updated\): Once a customer agrees/);
+  assert.match(prompt, /₱1,000 home-visit check-up fee upfront/);
+  assert.match(prompt, /₱500 rate for 32" and 40" TVs applies only when this is NOT an agreed home visit/);
+  assert.match(prompt, /check-up fee is waived if they proceed with the repair/i);
   assert.match(prompt, /No \*\*bold\*\*/);
   assert.match(prompt, /Do not open with an apology/);
   assert.match(prompt, /Do not propose a day or time/);
@@ -550,7 +552,7 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /NEVER say you did not see it/);
   assert.match(prompt, /NEVER ask them to send it again/);
   assert.match(prompt, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
-  assert.match(prompt, /If they ask how much the check-up is, answer plainly and only that: "₱1,000 check-up fee \(₱500 for 32" and 40" TVs\), waived if they proceed with the repair\."/);
+  assert.match(prompt, /If they ask about a HOME visit or agree to one, disclose clearly/);
   const example = prompt.slice(prompt.indexOf('Example quote'), prompt.indexOf('Send the schedule form'));
   assert.doesNotMatch(example, /travel fee|within 50 km|\bkm\b/i);
 });
