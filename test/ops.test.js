@@ -445,6 +445,9 @@ test('a video card can link to a job, and a matching phone is only a suggestion'
 
 test('status answers come from the matching job and never from another customer', async () => {
   const s = await setup();
+  // Sample message timestamps are fixed at 2026-10-18. Keep this test inside
+  // Meta's 24-hour reply window even when CI runs on future dates.
+  s.app.bot.now = () => NOON + 60_000;
   s.mock.state.llmResponder = () => 'LLM should not answer a linked status question';
   try {
     ensureOps(s.app.store);

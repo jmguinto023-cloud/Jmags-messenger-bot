@@ -2,6 +2,7 @@
 // Calls any OpenAI-compatible Chat Completions API (provider chosen via env vars).
 const fs = require('node:fs');
 const { LlmGate, retryDelayMs } = require('./llm-gate');
+const { AiRouter, buildProviders } = require('./ai-router');
 
 const RETRIES = 3;
 const RETRY_BUDGET_MS = 90_000;
@@ -18,6 +19,13 @@ class LLM {
       rpm: cfg.llmMaxRpm,
       sleep: (ms) => this.sleep(ms),
     });
+    this.router = cfg.aiRouterEnabled
+      ? new AiRouter({
+        providers: buildProviders(cfg),
+        timeoutMs: cfg.aiProviderTimeoutMs,
+        maxDailyCalls: cfg.aiMaxDailyCalls,
+        redactPII: cfg.aiRedactPII,
+      }) : null;
   }
 
   noteError(e) {
@@ -32,7 +40,7 @@ class LLM {
     if (this.cfg.llmMaxTokens > 0) p.max_tokens = this.cfg.llmMaxTokens;
     return p;
   }
-  configured() { return Boolean(this.cfg.llmBaseUrl && this.cfg.llmModel); }
+  configured() { return this.router ? this.router.providers.length > 0 : Boolean(this.cfg.llmBaseUrl && this.cfg.llmModel); }
 
   systemPrompt() {
     if (this._prompt === null) {
@@ -75,6 +83,14 @@ class LLM {
   }
 
   async chat(messages, { priority = 'high' } = {}) {
+    if (this.router) {
+      try {
+        return await this.gate.schedule(() => this.router.complete(this.payload(messages)), { priority });
+      } catch (e) {
+        this.noteError(e);
+        throw e;
+      }
+    }
     const started = Date.now();
     let last;
     for (let attempt = 0; attempt < RETRIES; attempt++) {
@@ -134,7 +150,7 @@ class LLM {
   }
 }
 
-// Claude (and other models) reject assistant prefill: the request must end on a user turn.
+// Some chat models reject assistant prefill: the request must end on a user turn.
 // Merge back-to-back turns of the same role, drop assistant turns that landed after the
 // customer's last message (our reply, an echo, a human reply), and if they only sent an
 // attachment, close with a user turn such as "[Customer sent a video]".
