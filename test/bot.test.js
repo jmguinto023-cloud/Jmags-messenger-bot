@@ -523,7 +523,7 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /never tell the customer km/);
   assert.match(prompt, /HOME SERVICE CHECKUP RULE \(updated\): Once a customer agrees/);
   assert.match(prompt, /₱1,000 home-visit check-up fee upfront/);
-  assert.match(prompt, /₱500 rate for 32" and 40" TVs applies only when this is NOT an agreed home visit/);
+  assert.match(prompt, /shop checkup fee is ₱300 for any TV size/i);
   assert.match(prompt, /check-up fee is waived if they proceed with the repair/i);
   assert.match(prompt, /No \*\*bold\*\*/);
   assert.match(prompt, /Do not open with an apology/);
@@ -1031,7 +1031,7 @@ test('a received video stays in later model calls and is never treated as missin
     assert.match(s.mock.calls.messages.at(-1).message.text, /₱5,000/);
     assert.match(s.mock.calls.messages.at(-1).message.text, /₱18,000/);
     assert.match(s.mock.calls.messages.at(-1).message.text, /ma-check ng technician personally/);
-    assert.match(s.mock.calls.messages.at(-1).message.text, /₱1,000 check-up fee \(₱500 for 32" and 40" TVs\), waived if they proceed with the repair/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /home-service check-up: ₱1,000 po, waived kung itutuloy ang repair/);
 
     await s.post(msg('vid1', { text: 'Sigurado po ba kayo?' }));
     await s.post(msg('vid1', { text: 'magkano po ang estimate?' }));
@@ -1052,8 +1052,8 @@ test('a price range from a description invites a personal check-up', async () =>
     const text = s.mock.calls.messages[0].message.text;
     assert.match(text, /₱9,000–₱10,000/);
     assert.match(text, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
-    assert.match(text, /home service check-up/);
-    assert.match(text, /waived if they proceed with the repair/);
+    assert.match(text, /home-service check-up/);
+    assert.match(text, /waived kung itutuloy ang repair/);
   } finally { await s.close(); }
 });
 
