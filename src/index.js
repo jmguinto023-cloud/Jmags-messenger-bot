@@ -35,6 +35,13 @@ if (require.main === module) {
   if (unpaused.length) log.info(`resumed ${unpaused.length} chat(s) paused by automated Page echoes`);
   app.bot.startFollowups();
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'}`));
+  if (process.env.AI_SMOKE_TEST_ON_STARTUP === 'true') {
+    // Synthetic-only connectivity check. Its own guard refuses to run if
+    // customer replies or external customer routing are enabled.
+    const { runProviderSmokeTest } = require('./ai-smoke-test');
+    runProviderSmokeTest({ cfg, env: process.env, log }).catch(() =>
+      log.warn('AI_SMOKE_FAILED: internal error (details suppressed)'));
+  }
   const stop = async () => { log.info('shutting down'); app.server.close(); await app.bot.idle(); app.store.flush(); process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }
