@@ -17,6 +17,7 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
+const { quickReply } = require('./quick-replies');
 const {
   reviewPending, asksReviewStatus, isUnclearDuringReview, mentionsOldBooking,
   visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply,
@@ -481,6 +482,17 @@ class Bot {
         return;
       }
 
+      // Approved zero-token FAQ replies, without overriding media review or human handoff.
+      if (this.cfg.aiSmartRulesEnabled && !hadMedia && !reviewPending(t)) {
+        const canned = quickReply(latestUser, this.cfg, t);
+        if (canned) {
+          this.repliedRev.set(psid, rev);
+          if (this.blockReason(psid, t, ts)) return;
+          await this.send(psid, canned);
+          if ((this.rev.get(psid) || 0) !== rev) continue;
+          return;
+        }
+      }
       this.graph.typingOn(psid).catch((e) => this.log.warn('typing_on failed', e.message));
       let raw;
       const modelHistory = visibleHistory(t.history, this.now(), {
