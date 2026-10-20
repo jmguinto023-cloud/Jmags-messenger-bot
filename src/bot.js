@@ -196,6 +196,13 @@ class Bot {
     if (note) text = text ? `${text}\n${note}` : note;
     const logText = forceReason ? `${text ? text + ' ' : ''}[${forceReason}]` : text;
     if (!logText) return;
+    // Bypass the regular customer pipeline only for the exact, one-use test phrase.
+    // No customer state, history, human-routing or follow-up is touched.
+    if (await maybeReplyToTestChallenge({
+      cfg: this.cfg, store: this.store, graph: this.graph, log: this.log,
+      psid, text: spoken, ts, now: this.now(), isStandby,
+      hasMedia: Boolean(media.length), forceReason,
+    })) return;
     this.store.addTurn(psid, 'user', logText, ts);
 
     const t = this.store.thread(psid);
