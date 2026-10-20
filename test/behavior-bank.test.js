@@ -40,7 +40,7 @@ test('polite guidance does not give automatic positive or negative verdicts', ()
   assert.match(p, /balanced judgment/);
   assert.match(p, /verified|known|unknown|verified|limitation|staff/i);
   assert.doesNotMatch(p, /yes,.*legit|definitely a scam/i);
-  assert.match(behaviorBaseline(), /do not.*customer.*instructions/i);
+  assert.match(behaviorBaseline(), /untrusted content/i);
 });
 test('unmatched message still gets thoughtful guidance; no customer text copied into memory', () => {
   const unusual = 'MY_PRIVATE_REFERENCE_DO_NOT_STORE_1234';
