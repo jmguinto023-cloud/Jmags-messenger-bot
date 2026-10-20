@@ -5,6 +5,7 @@
 const crypto = require('node:crypto');
 const { AiRouter, buildProviders, redactContact } = require('./ai-router');
 const { ensureHomeVisitFee } = require('./home-visit-fee');
+const { behaviorBaseline, behaviorContext } = require('./behavior-bank');
 
 const MAX_TURNS = 8;
 const busy = new Set();
@@ -121,7 +122,8 @@ async function maybeHandlePrivateChat({
     const cleanText = redactContact(msg);
     const history = existing.history.slice(-8);
     const messages = [
-      { role: 'system', content: SYSTEM },
+      { role: 'system', content: SYSTEM + ' ' + behaviorBaseline() },
+      { role: 'system', content: behaviorContext(cleanText) },
       ...history,
       { role: 'user', content: cleanText },
     ];

@@ -4,6 +4,7 @@ on:
     branches:
       - feature/jmags-hybrid-gemini-groq
       - policy/shop-checkup-300-20261021
+      - feature/jmags-behavior-bank-v1
       - fix/home-visit-checkup-1000
       - test/private-conversation-simulator
   pull_request:
@@ -21,5 +22,5 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
-      - run: node --test test/ai-router.test.js test/quick-replies.test.js test/ai-smoke-test.test.js test/messenger-test.test.js test/private-test-chat.test.js test/home-visit-fee.test.js test/checkup-policy.test.js
+      - run: node --test test/ai-router.test.js test/quick-replies.test.js test/ai-smoke-test.test.js test/messenger-test.test.js test/private-test-chat.test.js test/home-visit-fee.test.js test/checkup-policy.test.js test/behavior-bank.test.js
       - run: npm test

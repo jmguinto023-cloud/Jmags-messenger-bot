@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/bot.test.js test/ops.test.js",
+    "test": "node --test test/bot.test.js test/ops.test.js test/behavior-bank.test.js",
     "simulate": "node scripts/simulate.js",
     "sync-prompt": "node scripts/sync-prompt.js"
   },

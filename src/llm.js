@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { LlmGate, retryDelayMs } = require('./llm-gate');
 const { AiRouter, buildProviders } = require('./ai-router');
+const { behaviorBaseline, behaviorContext } = require('./behavior-bank');
 
 const RETRIES = 3;
 const RETRY_BUDGET_MS = 90_000;
@@ -48,7 +49,7 @@ class LLM {
       const url = this.cfg.bookingFormUrl || '';
       let text = raw.replaceAll('{{BOOKING_FORM_URL}}', () => url);
       if (url && !text.includes(url)) text += `\n\nSchedule form URL: ${url}`;
-      this._prompt = text;
+      this._prompt = text + '\n\n## JMAGS Behavior Bank (approved customer-service behavior, no new prices)\n' + behaviorBaseline();
     }
     return this._prompt;
   }
@@ -58,6 +59,7 @@ class LLM {
     const messages = [
       { role: 'system', content: this.systemPrompt() },
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
+      { role: 'system', content: behaviorContext([...history].reverse().find(h => h.role === 'user')?.content || '') },
       ...normalizeTurns(history, { attachmentNote }),
     ];
     return this.chat(messages, { priority: 'high' });
