@@ -524,7 +524,7 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /HOME SERVICE CHECKUP RULE \(updated\): Once a customer agrees/);
   assert.match(prompt, /₱1,000 home-visit check-up fee upfront/);
   assert.match(prompt, /₱500 rate for 32" and 40" TVs applies only when this is NOT an agreed home visit/);
-  assert.match(prompt, /Waived if the repair proceeds/);
+  assert.match(prompt, /check-up fee is waived if they proceed with the repair/i);
   assert.match(prompt, /No \*\*bold\*\*/);
   assert.match(prompt, /Do not open with an apology/);
   assert.match(prompt, /Do not propose a day or time/);
