@@ -28,7 +28,10 @@ function redactContact(input) {
   return String(input || '')
     .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[email removed]')
     .replace(/(?:\+63|0063|0)\s*9(?:[\s.()-]*\d){9}\b/g, '[phone removed]')
-    .replace(/\b(?:\d{1,5}[ -]+)?(?:block|blk|lot|house|unit|room|street|st\.|avenue|ave\.|road|rd\.)\s*[\w\d -]{1,42}\b/gi, '[street detail removed]');
+    // Match real numbered addresses, not ordinary phrases such as "TV unit"
+    // or "ang unit" in a repair discussion.
+    .replace(/\b\d{1,5}\s+(?:[\w.-]+\s+){0,4}(?:street|st\.|road|rd\.|avenue|ave\.|drive|dr\.)\b/gi, '[street detail removed]')
+    .replace(/\b(?:block|blk|lot|house|unit|room)\s*(?:#\s*|no\.?\s*)?\d{1,5}[a-z0-9-]*\b/gi, '[street detail removed]');
 }
 
 function sanitizePayload(payload, shouldRedact) {
