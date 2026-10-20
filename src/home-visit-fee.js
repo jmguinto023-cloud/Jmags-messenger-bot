@@ -4,7 +4,8 @@
 const HOME_VISIT_CHECKUP_PHP = 1000;
 const HOME_VISIT_FEE_LINE =
   'Bago po magpa-home service: ₱1,000 ang check-up fee kapag pupunta ang technician sa bahay. ' +
-  'Waived po ito kung itutuloy ang repair. Staff pa rin po ang magko-confirm ng schedule.';
+  'Waived po ito kung itutuloy ang repair—walang hiwalay na ₱1,000 check-up charge kapag nagpa-repair. ' +
+  'Hindi po ito deductible o advance payment sa repair price. Staff pa rin po ang magko-confirm ng schedule.';
 
 function homeTerms(text) {
   return /home[\s-]*(?:service|visit|check[\s-]*up)|house\s+visit|sa\s+bahay|bahay\s+(?:ko|namin|natin|po)|on[\s-]*site|puntahan\s+(?:niyo|nyo|po)|pumunta\s+(?:kayo|po)|punta\s+(?:kayo|po)/i.test(String(text || ''));
