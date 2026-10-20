@@ -66,6 +66,7 @@ function loadConfig(env = process.env) {
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
     // Safety switches
+    botTestChallenge: env.BOT_TEST_CHALLENGE || '', // one-time synthetic test only
     botEnabled: bool(env.BOT_ENABLED, false),
     testPsids: list(env.BOT_TEST_PSIDS),
     activeHours: env.BOT_ACTIVE_HOURS || '', // e.g. "18:00-08:00" (empty = 24/7)
