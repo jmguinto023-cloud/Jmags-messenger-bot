@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - feature/jmags-hybrid-gemini-groq
+      - test/messenger-one-account-enrollment
   pull_request:
     branches:
       - main
