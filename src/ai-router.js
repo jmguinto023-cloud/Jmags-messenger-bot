@@ -10,7 +10,7 @@ function buildProviders(cfg) {
   const known = {
     gemini: cfg.geminiApiKey ? {
       name: 'gemini', baseUrl: GEMINI_ENDPOINT,
-      apiKey: cfg.geminiApiKey, model: cfg.geminiModel || 'gemini-2.5-flash-lite',
+      apiKey: cfg.geminiApiKey, model: cfg.geminiModel || 'gemini-3.1-flash-lite',
       thirdParty: true,
     } : null,
     groq: cfg.groqApiKey ? {
