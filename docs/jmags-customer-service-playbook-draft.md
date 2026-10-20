@@ -41,7 +41,7 @@ The Claude report labels ten replies as verified but also states it edited some 
 
 **Owner confirmed, final fee treatment:** The ₱1,000 home-service checkup fee is **WAIVED** when the customer proceeds with the repair. There is **no separate ₱1,000 checkup charge** in addition to the approved repair price. **Do not describe this as a prepayment, deduction, credit, or deposit against the repair price.** This resolves the former waived-vs-deducted ambiguity. If no repair proceeds, the original ₱1,000 home-service checkup charge applies.
 
-**Unresolved size exception:** The old code and FAQ still say \`₱500 for 32" and 40" TVs\` for some general check-ups, although the confirmed home-visit rule is ₱1,000. Do not offer ₱500 for home visits.
+**Owner confirmed, shop visit (21 October 2026):** If the customer **brings the TV to the JMAGS shop**, the checkup fee is **₱300**, regardless of TV size. This **replaces** the older ₱500 small-TV checkup reference. Do not promise the ₱300 shop checkup is waived, refunded, or credited on repair unless the owner separately confirms that policy. Home technician visits remain ₱1,000, waived only if the customer proceeds with repair.
 
 **Current prompt/bookings:** Customer requests a booking or a slot; app provides the booking form. Staff must verify availability and confirm the appointment. No automatic dispatch, technician allocation, date/time promise or collection based only on a chat.
 
@@ -97,7 +97,7 @@ The reported reserved backjob slot, 48-hour backjob SLA, 6 PM cutoff, 10 km inse
 ## Outstanding decisions for JMAGS owner
 
 1. **RESOLVED by owner:** ₱1,000 home-service checkup is waived when the repair proceeds, with no separate fee. It is not credited/deducted against the repair price.
-2. Is the ₱500 32"/40" checkup rate still offered for any **non-home-service** scenario?
+2. **RESOLVED by owner:** Shop TV checkup is ₱300 for any size. Previous ₱500 32"/40" exception is no longer applicable.
 3. Priority booking: ₱800, ₱1,000 or disabled?
 4. Confirm customer-facing \`staff po namin\` everywhere; keep actual internal agent/technician assignment names only in staff tools.
 5. Which staff role approves/communicates the confirmed service date and booking? Is confirmation recorded through the form, dispatcher, or CRM?
