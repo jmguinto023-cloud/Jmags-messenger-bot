@@ -41,6 +41,18 @@ function loadConfig(env = process.env) {
     vapidPublicKey: env.VAPID_PUBLIC_KEY || '',
     vapidPrivateKey: env.VAPID_PRIVATE_KEY || '',
     vapidSubject: env.VAPID_SUBJECT || 'mailto:bot@jmags.local',
+    // Hybrid AI: opt-in only. Never send customer data externally by default.
+    aiRouterEnabled: bool(env.AI_ROUTER_ENABLED, false),
+    aiSmartRulesEnabled: bool(env.AI_SMART_RULES_ENABLED, false),
+    aiAllowExternalData: bool(env.AI_EXTERNAL_DATA_ALLOWED, false),
+    aiProviderOrder: env.AI_PROVIDER_ORDER || 'gemini,groq',
+    aiMaxDailyCalls: num(env.AI_MAX_DAILY_CALLS, 100),
+    aiProviderTimeoutMs: num(env.AI_PROVIDER_TIMEOUT_MS, 12000),
+    aiRedactPII: bool(env.AI_REDACT_PII, true),
+    geminiApiKey: env.GEMINI_API_KEY || '',
+    geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+    groqApiKey: env.GROQ_API_KEY || '',
+    groqModel: env.GROQ_MODEL || 'openai/gpt-oss-20b',
     // LLM (any OpenAI-compatible chat completions API)
     llmBaseUrl: (env.LLM_BASE_URL || '').replace(/\/+$/, ''),
     llmApiKey: env.LLM_API_KEY || '',
