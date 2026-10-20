@@ -56,3 +56,9 @@ test('redaction still masks address numbers and contacts', () => {
   const cleaned=redactContact('Call 09171234567, my email is example@example.com, Unit 12, 123 Maple Street.');
   assert.doesNotMatch(cleaned,/09171234567|example@example.com|Unit 12|123 Maple Street/);
 });
+
+test('owner-confirmed waiver means no separate ₱1,000 charge if repaired', () => {
+  assert.match(HOME_VISIT_FEE_LINE, /waived/i);
+  assert.match(HOME_VISIT_FEE_LINE, /walang hiwalay na ₱1,000 check-up charge/i);
+  assert.match(HOME_VISIT_FEE_LINE, /Staff .*confirm/i);
+});

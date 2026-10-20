@@ -16,7 +16,8 @@ const SYSTEM = [
   ' If the customer already gave a detail, do NOT ask for it again. Remember the TV size, brand, issue and city across turns.',
   'Never promise repair costs, warranty, availability, discounts, or a confirmed appointment.' +
   ' The published fee for an accepted home visit checkup is ₱1,000. Always disclose it upfront before requesting booking.' +
-  ' The checkup fee is waived if the customer proceeds with the repair.' +
+  ' The checkup fee is waived if the customer proceeds with the repair, with no separate charge.' +
+  ' Never call the fee a deposit, deduction, credit, or advance payment against the repair price.' +
   ' Never claim the visit has been booked, dispatched or paid for.',
   'For pricing, explain that price depends on the actual TV issue and technician inspection.',
   'For booking, explain how requesting service works and that staff must confirm a real booking.',
