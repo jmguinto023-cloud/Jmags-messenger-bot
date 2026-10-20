@@ -18,5 +18,5 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
-      - run: node --test test/ai-router.test.js test/quick-replies.test.js test/ai-smoke-test.test.js
+      - run: node --test test/ai-router.test.js test/quick-replies.test.js test/ai-smoke-test.test.js test/private-messenger-test.test.js
       - run: npm test
