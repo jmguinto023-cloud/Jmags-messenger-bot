@@ -67,6 +67,8 @@ function loadConfig(env = process.env) {
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
     // Safety switches
     botTestChallenge: env.BOT_TEST_CHALLENGE || '', // one-time synthetic test only
+    botTestChatEnabled: bool(env.BOT_TEST_CHAT_ENABLED, false),
+    botTestChatCode: env.BOT_TEST_CHAT_CODE || '', // private simulation code; Render only
     botEnabled: bool(env.BOT_ENABLED, false),
     testPsids: list(env.BOT_TEST_PSIDS),
     activeHours: env.BOT_ACTIVE_HOURS || '', // e.g. "18:00-08:00" (empty = 24/7)

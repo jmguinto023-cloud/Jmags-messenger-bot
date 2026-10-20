@@ -19,6 +19,7 @@ const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
+const { maybeHandlePrivateChat } = require('./private-test-chat');
 const {
   reviewPending, asksReviewStatus, isUnclearDuringReview, mentionsOldBooking,
   visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply,
@@ -196,6 +197,13 @@ class Bot {
     if (note) text = text ? `${text}\n${note}` : note;
     const logText = forceReason ? `${text ? text + ' ' : ''}[${forceReason}]` : text;
     if (!logText) return;
+    // Private simulation is isolated from the regular Messenger pipeline.
+    // All ordinary customer replies remain disabled throughout this test.
+    if (await maybeHandlePrivateChat({
+      cfg: this.cfg, store: this.store, graph: this.graph, log: this.log,
+      psid, text: spoken, ts, now: this.now(), isStandby,
+      hasMedia: Boolean(media.length), forceReason,
+    })) return;
     // Bypass the regular customer pipeline only for the exact, one-use test phrase.
     // No customer state, history, human-routing or follow-up is touched.
     if (await maybeReplyToTestChallenge({
