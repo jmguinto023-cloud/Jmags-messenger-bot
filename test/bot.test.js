@@ -1052,7 +1052,7 @@ test('a price range from a description invites a personal check-up', async () =>
     const text = s.mock.calls.messages[0].message.text;
     assert.match(text, /₱9,000–₱10,000/);
     assert.match(text, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
-    assert.match(text, /home service check-up/);
+    assert.match(text, /home-service check-up/);
     assert.match(text, /waived kung itutuloy ang repair/);
   } finally { await s.close(); }
 });
