@@ -68,6 +68,10 @@ function loadConfig(env = process.env) {
     // Safety switches
     botEnabled: bool(env.BOT_ENABLED, false),
     testPsids: list(env.BOT_TEST_PSIDS),
+    // Live test: require a single explicitly enrolled account, never unrestricted sends.
+    botTestOnly: bool(env.BOT_TEST_MODE_ONLY, false),
+    botTestEnrollCode: String(env.BOT_TEST_ENROLL_CODE || '').trim(),
+    botTestTimeoutMinutes: Math.max(1, Math.min(120, num(env.BOT_TEST_TIMEOUT_MINUTES, 60))),
     activeHours: env.BOT_ACTIVE_HOURS || '', // e.g. "18:00-08:00" (empty = 24/7)
     alwaysOnDays: list(env.BOT_ALWAYS_ON_DAYS).map((d) => d.toLowerCase().slice(0, 3)), // e.g. "sat,sun"
     // Reply window that replaces an outside cron. Empty = on whenever BOT_ENABLED is on.
