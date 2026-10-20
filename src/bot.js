@@ -129,6 +129,13 @@ class Bot {
     this.dashRecent = new Map(); // psid -> { text, at } short repeat window after a dashboard send
   }
 
+  // A private test is locked to one enrolled PSID and automatically expires.
+  isTestAllowed(psid) {
+    if (!this.cfg.botTestOnly) return true;
+    const row = this.store.data.testEnrollment;
+    return Boolean(row && row.psid === psid && row.expiresAt > this.now());
+  }
+
   // Entry point for a verified webhook body. Never throws.
   handleWebhook(body) {
     if (!body || body.object !== 'page') return;
@@ -166,6 +173,37 @@ class Bot {
 
     const psid = ev.sender && ev.sender.id;
     if (!psid || psid === this.cfg.pageId) return;
+
+    // Enrollment arrives through Meta's signature-verified webhook while the bot
+    // is OFF. Do not log or store the one-time code in the chat history.
+    if (this.cfg.botTestOnly) {
+      const submitted = String((ev.message && ev.message.text) || '').trim();
+      const expected = 'JMAGS TEST ' + this.cfg.botTestEnrollCode;
+      if (!this.cfg.botEnabled && !isStandby && this.cfg.botTestEnrollCode.length >= 16 && submitted === expected) {
+        const current = this.store.data.testEnrollment;
+        if (current && current.expiresAt > this.now() && current.psid !== psid) {
+          this.log.warn('JMAGS_TEST_ENROLL_DENIED: tester slot occupied');
+          return;
+        }
+        this.store.data.testEnrollment = {
+          psid: String(psid),
+          expiresAt: this.now() + this.cfg.botTestTimeoutMinutes * 60_000,
+        };
+        // Clear previous history and media metadata before any synthetic test.
+        const tester = this.store.thread(psid);
+        tester.history = [];
+        tester.pendingMedia = [];
+        tester.attachmentNote = '';
+        tester.lastUserTs = 0;
+        tester.problemViaVideo = false;
+        tester.handedOff = false;
+        tester.pausedUntil = 0;
+        this.store.flush();
+        this.log.info('JMAGS_TEST_ENROLLED: one account ready for private testing');
+        return;
+      }
+      if (!this.isTestAllowed(psid)) return; // Ignore all ordinary accounts.
+    }
 
     let text = '';
     let forceReason = '';
@@ -298,6 +336,7 @@ class Bot {
   blockReason(psid, t, ts) {
     const now = this.now();
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
+    if (!this.isTestAllowed(psid)) return 'outside private test allowlist';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.handedOff) return `handed off to Ivan (${t.handoffReason})`;
@@ -598,6 +637,11 @@ class Bot {
   }
 
   async send(psid, text, opts = {}) {
+    // Final safety gate for AI, ops, follow-ups, and manual dashboard sends.
+    if (!this.isTestAllowed(psid)) {
+      this.log.warn('JMAGS_TEST_SEND_BLOCKED: non-tester');
+      return;
+    }
     const clean = sanitizeOutgoing(text);
     if (!clean) { this.log.warn(`empty reply to ${short(psid)} after sanitize`); return; }
     const existing = this.store.thread(psid);
@@ -864,6 +908,7 @@ class Bot {
   }
 
   async maybeVideoFollowUp(psid, t, now) {
+    if (!this.isTestAllowed(psid)) return;
     if (!t.videoReplyAt) return;
     if ((t.videoFollowupCount || 0) >= this.videoFollowupMax()) return;
     if (t.videoFollowupPending) return;
@@ -1017,6 +1062,7 @@ class Bot {
     let changed = false;
     for (const job of ops.jobs) {
       if (job.status !== 'Under Repair' || !job.psid) continue;
+      if (!this.isTestAllowed(job.psid)) continue;
       if (job.lastDailyStatusDate === stamp.date) continue;
       const thread = this.store.data.threads[job.psid];
       if (thread && (thread.handedOff || this.humanPaused(thread, now))) continue;
@@ -1057,6 +1103,7 @@ class Bot {
     if (!job || job.status !== 'For Delivery') return { sent: false, reason: 'status' };
     if (job.deliveryNotifiedAt) return { sent: false, reason: 'already' };
     if (!job.psid) return { sent: false, reason: 'unlinked' };
+    if (!this.isTestAllowed(job.psid)) return { sent: false, reason: 'private-test-only' };
     const now = this.now();
     const thread = (this.store.data.threads || {})[job.psid];
     if (thread && (thread.handedOff || this.humanPaused(thread, now))) return { sent: false, reason: 'paused' };
@@ -1120,6 +1167,7 @@ class Bot {
   }
 
   followUpSkip(psid, t, now, windowMs, { ignorePending = false } = {}) {
+    if (!this.isTestAllowed(psid)) return 'outside private test allowlist';
     if (!ignorePending && t.followupPending) return 'already sending a follow-up';
     if ((t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
     if (t.bookingDone) return 'booking form already submitted';
