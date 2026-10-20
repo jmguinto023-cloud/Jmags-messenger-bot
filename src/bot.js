@@ -16,7 +16,7 @@ const {
   manilaStamp,
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
-const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, CHECKUP_FEE_PLAIN } = require('./estimate');
+const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
@@ -464,7 +464,7 @@ class Bot {
       const latestUser = latestUserText(t);
       if (asksCheckupFee(latestUser)) {
         this.repliedRev.set(psid, rev);
-        const checkupAnswer = homeVisitIntent(latestUser) ? HOME_VISIT_FEE_LINE : CHECKUP_FEE_PLAIN;
+        const checkupAnswer = checkupFeeReply(latestUser, t);
         if (hadMedia) await this.sendMediaAck(psid, checkupAnswer, true, { armVideo: hadVideo });
         else await this.send(psid, checkupAnswer);
         if ((this.rev.get(psid) || 0) !== rev) continue;
