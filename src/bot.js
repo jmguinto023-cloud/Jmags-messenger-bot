@@ -263,7 +263,9 @@ class Bot {
     }
     const block = this.blockReason(psid, t, ts);
     if (block) {
-      if (/paused:|handed off/i.test(block)) await this.publishPendingMedia(psid, { quiet: true });
+      // Save every photo/video card for review whatever keeps the bot quiet (replies off,
+      // outside the schedule, paused, handed off), so JMAG's Operations always gets it.
+      await this.publishPendingMedia(psid, { quiet: true });
       t.pendingMedia = []; t.attachmentNote = '';
       this.log.info(`no reply to ${short(psid)}: ${block}`);
       return;
@@ -389,8 +391,9 @@ class Bot {
     const shown = customerLabel(customerName, psid);
     for (const m of items) {
       const type = m.type === 'image' ? 'photo' : m.type;
+      const reviewId = crypto.randomBytes(8).toString('hex');
       this.store.addReview({
-        id: crypto.randomBytes(8).toString('hex'),
+        id: reviewId,
         timestamp: when,
         psid,
         psidHash: psidHash(psid),
@@ -408,7 +411,14 @@ class Bot {
         mid: m.mid || '',
         ...(quiet ? { quietNote: 'bot not replying, standby/paused' } : {}),
       }, this.now());
-      await this.alertWebhook(psid, { type, url: m.url || '' }, snippet, when);
+      await this.alertWebhook(psid, { type, url: m.url || '' }, snippet, when, {
+        id: reviewId,
+        customerName,
+        firstMessage,
+        summary,
+        conversationLink: convo?.link || '',
+        psidLast4: String(psid).slice(-4),
+      });
       if (this.push) {
         try {
           await this.push.notify({
@@ -421,10 +431,10 @@ class Bot {
     }
   }
 
-  async alertWebhook(psid, item, snippet, timestamp) {
+  async alertWebhook(psid, item, snippet, timestamp, extra = {}) {
     const hook = this.cfg.alertWebhookUrl;
     if (!hook) return;
-    const payload = { psid, type: item.type, url: item.url, snippet, timestamp };
+    const payload = { psid, type: item.type, url: item.url, snippet, timestamp, ...extra };
     try {
       await fetch(hook, {
         method: 'POST',
@@ -1113,6 +1123,50 @@ class Bot {
     // Wait for the first minute. An immediate pass would message every overnight chat at once.
     this._followTimer = setInterval(tick, 60 * 1000);
     this._followTimer.unref?.();
+    // Replies approved in JMAG's Operations wait at the alert webhook. Collect them once a minute.
+    if (this.cfg.alertWebhookUrl && !this._relayTimer) {
+      this._relayTimer = setInterval(() => { this.relayReplies().catch((e) => this.log.warn('reply relay', e.message)); }, 60 * 1000);
+      this._relayTimer.unref?.();
+    }
+  }
+
+  // JM or Joshua reviewed a customer's photo/video in JMAG's Operations and approved an answer.
+  // The answer waits at the alert webhook (Supabase). Send each one from the Page exactly like a
+  // dashboard reply (same 24h rule, same pause for Ivan), then report back whether it went out.
+  async relayReplies() {
+    const hook = this.cfg.alertWebhookUrl;
+    if (!hook || this._relayRunning) return 0;
+    this._relayRunning = true;
+    let sent = 0;
+    try {
+      const ask = new URL(hook);
+      ask.searchParams.set('op', 'replies');
+      const r = await fetch(ask, { signal: AbortSignal.timeout(15000) });
+      if (!r.ok) return 0;
+      const list = await r.json().catch(() => []);
+      for (const q of Array.isArray(list) ? list.slice(0, 10) : []) {
+        if (!q || !q.id || !q.text) continue;
+        let res;
+        try { res = await this.replyFromDashboard(String(q.id), String(q.text)); } catch (e) {
+          res = { ok: false, status: 502, error: 'Hindi naipadala. Subukan ulit.' };
+        }
+        if (res.ok) sent++;
+        const back = new URL(hook);
+        back.searchParams.set('op', 'reply-result');
+        await fetch(back, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: String(q.id), ok: Boolean(res.ok), status: res.status || 0, error: res.error || '' }),
+          signal: AbortSignal.timeout(8000),
+        }).catch((e) => this.log.warn('reply relay result failed', e.message));
+      }
+      if (sent) this.log.info(`sent ${sent} reviewed reply(ies) from JMAG's Operations`);
+    } catch (e) {
+      this.log.warn('reply relay failed', e.message);
+    } finally {
+      this._relayRunning = false;
+    }
+    return sent;
   }
 
   async checkFollowups() {
