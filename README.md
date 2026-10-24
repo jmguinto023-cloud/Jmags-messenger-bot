@@ -182,7 +182,9 @@ npm start           # run (needs env, see .env.example)
   Until that exists, staff use **Mark confirmed**. If SMS is off or the key is missing, the button says **SMS not set up yet** and sends nothing.
   The Today tab has an **SMS log** (time, job, name, last 4 digits of the mobile, result). The full number and the API key are not shown.
   Setup: create a Semaphore account, buy credits, and register the sender name (`SMS_SENDER_NAME`, default `JMAGS`).
-  Sender-name approval asks for DTI and BIR papers. Put the key only in the host env, never in git. Empty env values stay at the defaults (SMS off, sender name JMAGS).
+  Sender-name approval asks for DTI and BIR papers. Until `JMAGS` is approved, set `SMS_SENDER_NAME` to `DEFAULT` or `none`.
+  The request then leaves out `sendername` and Semaphore uses its own default sender. An empty value still means `JMAGS`.
+  Put the key only in the host env, never in git. Empty env values stay at the defaults (SMS off, sender name JMAGS).
 
 ## Deploy (Render)
 `render.yaml` = Docker web service, Starter plan, Singapore, `/health` check, 1 GB disk at `/data`, `autoDeploy: false`.

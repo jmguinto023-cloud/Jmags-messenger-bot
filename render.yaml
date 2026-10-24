@@ -122,7 +122,7 @@ services:
         sync: false
       - key: SEMAPHORE_API_KEY
         sync: false
-      # Empty keeps the code default (JMAGS).
+      # Empty keeps JMAGS. DEFAULT or none omits sendername until that name is approved.
       - key: SMS_SENDER_NAME
         sync: false
       - key: SMS_CONFIRM_TEMPLATE
