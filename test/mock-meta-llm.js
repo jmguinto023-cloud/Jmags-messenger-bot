@@ -35,6 +35,14 @@ function startMock({ llmResponder } = {}) {
         return json(200, { choices: [{ message: { role: 'assistant', content } }] });
       }
       if (!url.searchParams.get('access_token')) return json(400, { error: { message: 'no token' } });
+      if (url.pathname.endsWith('/messages') && req.method === 'GET') {
+        calls.threadMessages = calls.threadMessages || [];
+        const parts = url.pathname.split('/').filter(Boolean);
+        const convoId = decodeURIComponent(parts[parts.length - 2] || '');
+        calls.threadMessages.push({ id: convoId, limit: url.searchParams.get('limit') });
+        const rows = (state.threadMessages && state.threadMessages[convoId]) || [];
+        return json(200, { data: rows });
+      }
       if (url.pathname.endsWith('/messages')) {
         if (body.sender_action) { calls.typing.push(body); return json(200, { recipient_id: body.recipient.id }); }
         calls.messages.push(body);
@@ -53,6 +61,7 @@ function startMock({ llmResponder } = {}) {
       }
       if (url.pathname.endsWith('/label')) {
         calls.labels.push({ user: body.user || url.searchParams.get('user'), path: url.pathname });
+        if (state.labelStatus) return json(state.labelStatus, { error: { message: state.labelError || 'label rejected', code: state.labelStatus } });
         return json(200, { success: true });
       }
       if (url.pathname.endsWith('/conversations') && req.method === 'GET') {

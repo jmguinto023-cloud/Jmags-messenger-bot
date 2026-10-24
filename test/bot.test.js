@@ -102,19 +102,19 @@ test('normal text gets an AI reply with typing indicator, RESPONSE type and syst
   const s = await setup();
   s.mock.state.llmResponder = () => 'Pwde po iservice maam/sir 😊 Taga saan po sila?';
   try {
-    const res = await s.post(msg('222', { text: 'magkano po palit backlight 55 inch samsung' }));
+    const res = await s.post(msg('222', { text: 'hello po, tv namin' }));
     assert.equal(res.status, 200);
     assert.equal(s.mock.calls.typing[0].sender_action, 'typing_on');
     assert.equal(s.mock.calls.messages.length, 1);
     const sent = s.mock.calls.messages[0];
     assert.equal(sent.messaging_type, 'RESPONSE');
     assert.equal(sent.recipient.id, '222');
-    assert.equal(sent.message.text, 'Pwde po iservice maam/sir 😊 Taga saan po sila?');
+    assert.equal(sent.message.text, 'Pwde po iservice maam/sir Taga saan po sila?');
     const llmBody = s.mock.calls.llm[0].body;
     assert.equal(llmBody.model, 'mock-model');
     assert.equal(s.mock.calls.llm[0].auth, 'Bearer sk-test');
     assert.match(llmBody.messages[0].content, /JMAG's Appliances/);
-    assert.equal(llmBody.messages.at(-1).content, 'magkano po palit backlight 55 inch samsung');
+    assert.equal(llmBody.messages.at(-1).content, 'hello po, tv namin');
   } finally { await s.close(); }
 });
 
@@ -299,7 +299,8 @@ test('human takeover: echo from another app (or no app_id) pauses the bot; own e
     await s.post(msg('888', { text: 'sige po' }));
     assert.equal(s.mock.calls.messages.length, 1, 'paused after Ivan replied from inbox');
     const t = s.app.store.thread('888');
-    assert.ok(t.pausedUntil > Date.now() + 11 * 3600e3);
+    assert.ok(t.pausedUntil > Date.now() + 20 * 60e3);
+    assert.ok(t.pausedUntil < Date.now() + 40 * 60e3);
     await s.post(echo('889', null, 'manual reply, no app id'));
     await s.post(msg('889', { text: 'ok po' }));
     assert.equal(s.mock.calls.messages.length, 1);
@@ -500,7 +501,7 @@ test('temperature 400 is retried once without temperature and then omitted', asy
   s.mock.state.llmResponder = () => 'Pwde po iservice maam/sir 😊 Taga saan po sila?';
   try {
     await s.post(msg('temp', { text: 'magkano po backlight' }));
-    assert.equal(s.mock.calls.messages[0].message.text, 'Pwde po iservice maam/sir 😊 Taga saan po sila?');
+    assert.equal(s.mock.calls.messages[0].message.text, 'Pwde po iservice maam/sir Taga saan po sila?');
     assert.equal(s.mock.calls.llm.length, 2);
     assert.equal(s.mock.calls.llm[0].body.temperature, 0.4);
     assert.equal(s.mock.calls.llm[1].body.temperature, undefined);
@@ -517,7 +518,7 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /add ₱500 to every quoted price when they are 1-50 km/);
   assert.match(prompt, /₱1,500 when 50-85 km/);
   assert.match(prompt, /up to 85 km from the nearest branch/);
-  assert.match(prompt, /in Biñan quote ₱9,500–₱10,000 all-in including home service/);
+  assert.match(prompt, /in Biñan quote ₱9,000 all-in including home service/);
   assert.match(prompt, /walang dagdag/);
   assert.match(prompt, /Never write "travel fee", "pamasahe", or "transpo"/);
   assert.match(prompt, /never tell the customer km/);
@@ -537,7 +538,10 @@ test('system prompt hides the travel fee, stays plain, and sends the form before
   assert.match(prompt, /filled it up or submitted the form/);
   assert.match(prompt, /first time they ask for a discount, tawad, less, or promo/);
   assert.match(prompt, /No receipt, no warranty/);
-  assert.match(prompt, /At 55" the base is ₱8,000/);
+  assert.match(prompt, /At 55" the confirmed backlight replacement is ₱8,500/);
+  assert.match(prompt, /8,500 CONFIRMED/);
+  assert.match(prompt, /no price — hand off/);
+  assert.match(prompt, /nasa around ₱35,000/);
   assert.match(prompt, /Monday to Saturday, 8am–5pm/);
   assert.match(prompt, /We do repair refrigerators and aircon/);
   assert.match(prompt, /Do not quote a price\. Then hand off to Ivan for the quote/);
@@ -653,7 +657,7 @@ test('retention purge and forget remove stored chats', async () => {
   } finally { await s.close(); }
 });
 
-test('quiet-customer follow-up fires once at 120 minutes, again only inside 23h, then stops', async () => {
+test('warm-lead follow-up fires once at 10 minutes, again only inside 23h, then stops', async () => {
   const s = await setup();
   assert.equal(s.app.bot._followTimer, undefined);
   const MIN = 60 * 1000;
@@ -673,11 +677,11 @@ test('quiet-customer follow-up fires once at 120 minutes, again only inside 23h,
     assert.equal(s.app.store.thread('fu').awaitingVideo, true);
     assert.equal(s.mock.calls.messages.length, 1);
 
-    now = t0 + 119 * MIN;
+    now = t0 + 9 * MIN;
     await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.length, 1);
 
-    now = t0 + 120 * MIN;
+    now = t0 + 10 * MIN;
     await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.length, 2);
     assert.match(s.mock.calls.messages[1].message.text, /slot/);
@@ -1649,7 +1653,8 @@ test('PAGE_AI_APP_IDS echoes are logged and do not pause the bot', async () => {
     await s.post(echo('ai2', '555666', 'ako na po'));
     await s.post(msg('ai2', { text: 'hello po' }));
     assert.equal(s.mock.calls.messages.length, 1);
-    assert.ok(s.app.store.thread('ai2').pausedUntil > Date.now() + 11 * 3600e3);
+    assert.ok(s.app.store.thread('ai2').pausedUntil > Date.now() + 20 * 60e3);
+    assert.ok(s.app.store.thread('ai2').pausedUntil < Date.now() + 40 * 60e3);
     assert.ok(logged.some((l) => /human reply detected/.test(l) && /app_id=555666/.test(l) && /paused/.test(l)));
     assert.deepEqual(loadConfig({}).pageAiAppIds, []);
   } finally {
@@ -1949,7 +1954,8 @@ test('own-app echoes are ignored; a genuine human echo minutes later still pause
     s.app.store.thread('ivan').lastUserTs -= 3 * 60e3;
     await s.post(echo('ivan', '263902037430900', '8500 po all in na'));
     const t = s.app.store.thread('ivan');
-    assert.ok(t.pausedUntil > Date.now() + 11 * 3600e3);
+    assert.ok(t.pausedUntil > Date.now() + 20 * 60e3);
+    assert.ok(t.pausedUntil < Date.now() + 40 * 60e3);
     assert.match(t.pauseSource, /human echo/);
     await s.post(msg('ivan', { text: 'sige po' }));
     assert.equal(s.mock.calls.messages.length, 1);
@@ -2403,7 +2409,7 @@ test('dashboard reply sends inside 24h, pauses the bot, and ignores a double-tap
     const t = s.app.store.thread('dash-reply');
     assert.equal(t.videoReplyAt, 0);
     assert.equal(t.pauseSource, 'dashboard reply');
-    assert.equal(t.pausedUntil, now + 12 * 3600 * 1000);
+    assert.equal(t.pausedUntil, now + 30 * 60 * 1000);
     assert.equal(t.lastHumanEchoAt, now);
     assert.equal(s.app.bot.humanPaused(t, now), true);
     assert.equal(s.app.bot.humanPaused(t, now + (2 * 3600 * 1000) + 1000), false);
@@ -2670,4 +2676,158 @@ test('failed follow-ups back off, old chats are skipped, and startup does not se
     await s.app.bot.checkFollowups();
     assert.equal(s.mock.calls.messages.length, 2);
   } finally { await s.close(); }
+});
+
+test('staff grace answers after five quiet minutes and stays quiet when staff replies again', async () => {
+  const s = await setup();
+  let now = 1_700_000_000_000;
+  s.app.bot.now = () => now;
+  s.mock.state.llmResponder = () => 'Sige po, taga saan po sila?';
+  try {
+    await s.post(msg('grace', { text: 'hello po' }, now));
+    assert.equal(s.mock.calls.messages.length, 1);
+    now += 3 * 60 * 1000;
+    await s.post(echo('grace', '263902037430900', 'ako na po'));
+    const pausedFor = s.app.store.thread('grace').pausedUntil - now;
+    assert.ok(pausedFor >= 29 * 60 * 1000 && pausedFor <= 30 * 60 * 1000);
+    now += 60 * 1000;
+    await s.post(msg('grace', { text: 'nandito pa po' }, now));
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.app.bot.humanPaused(s.app.store.thread('grace'), now), true);
+    now += 4 * 60 * 1000;
+    await s.app.bot.resumeAfterGrace('grace');
+    assert.equal(s.mock.calls.messages.length, 2);
+
+    now += 1000;
+    await s.post(echo('active', '263902037430900', 'nandito po ako'));
+    now += 2 * 60 * 1000;
+    await s.post(msg('active', { text: 'hello ulit' }, now));
+    now += 4 * 60 * 1000;
+    await s.post(echo('active', '263902037430900', 'ako pa rin'));
+    now += 60 * 1000;
+    await s.app.bot.resumeAfterGrace('active');
+    assert.equal(s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'active').length, 0);
+    assert.equal(loadConfig({}).humanPauseMinutes, 30);
+    assert.equal(loadConfig({}).staffGraceMinutes, 5);
+    assert.equal(loadConfig({ HUMAN_PAUSE_MINUTES: '45' }).humanPauseMinutes, 45);
+  } finally { await s.close(); }
+});
+
+test('Page Inbox history is loaded and a known size gets a confirmed price', async () => {
+  const s = await setup({ ADMIN_TOKEN: 'adm' });
+  const yesterday = Date.now() - 20 * 3600 * 1000;
+  s.mock.state.conversations = {
+    'astron-40': { id: 't_astron', link: 'https://www.facebook.com/messages/t/t_astron', updated_time: new Date().toISOString() },
+  };
+  s.mock.state.threadMessages = {
+    t_astron: [
+      { message: 'Astron 40 inch po', from: { id: 'astron-40' }, created_time: new Date(yesterday).toISOString() },
+      { message: 'Noted po Astron 40', from: { id: PAGE }, created_time: new Date(yesterday + 60000).toISOString() },
+    ],
+  };
+  s.mock.state.llmResponder = () => 'Anong brand at size po ng TV?';
+  try {
+    await s.post(msg('astron-40', { text: 'Magkano po kaya' }));
+    const sent = s.mock.calls.messages.at(-1).message.text;
+    assert.match(sent, /4,000/);
+    assert.match(sent, /4,500/);
+    assert.match(sent, /Ano po ang sira/);
+    assert.doesNotMatch(sent, /Anong brand at size/);
+    assert.doesNotMatch(sent, /\p{Extended_Pictographic}/u);
+    assert.ok(sent.length <= 300);
+    assert.equal(s.mock.calls.llm.length, 0);
+    const hist = s.app.store.thread('astron-40').history.map((h) => h.content).join('\n');
+    assert.match(hist, /Astron 40 inch/);
+    const rows = await (await fetch(`${s.base}/admin/conversations`, { headers: { Authorization: 'Bearer adm' } })).json();
+    assert.ok(rows.some((r) => r.role === 'assistant' && /4,000/.test(r.text) && r.provider === 'price-table'));
+  } finally { await s.close(); }
+});
+
+test('a long model reply is rewritten once, then cut to three short lines', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => `${'😊 '.repeat(10)}line one po.\n`.repeat(8);
+  try {
+    await s.post(msg('long-reply', { text: 'hello po lang' }));
+    const text = s.mock.calls.messages.at(-1).message.text;
+    assert.equal(s.mock.calls.llm.length, 2);
+    assert.ok(text.length <= 300);
+    assert.ok(text.split('\n').filter(Boolean).length <= 3);
+    assert.equal(text.includes('😊'), false);
+    const logged = s.app.store.readConversations().filter((r) => r.role === 'assistant');
+    assert.ok(logged.some((r) => r.text === text && r.provider === 'mock-model'));
+  } finally { await s.close(); }
+});
+
+test('a CRT inquiry is one short line to Ivan, not a Tagalog essay', async () => {
+  const s = await setup();
+  const essay = 'Ang iyong mensahe ay isang pagtatanong (inquiry). Nauunawaan ko na nakakadismaya. Dahil ang mga CRT TV ay nangangailangan ng specialized na piyesa. Maaari ko bang malaman kung saan mo nakitang may problema sa capacitor.';
+  s.mock.state.llmResponder = () => essay;
+  try {
+    await s.post(msg('crt-1', { text: 'CRT TV po, may problema sa capacitor' }));
+    assert.equal(s.mock.calls.llm.length, 0);
+    const text = s.mock.calls.messages[0].message.text;
+    assert.equal(text, 'CRT po ba sir? Si Ivan na po ang sasagot dito.');
+    assert.ok(text.length <= 300);
+    assert.ok(text.split('\n').filter(Boolean).length <= 3);
+    assert.match(text, /po/);
+    assert.match(text, /sir|maam/i);
+    assert.doesNotMatch(text, /iyong mensahe|Nauunawaan|nakakadismaya|specialized|capacitor|flatscreen lang/i);
+    assert.equal(s.mock.calls.pass.length, 1);
+    assert.equal(s.app.store.thread('crt-1').handedOff, true);
+    assert.match(s.app.store.thread('crt-1').handoffReason, /non-flatscreen/);
+
+    await s.post(msg('proj-1', { text: 'rear projection tv po, blurred' }));
+    const other = s.mock.calls.messages.at(-1).message.text;
+    assert.equal(other, 'Hindi po flatscreen ito sir? Si Ivan na po ang sasagot dito.');
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(s.app.store.thread('proj-1').handedOff, true);
+
+    const prompt = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8');
+    assert.match(prompt, /Never restate or summarize the customer's message/);
+    assert.match(prompt, /CRT po ba sir\? Si Ivan na po ang sasagot dito\./);
+    assert.match(prompt, /2 or 3 short lines/);
+  } finally { await s.close(); }
+});
+
+test('an essay over 300 characters is replaced by the short rewrite', async () => {
+  const s = await setup();
+  let n = 0;
+  const essay = 'Ang iyong mensahe ay isang pagtatanong (inquiry) tungkol sa TV. Nauunawaan ko na nakakadismaya ito. Dahil kailangan pa ng mahabang paliwanag, ipapaliwanag ko ang buong proseso ng serbisyo bago magbigay ng presyo. '.repeat(3);
+  s.mock.state.llmResponder = () => {
+    n += 1;
+    return n === 1 ? essay : 'Samsung 40 po sir, walang display. Palit backlight po ay ₱4,000. Kailan po sila free?';
+  };
+  try {
+    await s.post(msg('essay-1', { text: 'samsung 40 inch po walang display' }));
+    assert.equal(n, 2);
+    const text = s.mock.calls.messages.at(-1).message.text;
+    assert.match(text, /₱4,000/);
+    assert.match(text, /po/);
+    assert.doesNotMatch(text, /iyong mensahe|Nauunawaan|nakakadismaya/i);
+    assert.ok(text.length <= 300);
+    assert.ok(text.split('\n').filter(Boolean).length <= 3);
+    assert.equal(s.mock.calls.pass.length, 0);
+  } finally { await s.close(); }
+});
+
+test('a label HTTP 400 is logged once and not retried for that chat', async () => {
+  const s = await setup({ NEEDS_IVAN_LABEL: 'Video for review', LOG_LEVEL: 'warn' });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => logged.push(a.map(String).join(' '));
+  s.mock.state.labelStatus = 400;
+  s.mock.state.labelError = 'Unsupported post request';
+  try {
+    const video = (mid) => s.post(msg('lab-1', {
+      attachments: [{ type: 'video', payload: { url: `https://cdn.example/${mid}.mp4` } }],
+    }));
+    await video('one');
+    await video('two');
+    assert.equal(s.mock.calls.labels.length, 1);
+    const hits = logged.filter((l) => /label failed once/.test(l) && /Unsupported post request/.test(l));
+    assert.equal(hits.length, 1);
+  } finally {
+    console.error = orig;
+    await s.close();
+  }
 });

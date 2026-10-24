@@ -196,18 +196,30 @@
       "id": "pricing-concern",
       "status": "owner-guidance",
       "triggers": [
-        "mahal",
-        "too expensive",
-        "bakit mahal",
         "lower price",
         "discount",
         "tawad",
         "promo",
         "less pa"
       ],
-      "guidance": "Acknowledge budget concern without contempt. Do not discount or negotiate; first actual discount request requires staff handoff. Explain approved value only if known.",
-      "example": "Naiintindihan ko po ang concern sa budget. Staff po namin ang makakausap ninyo tungkol sa presyo.",
+      "guidance": "A discount, tawad, less, or promo ask is not a negotiation. Do not offer a lower price. One short friendly line, then staff handoff.",
+      "example": "Sige po. Si Ivan na po ang kakausap sa presyo. Saglit lang po.",
       "handoff": true
+    },
+    {
+      "id": "repair-vs-new",
+      "status": "owner-guidance",
+      "triggers": [
+        "mahal",
+        "too expensive",
+        "bakit mahal",
+        "low budget",
+        "pag-iisipan",
+        "iisipin ko",
+        "undecided"
+      ],
+      "guidance": "If they hesitate and do not ask for a discount, compare repair vs brand-new using only CONFIRMED rows. A 55 inch Samsung brand-new is around 35000 pesos. Confirmed LCD modification and backlight replacement are both 8500 pesos, about 26500 less, with warranty, home service, no hauling, and they keep the TV. Say nasa around. Never invent other brand-new prices or offer a discount. Ask when they are free.",
+      "example": "Naiintindihan ko po. 55 inch Samsung brand-new is nasa around 35000. Repair po is 8500, mga 26500 ang natitipid, may warranty at home service, walang hakot. Kailan po kayo free?"
     },
     {
       "id": "job-status",
@@ -270,6 +282,22 @@
       ],
       "guidance": "Remain calm and respectful, do not insult back or abandon a legitimate issue. Briefly acknowledge their frustration and route complaints to staff.",
       "example": "Naiintindihan kong naiinis po kayo. Kung may service concern, tutulungan po kayo ng staff namin.",
+      "handoff": true
+    },
+    {
+      "id": "non-flatscreen",
+      "status": "owner-guidance",
+      "triggers": [
+        "crt",
+        "crt tv",
+        "picture tube",
+        "tube tv",
+        "projection tv",
+        "hindi flatscreen",
+        "makapal na tv"
+      ],
+      "guidance": "CRT, tube, projection, or another non-flatscreen unit. Do not explain parts. Do not say whether JMAG repairs it. One short Taglish line with po and sir or maam, then staff handoff.",
+      "example": "CRT po ba sir? Si Ivan na po ang sasagot dito.",
       "handoff": true
     }
   ]

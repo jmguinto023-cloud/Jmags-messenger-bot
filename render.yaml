@@ -39,6 +39,12 @@ services:
         sync: false
       - key: HUMAN_PAUSE_HOURS
         sync: false
+      # Pause length after a human reply. Empty keeps the code default (30 minutes).
+      - key: HUMAN_PAUSE_MINUTES
+        sync: false
+      # Customer message during a human pause is answered after this quiet staff gap. Empty keeps 5 minutes.
+      - key: STAFF_GRACE_MINUTES
+        sync: false
       - key: HANDOFF_RESUME_HOURS
         sync: false
       - key: FOLLOWUP_AFTER_MIN

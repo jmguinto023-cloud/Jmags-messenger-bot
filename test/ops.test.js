@@ -1002,3 +1002,37 @@ test('operations shows when the reply schedule is on or waiting', async () => {
     assert.doesNotMatch(master, /turns on at/);
   } finally { await s.close(); }
 });
+
+test('today tab lists hot leads oldest first and skips a finished booking', async () => {
+  const s = await setup();
+  const now = NOON;
+  s.app.bot.now = () => now;
+  try {
+    const store = s.app.store;
+    const seed = (psid, text, ts, extra = {}) => {
+      store.addTurn(psid, 'user', text, ts);
+      Object.assign(store.thread(psid), extra);
+    };
+    seed('hot-old-aa11', 'Samsung 55 inch walang display, magkano po', now - 40 * 60 * 1000);
+    seed('wait-ee55', 'hello po lang', now - 15 * 60 * 1000);
+    seed('hot-new-bb22', 'kailan po pwede magpa-schedule ng 40 inch', now - 12 * 60 * 1000);
+    seed('booked-cc33', 'LG 32 inch magkano po', now - 50 * 60 * 1000, { bookingDone: true });
+    seed('quiet-dd44', 'hello po', now - 2 * 60 * 1000);
+    store.data.reviews.push({
+      id: 'r1', psid: 'hot-old-aa11', type: 'video',
+      conversationId: 't_111',
+      conversationLink: 'https://www.facebook.com/messages/t/t_111',
+    });
+    const jar = await cookie(s.base);
+    const page = await (await fetch(`${s.base}/ops?tab=today`, { headers: { Cookie: jar } })).text();
+    assert.match(page, /id="hot-leads"/);
+    const iOld = page.indexOf('data-hot-lead="aa11"');
+    const iWait = page.indexOf('data-hot-lead="ee55"');
+    const iNew = page.indexOf('data-hot-lead="bb22"');
+    assert.ok(iOld > 0 && iOld < iWait && iWait < iNew);
+    assert.match(page, /https:\/\/www\.facebook\.com\/messages\/t\/t_111/);
+    assert.doesNotMatch(page, /data-hot-lead="cc33"/);
+    assert.doesNotMatch(page, /data-hot-lead="dd44"/);
+    assert.doesNotMatch(page, /0917\d{7}/);
+  } finally { await s.close(); }
+});

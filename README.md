@@ -45,7 +45,7 @@ npm start           # run (needs env, see .env.example)
   assistant turns (bot reply, echo, or a human reply recorded after the customer) are dropped so the
   request always ends on a user message. An attachment with no caption is sent as a received-media note
   (`[Customer sent a video at HH:MM - RECEIVED, ...]`, or photo).
-- Human takeover: a `message_echo` whose `app_id` is not ours (or missing) pauses that chat for HUMAN_PAUSE_HOURS.
+- Human takeover: a `message_echo` whose `app_id` is not ours (or missing) pauses that chat for HUMAN_PAUSE_MINUTES (default 30). If the customer writes again and staff is quiet for STAFF_GRACE_MINUTES (default 5), the bot answers. It stays quiet while staff replied within that grace.
   The log line includes `app_id=...`. `PAGE_AI_APP_IDS` (comma-separated, default empty) lists Meta automation
   app ids. An echo from one of those ids is logged as `page AI echo ... app_id=... – not pausing` and does not
   start the pause. `IGNORE_ECHO_APP_IDS` still drops an echo before that check.
@@ -120,7 +120,7 @@ npm start           # run (needs env, see .env.example)
   The send uses Messenger `messaging_type: RESPONSE` and no `HUMAN_AGENT` tag. Outside the reply window
   (`REPLY_WINDOW_HOURS`, default 23.5, inside Meta's 24 hours) the page shows
   `Lampas na sa 24 oras, i-reply sa Business Suite` and nothing is sent. Text over 2000 characters is rejected.
-  A dashboard reply pauses that chat like Ivan typing in the inbox (`HUMAN_PAUSE_HOURS`, idle auto-resume),
+  A dashboard reply pauses that chat like Ivan typing in the inbox (`HUMAN_PAUSE_MINUTES`, staff grace, idle auto-resume),
   cancels a pending video follow-up, marks the card **Sinagot ni Ivan**, and is stored in the conversation.
   The echo of our own app id is ignored so the line is not saved twice. A double-tap sends once.
   Enter sends on a computer; a phone uses the button. Success or the error shows on the card.

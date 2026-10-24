@@ -71,6 +71,7 @@ function loadConfig(env = process.env) {
     // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
+    brandNewReferenceFile: env.BRAND_NEW_REFERENCE_FILE || path.join(__dirname, '..', 'prompts', 'brand-new-reference.md'),
     // Safety switches
     botTestChallenge: env.BOT_TEST_CHALLENGE || '', // one-time synthetic test only
     botTestChatEnabled: bool(env.BOT_TEST_CHAT_ENABLED, false),
@@ -85,7 +86,11 @@ function loadConfig(env = process.env) {
     timezone: env.BOT_TIMEZONE || 'Asia/Manila',
     // Behaviour
     historyTurns: num(env.HISTORY_TURNS, 20),
+    // Legacy offset only. Startup still recognises pauses saved as hours. The live pause length is minutes.
     humanPauseHours: num(env.HUMAN_PAUSE_HOURS, 12),
+    humanPauseMinutes: num(env.HUMAN_PAUSE_MINUTES, 30),
+    // After a human reply, a new customer message is answered once staff has been quiet this long.
+    staffGraceMinutes: num(env.STAFF_GRACE_MINUTES, 5),
     // Safety: a human pause ends early when Ivan has not replied for this long (0 = off).
     humanIdleResumeHours: num(env.HUMAN_IDLE_RESUME_HOURS, 2),
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 72),

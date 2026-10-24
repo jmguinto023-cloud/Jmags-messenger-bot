@@ -2,7 +2,8 @@
 // Shop operations: job orders, money, parts, and the replies that read them.
 // Persisted on store.data.ops inside DATA_DIR/state.json. No customer rows live in git.
 
-const { chatCustomerName } = require('./summary');
+const { chatCustomerName, summarizeConversation } = require('./summary');
+const { inboxLinks, genericInboxUrl } = require('./inbox-link');
 const { statusLine } = require('./schedule');
 
 const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delivery', 'Completed', 'Cancelled'];
@@ -930,13 +931,66 @@ function lowStock(parts, branch) {
   return filterBranch(parts, branch).filter((p) => p.reorder || Number(p.stock) <= 0);
 }
 
+const HOT_LEAD_WAIT_MS = 10 * 60 * 1000;
+
+function hotLeadInfo(thread, now = Date.now()) {
+  if (!thread || thread.bookingDone) return null;
+  const history = Array.isArray(thread.history) ? thread.history : [];
+  const users = history.filter((h) => h && h.role === 'user' && String(h.content || '').trim());
+  if (!users.length) return null;
+  const text = users.map((h) => h.content).join('\n');
+  const facts = summarizeConversation(users);
+  const askedPrice = /\b(magkano|presyo|price|how much|hm)\b/i.test(text);
+  const askedSchedule = /\b(schedule|kailan|pa-?book|pa-?schedule|magpa-?schedule|i-?book)\b/i.test(text);
+  const issue = Boolean(facts.problem) || /\b(sira|ayaw|problem|issue)\b|no power|hindi (gumagana|umiilaw)|walang (ilaw|display|picture)/i.test(text);
+  const warm = Boolean(facts.size || facts.brand || issue || askedPrice || askedSchedule);
+  const last = history[history.length - 1];
+  const since = thread.lastUserTs || users[users.length - 1].ts || 0;
+  const unanswered = Boolean(last && last.role === 'user' && since && now - since >= HOT_LEAD_WAIT_MS);
+  if (!warm && !unanswered) return null;
+  const reasons = [];
+  const spec = [facts.brand, facts.size, facts.problem].filter(Boolean).join(' ');
+  if (spec) reasons.push(spec);
+  else if (issue) reasons.push('described an issue');
+  if (askedPrice) reasons.push('asked the price');
+  if (askedSchedule) reasons.push('asked to schedule');
+  if (unanswered) reasons.push('unanswered over 10 minutes');
+  if (!reasons.length) reasons.push('no booking yet');
+  return { warm, unanswered, reason: reasons.join(' · '), since };
+}
+
+function hotLeads(threads, reviews, now, cfg) {
+  const pageId = (cfg && cfg.pageId) || '';
+  const rows = [];
+  for (const [psid, thread] of Object.entries(threads || {})) {
+    const info = hotLeadInfo(thread, now);
+    if (!info) continue;
+    const review = (reviews || []).find((r) => r && r.psid === psid && (r.conversationLink || r.conversationId));
+    let href = '';
+    if (review) href = inboxLinks(pageId, review).messenger || '';
+    // A raw PSID in the page HTML is a customer id. Without a stored thread link, open the Page inbox.
+    if (!href) href = genericInboxUrl(pageId);
+    const mins = info.since ? Math.max(0, Math.round((now - info.since) / 60000)) : 0;
+    rows.push({
+      last4: String(psid).slice(-4),
+      reason: info.reason,
+      href,
+      since: info.since || 0,
+      waitLabel: mins ? `${mins} min` : '',
+    });
+  }
+  rows.sort((a, b) => (a.since || 0) - (b.since || 0) || a.last4.localeCompare(b.last4));
+  return rows.slice(0, 30);
+}
+
 function pausedReadOnly(thread, now, cfg) {
   if (!thread || !thread.pausedUntil || now >= thread.pausedUntil) return false;
+  const pauseMs = (Number(cfg.humanPauseMinutes) >= 0 ? Number(cfg.humanPauseMinutes) : 30) * 60e3;
   const idleHours = cfg.humanIdleResumeHours;
-  if (idleHours > 0) {
-    const last = thread.lastHumanEchoAt || (thread.pausedUntil - cfg.humanPauseHours * 3600e3);
-    if (now - last > idleHours * 3600e3) return false;
-  }
+  const last = thread.lastHumanEchoAt || (thread.pausedUntil - (pauseMs || cfg.humanPauseHours * 3600e3 || 30 * 60e3));
+  if (idleHours > 0 && now - last > idleHours * 3600e3) return false;
+  const graceMin = cfg.staffGraceMinutes == null ? 5 : Number(cfg.staffGraceMinutes);
+  if (graceMin > 0 && (thread.lastUserTs || 0) > last && now - last >= graceMin * 60e3) return false;
   return true;
 }
 
@@ -1056,7 +1110,8 @@ function buildView(store, opts) {
         .map((j) => ({ ...j, balance: jobBalance(j, ops.payments) })),
       dupes: duplicatePayments(ops.payments, branch),
     },
-    needsText: needsTextUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanIdleResumeHours: 2 }, branch),
+    hotLeads: hotLeads(opts.threads || {}, opts.reviews || [], now, opts.cfg || {}),
+    needsText: needsTextUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanPauseMinutes: 30, staffGraceMinutes: 5, humanIdleResumeHours: 2 }, branch),
     aiHandoffs: aiHandoffs(opts.threads || {}, ops.jobs),
     needsDelivery: needsDeliveryUpdates(ops, opts.threads || {}, now, opts.cfg || { replyWindowHours: 23.5, humanPauseHours: 12, humanIdleResumeHours: 2 }, branch),
     techLoad: TECHS.map((tech) => ({
@@ -1528,5 +1583,6 @@ module.exports = {
   moneyReport, financeReport, adBudgetReport, duplicatePayments, customerRows,
   asksJobStatus, asksWarrantyProblem, jobStatusText, dailyStatusText, warrantyText,
   inWarranty, warrantyEndOf, suggestionFor, jobByPsid, matchIdentity, nameGuess,
+  hotLeadInfo, hotLeads, HOT_LEAD_WAIT_MS,
   directory, exportCsv, longDate, friendlyStatus,
 };
