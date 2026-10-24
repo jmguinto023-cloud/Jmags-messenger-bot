@@ -126,8 +126,9 @@ async function postSemaphore({ cfg, number, message, fetchImpl }) {
     apikey: cfg.semaphoreApiKey,
     number,
     message,
-    sendername: cfg.smsSenderName || 'JMAGS',
   });
+  // An empty sender name means DEFAULT/none: leave the field off so Semaphore picks its sender.
+  if (cfg.smsSenderName) body.set('sendername', cfg.smsSenderName);
   const res = await fetchImpl(SEMAPHORE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

@@ -14,6 +14,12 @@ function num(v, def) {
 function list(v) {
   return String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
+function smsSenderSetting(value) {
+  const name = String(value || '').trim();
+  if (!name) return 'JMAGS';
+  if (/^(default|none)$/i.test(name)) return '';
+  return name;
+}
 
 function loadConfig(env = process.env) {
   return {
@@ -98,7 +104,8 @@ function loadConfig(env = process.env) {
     // Schedule confirmation texts. Off until a Semaphore key is set. Never sent without a button press.
     smsEnabled: bool(env.SMS_ENABLED, false),
     semaphoreApiKey: env.SEMAPHORE_API_KEY || '',
-    smsSenderName: String(env.SMS_SENDER_NAME || '').trim() || 'JMAGS',
+    // Empty stays JMAGS. DEFAULT or none omits sendername so Semaphore can use its own sender before JMAGS is approved.
+    smsSenderName: smsSenderSetting(env.SMS_SENDER_NAME),
     smsConfirmTemplate: env.SMS_CONFIRM_TEMPLATE ? String(env.SMS_CONFIRM_TEMPLATE).replace(/\\n/g, '\n') : '',
     smsInboundToken: env.SMS_INBOUND_TOKEN || '',
     replyWindowHours: num(env.REPLY_WINDOW_HOURS, 23.5), // stay safely inside Meta's 24h window
