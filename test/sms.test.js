@@ -87,6 +87,10 @@ test('Philippine numbers, confirm words, and SMS defaults', () => {
   assert.equal(confirmTemplate(cfg), DEFAULT_CONFIRM_TEMPLATE);
   assert.equal(loadConfig({ SMS_ENABLED: '' }).smsEnabled, false);
   assert.equal(loadConfig({ SMS_SENDER_NAME: '' }).smsSenderName, 'JMAGS');
+  assert.equal(loadConfig({ SMS_SENDER_NAME: 'DEFAULT' }).smsSenderName, '');
+  assert.equal(loadConfig({ SMS_SENDER_NAME: 'none' }).smsSenderName, '');
+  assert.equal(loadConfig({ SMS_SENDER_NAME: ' None ' }).smsSenderName, '');
+  assert.equal(loadConfig({ SMS_SENDER_NAME: 'JMAGS' }).smsSenderName, 'JMAGS');
   assert.equal(loadConfig({ SMS_ENABLED: 'true', SMS_CONFIRM_TEMPLATE: 'Bukas po.\\nSalamat' }).smsConfirmTemplate, 'Bukas po.\nSalamat');
   assert.equal(smsBadge({ visitDate: '2026-10-19', smsForDate: '2026-10-19', smsStatus: 'sent' }, '2026-10-18'), 'Text sent');
   assert.equal(smsBadge({ visitDate: '2026-10-18', smsForDate: '2026-10-18', smsStatus: 'sent', smsSentAt: '2026-10-17T04:00:00.000Z' }, '2026-10-18'), 'No reply');
@@ -121,6 +125,28 @@ test('SMS stays off until it is configured, and a tap sends nothing', async () =
     assert.equal(called, false);
     assert.equal(s.app.store.data.ops.jobs[0].smsStatus || '', '');
     assert.equal((await fetch(`${s.base}/ops/action`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=send-sms&id=JO-SMS-001' })).status, 403);
+  } finally { await s.close(); }
+});
+
+test('DEFAULT or none leaves sendername off the Semaphore request', async () => {
+  const s = await setup({
+    SMS_ENABLED: 'true', SEMAPHORE_API_KEY: 'sem-test-key', SMS_SENDER_NAME: 'DEFAULT',
+  });
+  const calls = [];
+  s.app.cfg.smsFetch = async (url, opts) => {
+    calls.push(String(opts.body));
+    return { ok: true, status: 200, text: async () => JSON.stringify([{ message_id: 9, status: 'Pending' }]) };
+  };
+  try {
+    assert.equal(s.app.cfg.smsSenderName, '');
+    addJob(s.app);
+    const jar = await cookie(s.base);
+    const sent = await postAction(s.base, jar, 'action=send-sms&id=JO-SMS-001&returnTab=today');
+    assert.match(sent.location, /notice=sms-sent/);
+    const body = new URLSearchParams(calls[0]);
+    assert.equal(body.has('sendername'), false);
+    assert.equal(body.get('number'), '639175550011');
+    assert.equal(body.get('message'), DEFAULT_CONFIRM_TEMPLATE);
   } finally { await s.close(); }
 });
 
