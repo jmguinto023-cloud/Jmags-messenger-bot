@@ -26,7 +26,7 @@ const DELIVERY_STATUS = 'Hello po 😊 Okay na po ang TV niyo at ready na for de
 function emptyOps() {
   return {
     jobs: [], payments: [], expenses: [], ads: [], parts: [],
-    bookings: [], customers: [], otherIncome: [],
+    bookings: [], customers: [], otherIncome: [], smsLog: [],
   };
 }
 
@@ -179,6 +179,7 @@ function blankJob(partial = {}) {
     partsUsed: '', partsCost: 0, psid: '',
     warrantyEnd: '', createdAt: '', updatedAt: '', lastDailyStatusDate: '', dailyStatusSkip: '',
     deliveryNotifiedAt: '',
+    smsForDate: '', smsSentAt: '', smsMessageId: '', smsStatus: '', smsConfirmedAt: '',
     ...partial,
   };
 }
@@ -339,6 +340,11 @@ function upsertJobs(ops, incoming) {
       lastDailyStatusDate: prev ? prev.lastDailyStatusDate || '' : '',
       dailyStatusSkip: prev ? prev.dailyStatusSkip || '' : '',
       deliveryNotifiedAt: prev ? prev.deliveryNotifiedAt || '' : '',
+      smsForDate: prev ? prev.smsForDate || '' : '',
+      smsSentAt: prev ? prev.smsSentAt || '' : '',
+      smsMessageId: prev ? prev.smsMessageId || '' : '',
+      smsStatus: prev ? prev.smsStatus || '' : '',
+      smsConfirmedAt: prev ? prev.smsConfirmedAt || '' : '',
       createdAt: prev ? prev.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -1071,6 +1077,9 @@ function buildView(store, opts) {
     now,
     group: opts.group === 'ad' ? 'ad' : 'branch',
     bookingFormUrl: opts.bookingFormUrl || '',
+    smsReady: Boolean(opts.smsReady),
+    notice: opts.notice || '',
+    smsLog: (ops.smsLog || []).slice(-20).reverse(),
     chipCounts: Object.assign({
       Open: jobs.filter(openJob).length,
       warranty: jobs.filter((j) => j.warrantyEnd && j.warrantyEnd >= today && j.status !== 'Cancelled').length,

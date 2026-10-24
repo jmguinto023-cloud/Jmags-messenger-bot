@@ -117,3 +117,15 @@ services:
       # Empty keeps the code default (8 requests per minute). 0 turns the gap off.
       - key: LLM_MAX_RPM
         sync: false
+      # Empty keeps SMS off. Turn on in the dashboard only after Semaphore is ready.
+      - key: SMS_ENABLED
+        sync: false
+      - key: SEMAPHORE_API_KEY
+        sync: false
+      # Empty keeps the code default (JMAGS).
+      - key: SMS_SENDER_NAME
+        sync: false
+      - key: SMS_CONFIRM_TEMPLATE
+        sync: false
+      - key: SMS_INBOUND_TOKEN
+        sync: false

@@ -9,6 +9,7 @@ const { passwordOk, readCookie, validSession, sessionCookie, clearCookie } = req
 const { loginPage, listPage, publicReview, threadsPayload } = require('./dashboard-page');
 const { parseSignedRequest } = require('./signed-request');
 const { buildView, applyAction, exportCsv, importOps, linkReviewToJob } = require('./ops');
+const { smsReady, sendJobConfirmation, markJobConfirmed, parseInbound, tokenOk, applyInboundSms } = require('./sms');
 const { opsPage } = require('./ops-page');
 const { activeNow } = require('./schedule');
 
@@ -158,7 +159,7 @@ function createServer({ cfg, bot, log }) {
     }
 
     const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply' || url.pathname === '/dashboard/link-job' || url.pathname === '/ops/action');
-    if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || dashPost)) {
+    if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || url.pathname === '/sms/inbound' || dashPost)) {
       const chunks = [];
       let size = 0;
       req.on('data', (c) => { size += c.length; if (size > 1e6) req.destroy(); else chunks.push(c); });
@@ -170,6 +171,7 @@ function createServer({ cfg, bot, log }) {
         if (url.pathname === '/dashboard/api/reply') return dashboardReply(req, raw);
         if (url.pathname === '/dashboard/link-job') return dashboardLinkJob(req, raw);
         if (url.pathname === '/ops/action') return opsAction(req, raw);
+        if (url.pathname === '/sms/inbound') return smsInbound(req, raw);
         if (url.pathname === '/dashboard/api/subscribe') return subscribe(req, raw);
         if (url.pathname === '/data-deletion-callback') return dataDeletionCallback(raw);
         if (url.pathname.startsWith('/admin/')) return admin(url, req, raw);
@@ -222,6 +224,8 @@ function createServer({ cfg, bot, log }) {
         threads: bot.store.data.threads || {},
         reviews: bot.store.data.reviews || [],
         bookingFormUrl: cfg.bookingFormUrl || '',
+        smsReady: smsReady(cfg),
+        notice: u.searchParams.get('notice') || '',
         cfg,
       };
     }
@@ -230,9 +234,44 @@ function createServer({ cfg, bot, log }) {
       return opsPage(buildView(bot.store, viewOpts(u)));
     }
 
+    function redirectOps(params, notice) {
+      const tab = params.get('returnTab') || params.get('tab') || 'today';
+      const branch = params.get('returnBranch') || params.get('branch') || 'ALL';
+      const period = params.get('returnPeriod') || params.get('period') || 'month';
+      const group = params.get('returnGroup') || '';
+      const groupQuery = group && group !== 'branch' ? `&group=${encodeURIComponent(group)}` : '';
+      const noticeQuery = notice ? `&notice=${encodeURIComponent(notice)}` : '';
+      res.writeHead(303, { Location: `/ops?tab=${encodeURIComponent(tab)}&branch=${encodeURIComponent(branch)}&period=${encodeURIComponent(period)}${groupQuery}${noticeQuery}` });
+      res.end('');
+    }
+
+    function smsInbound(rq, raw) {
+      const parsed = parseInbound(raw.toString('utf8'), rq.headers['content-type']);
+      const token = url.searchParams.get('token') || rq.headers['x-sms-token'] || (parsed && parsed.token) || '';
+      if (!tokenOk(cfg, token)) return sendJson(403, { ok: false });
+      if (!parsed || !parsed.from) return sendJson(400, { ok: false });
+      const result = applyInboundSms({
+        store: bot.store, from: parsed.from, text: parsed.text, messageId: parsed.messageId,
+        now: bot.now(), tz: cfg.timezone, log,
+      });
+      return sendJson(200, { ok: true, confirmed: result.confirmed });
+    }
+
     async function opsAction(rq, raw) {
       if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
       const params = new URLSearchParams(raw.toString('utf8'));
+      const action = params.get('action') || '';
+      if (action === 'send-sms') {
+        const result = await sendJobConfirmation({
+          store: bot.store, cfg, jobId: params.get('id') || '', now: bot.now(), log, fetchImpl: cfg.smsFetch,
+        });
+        return redirectOps(params, result.notice);
+      }
+      if (action === 'mark-sms-confirmed') {
+        const result = markJobConfirmed({ store: bot.store, jobId: params.get('id') || '', now: bot.now(), log, source: 'staff' });
+        if (!result.ok) return send(400, 'Hindi makita ang job.');
+        return redirectOps(params, result.notice);
+      }
       const result = applyAction(bot.store, params, bot.now(), cfg.timezone);
       if (!result.ok) return send(400, result.error || 'Bad request');
       if (result.notifyDelivery) {
@@ -242,13 +281,7 @@ function createServer({ cfg, bot, log }) {
           log.error('delivery notice failed', e.message);
         }
       }
-      const tab = params.get('returnTab') || params.get('tab') || 'today';
-      const branch = params.get('returnBranch') || params.get('branch') || 'ALL';
-      const period = params.get('returnPeriod') || params.get('period') || 'month';
-      const group = params.get('returnGroup') || '';
-      const groupQuery = group && group !== 'branch' ? `&group=${encodeURIComponent(group)}` : '';
-      res.writeHead(303, { Location: `/ops?tab=${encodeURIComponent(tab)}&branch=${encodeURIComponent(branch)}&period=${encodeURIComponent(period)}${groupQuery}` });
-      res.end('');
+      return redirectOps(params, '');
     }
 
     function dashboardLinkJob(rq, raw) {
