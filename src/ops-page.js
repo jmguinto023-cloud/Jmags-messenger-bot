@@ -1,6 +1,7 @@
 'use strict';
 // JMAG's Operations, laid out like the shop dashboard: light cards, green actions, bottom nav.
 const { STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, KNOWN_ADS, adBudgetOf, branchLabel } = require('./ops');
+const { smsBadge } = require('./sms');
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -272,7 +273,11 @@ function addrBox(job) {
 
 function attention(view) {
   const items = [];
-  for (const job of view.attention.past) items.push(`<li><div><b>${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">Past visit, status not updated</div></div><span class="pill pink">● Fix</span></li>`);
+  for (const job of view.attention.past) {
+    const badge = smsBadge(job, view.today);
+    const extra = badge ? `<span class="pill pink" data-sms-badge="${esc(job.id)}">${esc(badge)}</span>` : '';
+    items.push(`<li><div><b>${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">Past visit, status not updated</div>${extra}</div><span class="pill pink">● Fix</span></li>`);
+  }
   for (const job of view.attention.balance) items.push(`<li><div><b>${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">Completed with ${peso(job.balance)} unpaid</div></div><span class="pill pink">● Fix</span></li>`);
   for (const group of view.attention.dupes) {
     const row = group[0];
@@ -310,6 +315,41 @@ function bookingCard(b, view) {
   </article>`;
 }
 
+const SMS_NOTICES = {
+  'sms-off': 'SMS not set up yet',
+  'sms-sent': 'Confirmation text sent.',
+  'sms-already': 'A confirmation text was already sent for this visit date.',
+  'sms-failed': 'The text was not sent. Try again.',
+  'sms-confirmed': 'Marked confirmed.',
+  'sms-nophone': 'This job has no mobile number, so no text was sent.',
+  'sms-bad-number': 'That mobile number is not a Philippine mobile number, so no text was sent.',
+};
+
+function smsControls(job, view) {
+  if (!job || !String(job.phone || '').trim() || !job.visitDate) return '';
+  if (job.status === 'Completed' || job.status === 'Cancelled') return '';
+  const badge = smsBadge(job, view.today);
+  const tone = badge === 'Confirmed' ? 'mint' : badge === 'No reply' ? 'pink' : 'blue';
+  const badgeHtml = badge ? `<span class="pill ${tone}" data-sms-badge="${esc(job.id)}">${esc(badge)}</span>` : '';
+  const sent = job.smsForDate === job.visitDate && (job.smsStatus === 'sent' || job.smsStatus === 'confirmed');
+  const confirmed = job.smsForDate === job.visitDate && job.smsStatus === 'confirmed';
+  let action = '';
+  if (!view.smsReady) {
+    action = '<button class="btn" type="button" disabled data-sms="off">SMS not set up yet</button>';
+  } else if (!sent) {
+    action = `<form method="post" action="/ops/action">${hidden(view)}<input type="hidden" name="action" value="send-sms"><input type="hidden" name="id" value="${esc(job.id)}"><button class="btn" type="submit" data-sms="send">Send confirmation text</button></form>`;
+  }
+  const mark = confirmed ? '' : `<form method="post" action="/ops/action">${hidden(view)}<input type="hidden" name="action" value="mark-sms-confirmed"><input type="hidden" name="id" value="${esc(job.id)}"><button class="btn" type="submit" data-sms="confirm">Mark confirmed</button></form>`;
+  return `<div class="sms-row" data-sms-job="${esc(job.id)}">${badgeHtml}${action}${mark}</div>`;
+}
+
+function smsLogCard(view) {
+  const rows = view.smsLog || [];
+  const labels = { sent: 'Text sent', failed: 'Not sent', confirmed: 'Confirmed', inbound: 'Reply' };
+  const items = rows.map((row) => `<li data-sms-log="${esc(row.kind)}"><b>${esc(labels[row.kind] || row.kind)}</b> · ${esc(row.jobId)} · ${esc(row.name)} ···${esc(row.last4)}<div class="meta">${esc(row.visitDate)} · ${esc(row.detail || '')}</div></li>`).join('');
+  return `<section class="card" id="sms-log"><header><h2>SMS log</h2><span class="meta">${rows.length}</span></header>${items ? `<ul>${items}</ul>` : '<p class="empty">No texts sent yet.</p>'}</section>`;
+}
+
 function scheduleRow(job, view) {
   const balance = Number(job.balance);
   return `<article class="card visit">
@@ -322,6 +362,7 @@ function scheduleRow(job, view) {
     ${addrBox(job)}
     ${mapLinks(job)}
     <p class="meta">${esc(job.visitTime)} · ${esc(job.technician || 'Unassigned')}</p>
+    ${smsControls(job, view)}
     <form method="post" action="/ops/action">${hidden(view)}<input type="hidden" name="action" value="done"><input type="hidden" name="id" value="${esc(job.id)}"><button class="btn green" type="submit">✓ Job done</button></form>
   </article>`;
 }
@@ -368,10 +409,12 @@ function todayTab(view) {
   const activity = view.jobs.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''))).slice(0, 8);
   const feed = activity.map((job) => `<li><b>${job.status === 'Completed' ? 'Marked job done' : 'Added a job'}: ${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">${esc(ago(job.updatedAt || job.createdAt, view.now))}</div></li>`).join('');
   const flags = `${view.dailyOn ? '' : '<p class="note" id="daily-flag">Daily status updates are off.</p>'}${view.deliveryOn ? '' : '<p class="note" id="delivery-flag">Delivery notifications are off.</p>'}`;
+  const notice = SMS_NOTICES[view.notice] ? `<p class="note" data-sms-notice="${esc(view.notice)}">${esc(SMS_NOTICES[view.notice])}</p>` : '';
   const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div></li>`).join('');
   const ivan = ivanRows ? `<section class="card" id="ai-handoffs"><header><h2>Needs Ivan</h2><span class="meta">The AI could not answer</span></header><ul>${ivanRows}</ul></section>` : '';
   return `<section>
     ${flags}
+    ${notice}
     ${ivan}
     <div class="kpis">
       ${kpi('Open jobs', k.open, 'open', `${k.inquiries || 0} inquiries waiting`)}
@@ -398,6 +441,7 @@ function todayTab(view) {
           ${tomorrow.length ? tomorrow.map((j) => scheduleRow(j, view)).join('') : '<p class="empty">None.</p>'}
         </section>
         ${ahead}
+        ${smsLogCard(view)}
         ${chart(view)}
         <section class="card">
           <header><h2>Live activity</h2><span class="ok">Synced just now</span></header>

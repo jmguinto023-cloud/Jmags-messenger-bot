@@ -169,6 +169,20 @@ npm start           # run (needs env, see .env.example)
   That job is not texted again. Paused and handed-off chats are skipped. If the chat is outside the reply window
   or not linked, Today lists **Needs text update (delivery)** with the phone. A customer who asks for a status
   while the job is For Delivery is told the TV is okay and ready for delivery, and that Ivan will confirm the schedule.
+- Schedule confirmation texts are off until `SMS_ENABLED` is on and `SEMAPHORE_API_KEY` is set.
+  Nothing is sent by itself. On Today, each upcoming visit that has a mobile number has **Send confirmation text**.
+  One tap sends this once for that visit date (a second tap does nothing):
+  "Good day po, this is JMAGS Appliances. Iconfirm ko lang po na nakaschedule po kayo bukas para sa home service ng TV. Reply CONFIRM para ma-fix ang line up para bukas. Salamat po."
+  Override it with `SMS_CONFIRM_TEMPLATE` if needed. Do not start a template with the word TEST; Semaphore drops those.
+  The message is longer than 160 characters, so Semaphore charges 2 credits.
+  The card then shows **Text sent**. If the visit date passes with no confirmation, it shows **No reply**.
+  **Confirmed** appears when the customer replies CONFIRM, confirm, oo, or yes, or when staff tap **Mark confirmed**.
+  Sender-name texts usually cannot be replied to. Inbound replies need a Semaphore plan with a number that can receive SMS.
+  Point that forward at `POST /sms/inbound?token=SMS_INBOUND_TOKEN` (JSON or form fields `sender` and `message`).
+  Until that exists, staff use **Mark confirmed**. If SMS is off or the key is missing, the button says **SMS not set up yet** and sends nothing.
+  The Today tab has an **SMS log** (time, job, name, last 4 digits of the mobile, result). The full number and the API key are not shown.
+  Setup: create a Semaphore account, buy credits, and register the sender name (`SMS_SENDER_NAME`, default `JMAGS`).
+  Sender-name approval asks for DTI and BIR papers. Put the key only in the host env, never in git. Empty env values stay at the defaults (SMS off, sender name JMAGS).
 
 ## Deploy (Render)
 `render.yaml` = Docker web service, Starter plan, Singapore, `/health` check, 1 GB disk at `/data`, `autoDeploy: false`.

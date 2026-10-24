@@ -95,6 +95,12 @@ function loadConfig(env = process.env) {
     dailyStatusUpdates: bool(env.DAILY_STATUS_UPDATES, false),
     // One "ready for delivery" text when a job changes to For Delivery. Off until approved.
     deliveryNotifications: bool(env.DELIVERY_NOTIFICATIONS, false),
+    // Schedule confirmation texts. Off until a Semaphore key is set. Never sent without a button press.
+    smsEnabled: bool(env.SMS_ENABLED, false),
+    semaphoreApiKey: env.SEMAPHORE_API_KEY || '',
+    smsSenderName: String(env.SMS_SENDER_NAME || '').trim() || 'JMAGS',
+    smsConfirmTemplate: env.SMS_CONFIRM_TEMPLATE ? String(env.SMS_CONFIRM_TEMPLATE).replace(/\\n/g, '\n') : '',
+    smsInboundToken: env.SMS_INBOUND_TOKEN || '',
     replyWindowHours: num(env.REPLY_WINDOW_HOURS, 23.5), // stay safely inside Meta's 24h window
     handoffKeywords: env.HANDOFF_KEYWORDS
       ? list(env.HANDOFF_KEYWORDS)
