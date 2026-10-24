@@ -412,10 +412,14 @@ function todayTab(view) {
   const notice = SMS_NOTICES[view.notice] ? `<p class="note" data-sms-notice="${esc(view.notice)}">${esc(SMS_NOTICES[view.notice])}</p>` : '';
   const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div></li>`).join('');
   const ivan = ivanRows ? `<section class="card" id="ai-handoffs"><header><h2>Needs Ivan</h2><span class="meta">The AI could not answer</span></header><ul>${ivanRows}</ul></section>` : '';
+  const leads = view.hotLeads || [];
+  const leadItems = leads.map((row) => `<li data-hot-lead="${esc(row.last4)}"><b>···${esc(row.last4)}</b> · ${esc(row.reason)}<div class="meta">${esc(row.waitLabel)} <a class="linkish" href="${esc(row.href)}" target="_blank" rel="noopener">Open chat</a></div></li>`).join('');
+  const hot = `<section class="card" id="hot-leads"><header><h2>Hot leads</h2><span class="meta">${leads.length} oldest first</span></header>${leadItems ? `<ul>${leadItems}</ul>` : '<p class="empty">No hot leads.</p>'}</section>`;
   return `<section>
     ${flags}
     ${notice}
     ${ivan}
+    ${hot}
     <div class="kpis">
       ${kpi('Open jobs', k.open, 'open', `${k.inquiries || 0} inquiries waiting`)}
       ${kpi('Under repair', k.underRepair, 'under-repair', 'in the shop now')}

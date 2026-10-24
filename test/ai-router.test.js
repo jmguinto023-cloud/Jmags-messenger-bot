@@ -89,6 +89,20 @@ test('invalid provider response triggers backup', async () => {
   assert.equal(await router.complete({ messages: [] }), 'Fallback');
 });
 
+test('retries both providers once after a shared outage, then fails', async () => {
+  const called = [];
+  let slept = 0;
+  const router = new AiRouter({
+    providers: buildProviders(cfg()),
+    retryBackoffMs: 25,
+    sleep: async (ms) => { slept += ms; },
+    fetcher: async (url) => { called.push(url); return failure(429); },
+  });
+  await assert.rejects(router.complete({ messages: [] }), /AI providers unavailable/);
+  assert.equal(called.length, 4);
+  assert.equal(slept, 25);
+});
+
 test('Groq GPT-OSS uses low reasoning and enough completion tokens', async () => {
   let payload;
   const provider = buildProviders(cfg())[1];

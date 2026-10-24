@@ -47,9 +47,12 @@ function sanitizePayload(payload, shouldRedact) {
 
 class AiRouter {
   constructor({ providers = [], timeoutMs = 12000, maxDailyCalls = 100, redactPII = true,
-    fetcher = (...args) => fetch(...args), now = () => Date.now() } = {}) {
+    fetcher = (...args) => fetch(...args), now = () => Date.now(),
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retryBackoffMs = 400 } = {}) {
     this.providers = providers;
     this.timeoutMs = Math.max(1000, Number(timeoutMs) || 12000);
+    this.sleep = sleep;
+    this.retryBackoffMs = Math.max(0, Number(retryBackoffMs) || 0);
     // Zero/invalid values must not silently disable the quota.
     this.maxDailyCalls = Math.max(1, Number(maxDailyCalls) || 100);
     this.redactPII = redactPII;
@@ -77,27 +80,39 @@ class AiRouter {
       throw err;
     }
     const failures = [];
-    for (const provider of this.providers) {
-      if ((this.cooldowns.get(provider.name) || 0) > this.now()) continue;
-      if (!this.quotaAvailable()) {
-        const err = new Error('AI daily request limit reached');
-        err.status = 429;
-        throw err;
+    const triedThisCall = new Set();
+    for (let round = 0; round < 2; round++) {
+      let retryable = false;
+      for (const provider of this.providers) {
+        const cooling = (this.cooldowns.get(provider.name) || 0) > this.now();
+        if (cooling && !triedThisCall.has(provider.name)) continue;
+        if (!this.quotaAvailable()) {
+          const err = new Error('AI daily request limit reached');
+          err.status = 429;
+          throw err;
+        }
+        this.dailyCount++;
+        try {
+          const answer = await this.ask(provider, payload);
+          this.lastProvider = provider.name;
+          this.cooldowns.delete(provider.name);
+          return answer;
+        } catch (err) {
+          const status = Number(err.status) || 0;
+          const cooldownMs = err.billingIssue ? 3600000
+            : [400, 401, 402, 403, 404].includes(status) ? 1200000
+            : status === 429 ? 60000 : 30000;
+          this.cooldowns.set(provider.name, this.now() + cooldownMs);
+          triedThisCall.add(provider.name);
+          if (!status || status === 429 || status >= 500) retryable = true;
+          failures.push(provider.name + ': HTTP ' + (status || 'network/timeout'));
+        }
       }
-      this.dailyCount++;
-      try {
-        const answer = await this.ask(provider, payload);
-        this.lastProvider = provider.name;
-        this.cooldowns.delete(provider.name);
-        return answer;
-      } catch (err) {
-        const status = Number(err.status) || 0;
-        const cooldownMs = err.billingIssue ? 3600000
-          : [400, 401, 402, 403, 404].includes(status) ? 1200000
-          : status === 429 ? 60000 : 30000;
-        this.cooldowns.set(provider.name, this.now() + cooldownMs);
-        failures.push(provider.name + ': HTTP ' + (status || 'network/timeout'));
+      if (round === 0 && retryable) {
+        await this.sleep(this.retryBackoffMs);
+        continue;
       }
+      break;
     }
     const err = new Error('AI providers unavailable (' + failures.join('; ') + ')');
     err.status = 503;

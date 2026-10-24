@@ -73,6 +73,7 @@ class Store {
       role,
       text: String(content ?? ''),
       handoffReason: opts.handoffReason || '',
+      ...(opts.provider ? { provider: opts.provider } : {}),
     });
     this.save();
   }

@@ -6,6 +6,17 @@ function bookingFormMessage(url) {
 }
 
 // Messenger shows raw Markdown. Drop the markers the model copies from the prompt.
+// Live replies were 260–908 characters. Keep a normal answer to about four short lines.
+function capCustomerReply(text) {
+  let s = String(text || '').replace(/\p{Extended_Pictographic}/gu, '');
+  s = s.replace(/[ \t]+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n').trim();
+  s = s.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 4).join('\n');
+  if (s.length <= 300) return s;
+  const cut = s.slice(0, 300);
+  const at = Math.max(cut.lastIndexOf('\n'), cut.lastIndexOf('. '), cut.lastIndexOf('? '));
+  return (at >= 80 ? cut.slice(0, at + 1) : cut).trim();
+}
+
 function sanitizeOutgoing(text) {
   return String(text ?? '')
     .replace(/\*\*/g, '')
@@ -40,6 +51,7 @@ const lines = {
   holdingPerson:
     'Sige po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito. Saglit lang po.',
   sanitizeOutgoing,
+  capCustomerReply,
   bookingFormMessage,
   DEFAULT_TIPS,
 };

@@ -1,6 +1,7 @@
 'use strict';
 // Calls any OpenAI-compatible Chat Completions API (provider chosen via env vars).
 const fs = require('node:fs');
+const path = require('node:path');
 const { LlmGate, retryDelayMs } = require('./llm-gate');
 const { AiRouter, buildProviders } = require('./ai-router');
 const { behaviorBaseline, behaviorContext } = require('./behavior-bank');
@@ -49,6 +50,8 @@ class LLM {
       const url = this.cfg.bookingFormUrl || '';
       let text = raw.replaceAll('{{BOOKING_FORM_URL}}', () => url);
       if (url && !text.includes(url)) text += `\n\nSchedule form URL: ${url}`;
+      const refFile = this.cfg.brandNewReferenceFile || path.join(__dirname, '..', 'prompts', 'brand-new-reference.md');
+      text += `\n\n${fs.readFileSync(refFile, 'utf8').trim()}`;
       this._prompt = text + '\n\n## JMAGS Behavior Bank (approved customer-service behavior, no new prices)\n' + behaviorBaseline();
     }
     return this._prompt;
@@ -78,7 +81,7 @@ class LLM {
       : '';
     const messages = [
       { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Do not output [HANDOFF].${extra}` },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-4 short lines, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
       ...turns,
     ];
     return this.chat(messages, { priority: 'low' });
@@ -87,7 +90,9 @@ class LLM {
   async chat(messages, { priority = 'high' } = {}) {
     if (this.router) {
       try {
-        return await this.gate.schedule(() => this.router.complete(this.payload(messages)), { priority });
+        const answer = await this.gate.schedule(() => this.router.complete(this.payload(messages)), { priority });
+        this.lastProvider = this.router.lastProvider || '';
+        return answer;
       } catch (e) {
         this.noteError(e);
         throw e;
@@ -112,10 +117,12 @@ class LLM {
 
   async once(messages, priority) {
     try {
+      this.lastProvider = this.cfg.llmModel || 'llm';
       return await this.gate.schedule(() => this.complete(messages), { priority });
     } catch (e) {
       if (!this.shouldDropTemperature(e)) throw e;
       this.omitTemperature = true;
+      this.lastProvider = this.cfg.llmModel || 'llm';
       return await this.gate.schedule(() => this.complete(messages), { priority });
     }
   }

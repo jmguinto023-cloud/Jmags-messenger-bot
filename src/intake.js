@@ -1,7 +1,6 @@
 'use strict';
 // What we already know about a TV job, so the bot does not ask for it again.
 const { summarizeConversation } = require('./summary');
-const { recentUserBlob } = require('./recency');
 
 const CLOSE_LINE = 'Salamat po. Si Ivan na po ang nagre-review ng video at ipapadala po namin ang all-in price shortly 😊';
 
@@ -28,8 +27,20 @@ function questionTopic(text) {
   return '';
 }
 
+const FACT_MS = 7 * 24 * 3600 * 1000;
+
+// Brand, size, and the fault can have been told to Ivan yesterday. Do not use the
+// 12-hour visible window for that; it hides those facts on purpose.
+function factsBlob(thread, now = Date.now()) {
+  const cutoff = now - FACT_MS;
+  return (thread && thread.history || [])
+    .filter((h) => h && h.content && (!h.ts || h.ts >= cutoff))
+    .map((h) => h.content)
+    .join('\n');
+}
+
 function updateIntake(thread, latestText, hasMedia) {
-  const blob = recentUserBlob(thread);
+  const blob = `${factsBlob(thread)}\n${latestText || ''}`;
   const summary = summarizeConversation([{ content: blob }]);
   const slots = thread.slots || { brandSize: '', problemOrVideo: false, problemText: '', age: '', location: '', repairedElsewhere: '' };
   if (summary.brand || summary.size) slots.brandSize = [summary.brand, summary.size].filter(Boolean).join(' ');
@@ -87,6 +98,16 @@ function nextQuestion(thread, skip) {
 }
 
 // Drop a repeated intake question, a problem question after a video, and any intake question once intake is closed.
+function slotFilled(thread, topic) {
+  const s = thread.slots || {};
+  if (topic === 'brandSize') return Boolean(s.brandSize);
+  if (topic === 'age') return Boolean(s.age);
+  if (topic === 'location') return Boolean(s.location);
+  if (topic === 'repaired') return Boolean(s.repairedElsewhere);
+  if (topic === 'problem') return Boolean(s.problemOrVideo || thread.problemViaVideo);
+  return false;
+}
+
 function applyReplyGuard(thread, text) {
   const clean = String(text || '').trim();
   if (thread.intakeClosed && !thread.intakeCloseSent) {
@@ -94,7 +115,22 @@ function applyReplyGuard(thread, text) {
     thread.lastAskedTopic = '';
     return CLOSE_LINE;
   }
-  let topic = questionTopic(clean);
+  const parts = clean.split(/\n+|(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+  const keptParts = parts.filter((part) => {
+    const topic = questionTopic(part);
+    return !(topic && slotFilled(thread, topic));
+  });
+  // Keep the original wording when nothing was dropped, so a [HANDOFF] still matches.
+  const dropped = keptParts.length !== parts.length;
+  const withoutKnown = dropped ? keptParts.join('\n').trim() : clean;
+  let topic = questionTopic(withoutKnown);
+  if (withoutKnown !== clean && !withoutKnown) {
+    const q = nextQuestion(thread, '');
+    thread.lastAskedTopic = questionTopic(q);
+    return q || withoutKnown;
+  }
+  const body = withoutKnown || clean;
+  topic = questionTopic(body);
   if (thread.problemViaVideo && topic === 'problem') {
     const q = nextQuestion(thread, 'problem');
     thread.lastAskedTopic = questionTopic(q);
@@ -103,15 +139,15 @@ function applyReplyGuard(thread, text) {
   if (topic && topic === thread.lastAskedTopic) {
     const q = nextQuestion(thread, topic);
     thread.lastAskedTopic = questionTopic(q);
-    return q || clean;
+    return q || body;
   }
   if (thread.intakeClosed && topic) {
-    const kept = clean.split(/(?<=[.!?])\s+/).filter((part) => !questionTopic(part)).join(' ').trim();
+    const kept = body.split(/(?<=[.!?])\s+/).filter((part) => !questionTopic(part)).join(' ').trim();
     thread.lastAskedTopic = '';
-    return kept || 'Noted po. Si Ivan na po ang titingin sa video at magpapadala ng all-in price shortly 😊';
+    return kept || 'Noted po. Si Ivan na po ang titingin sa video at magpapadala ng all-in price shortly.';
   }
   thread.lastAskedTopic = topic;
-  return clean;
+  return body;
 }
 
 module.exports = { updateIntake, intakeContext, applyReplyGuard, questionTopic, problemClaim, CLOSE_LINE, QUESTIONS };

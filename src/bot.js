@@ -2,7 +2,7 @@
 // Core logic: turns Messenger webhook events into Ivan-style replies, handoffs, or follow-ups.
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
-const { sanitizeOutgoing, bookingFormMessage } = lines;
+const { sanitizeOutgoing, capCustomerReply, bookingFormMessage } = lines;
 const { short } = require('./log');
 const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
@@ -16,7 +16,8 @@ const {
   manilaStamp,
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
-const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply } = require('./estimate');
+const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
+const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, confirmedPriceReply, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
@@ -130,6 +131,36 @@ class Bot {
     this.repliedRev = new Map(); // last revision we already answered
     this.dashInflight = new Map(); // psid -> { text, promise } so a double-tap sends once
     this.dashRecent = new Map(); // psid -> { text, at } short repeat window after a dashboard send
+    this.staffResume = new Map();
+  }
+
+  pauseMs() {
+    const mins = Number(this.cfg.humanPauseMinutes);
+    return (Number.isFinite(mins) && mins >= 0 ? mins : 30) * 60 * 1000;
+  }
+
+  staffGraceMs() {
+    const mins = Number(this.cfg.staffGraceMinutes);
+    return (Number.isFinite(mins) && mins >= 0 ? mins : 5) * 60 * 1000;
+  }
+
+  lastHumanAt(t) {
+    if (!t) return 0;
+    if (t.lastHumanEchoAt) return t.lastHumanEchoAt;
+    if (!t.pausedUntil) return 0;
+    return t.pausedUntil - this.pauseMs();
+  }
+
+  clearStaffResume(psid) {
+    if (!this.staffResume) return;
+    if (!psid) {
+      for (const timer of this.staffResume.values()) clearTimeout(timer);
+      this.staffResume.clear();
+      return;
+    }
+    const timer = this.staffResume.get(psid);
+    if (timer) clearTimeout(timer);
+    this.staffResume.delete(psid);
   }
 
   // Entry point for a verified webhook body. Never throws.
@@ -148,6 +179,7 @@ class Bot {
   }
   // Wait for all background work (used by tests and graceful shutdown).
   async idle() {
+    this.clearStaffResume();
     for (let i = 0; i < 50; i++) {
       const timers = [...this.pending.values()].some((p) => p.timer);
       if (!this.inflight.size && !timers && !this.chains.size) return;
@@ -268,6 +300,7 @@ class Bot {
       await this.publishPendingMedia(psid, { quiet: true });
       t.pendingMedia = []; t.attachmentNote = '';
       this.log.info(`no reply to ${short(psid)}: ${block}`);
+      if (block.startsWith('paused') && this.graceStillOpen(t, this.now())) this.scheduleStaffResume(psid);
       return;
     }
 
@@ -447,7 +480,83 @@ class Bot {
     }
   }
 
+  graceStillOpen(t, now) {
+    const grace = this.staffGraceMs();
+    if (!(grace > 0) || !t || !t.pausedUntil || now >= t.pausedUntil) return false;
+    const last = this.lastHumanAt(t);
+    return (t.lastUserTs || 0) > last && now - last < grace;
+  }
+
+  scheduleStaffResume(psid) {
+    const t = this.store.thread(psid);
+    const due = this.lastHumanAt(t) + this.staffGraceMs();
+    const wait = Math.max(0, due - this.now());
+    this.clearStaffResume(psid);
+    const timer = setTimeout(() => {
+      this.staffResume.delete(psid);
+      this.enqueue(psid, () => this.resumeAfterGrace(psid));
+    }, wait);
+    timer.unref?.();
+    this.staffResume.set(psid, timer);
+  }
+
+  async resumeAfterGrace(psid) {
+    const t = this.store.thread(psid);
+    const now = this.now();
+    if (t.handedOff || t.standby || this.humanPaused(t, now)) return;
+    const last = (t.history || [])[(t.history || []).length - 1];
+    if (!last || last.role !== 'user') return;
+    if ((t.hotCatchAt || 0) >= (t.lastUserTs || 0)) return;
+    const block = this.blockReason(psid, t, t.lastUserTs || now);
+    if (block) return;
+    t.hotCatchAt = now;
+    this.store.save();
+    if (this.repliedRev.get(psid) === (this.rev.get(psid) || 0)) this.bump(psid);
+    return this.replyWithAI(psid, t.lastUserTs || now);
+  }
+
+  // Pull Ivan's Page Inbox lines from the last 7 days so we do not ask again.
+  async loadInboxHistory(psid) {
+    let rows = [];
+    try { rows = await this.graph.recentMessages(psid); } catch (e) {
+      this.log.warn('inbox history failed', e.message);
+      return;
+    }
+    if (!rows.length) return;
+    const t = this.store.thread(psid);
+    const have = new Set((t.history || []).map((h) => `${h.role}|${String(h.content || '').trim()}|${Math.floor((h.ts || 0) / 60000)}`));
+    let added = 0;
+    for (const row of rows) {
+      const key = `${row.role}|${row.content}|${Math.floor(row.ts / 60000)}`;
+      if (have.has(key)) continue;
+      have.add(key);
+      const turn = { role: row.role, content: row.content, ts: row.ts };
+      if (row.via) turn.via = row.via;
+      t.history.push(turn);
+      added += 1;
+    }
+    if (!added) return;
+    t.history.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const max = (this.cfg.historyTurns || 20) * 2;
+    if (t.history.length > max) t.history.splice(0, t.history.length - max);
+    this.store.save();
+  }
+
+  presentReply(text) {
+    if (!text) return text;
+    if (text === CLOSE_LINE) return text;
+    if (this.cfg.bookingFormUrl && text.includes(this.cfg.bookingFormUrl)) return text;
+    // The home-visit fee sentence is required policy. Cap the lead-in, keep the fee.
+    const nudgeAt = String(text).indexOf(CHECKUP_NUDGE);
+    if (nudgeAt >= 0) {
+      const lead = capCustomerReply(text.slice(0, nudgeAt));
+      return lead ? `${lead}\n${CHECKUP_NUDGE}` : CHECKUP_NUDGE;
+    }
+    return capCustomerReply(text);
+  }
+
   async replyWithAI(psid, ts) {
+    await this.loadInboxHistory(psid);
     for (let attempt = 0; attempt < 4; attempt++) {
       const rev = this.rev.get(psid) || 0;
       if (this.repliedRev.get(psid) === rev) return; // a newer pass already covered these messages
@@ -472,6 +581,15 @@ class Bot {
       }
 
       const latestUser = latestUserText(t);
+      const priced = !hadMedia && !reviewPending(t) ? confirmedPriceReply(latestUser, t) : '';
+      if (priced) {
+        const parsed = parseHandoff(priced);
+        this.repliedRev.set(psid, rev);
+        if (parsed.handoff) await this.handoff(psid, parsed.reason || 'no confirmed price', this.presentReply(parsed.text) || lines.holding);
+        else await this.send(psid, this.presentReply(parsed.text), { provider: 'price-table' });
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
       if (asksCheckupFee(latestUser)) {
         this.repliedRev.set(psid, rev);
         const checkupAnswer = checkupFeeReply(latestUser, t);
@@ -556,9 +674,9 @@ class Bot {
       this.repliedRev.set(psid, rev);
       // A photo or video never passes the thread. A keyword in the caption already handed off above.
       if (hadMedia && !t.intakeCloseSent) {
-        await this.sendMediaAck(psid, guarded, true, { armVideo: hadVideo });
+        await this.sendMediaAck(psid, this.presentReply(guarded), true, { armVideo: hadVideo });
       } else if (hadMedia) {
-        await this.send(psid, guarded, { armVideo: hadVideo });
+        await this.send(psid, this.presentReply(guarded), { armVideo: hadVideo });
         t.awaitingVideo = false;
       } else if (guarded === CLOSE_LINE || (t.intakeClosed && t.intakeCloseSent && guarded === CLOSE_LINE)) {
         await this.send(psid, guarded);
@@ -567,8 +685,8 @@ class Bot {
         const formAlreadySent = formUrl && t.history.some((h) => h.role === 'assistant' && h.content.includes(formUrl));
         if (formUrl && text.includes(formUrl)) await this.send(psid, text);
         else if (handoff && formUrl && !formAlreadySent && isBookingIntentHandoff(reason)) await this.send(psid, bookingFormMessage(formUrl));
-        else if (handoff && guarded === text) await this.handoff(psid, reason || 'model', text || lines.holding);
-        else await this.send(psid, guarded);
+        else if (handoff && guarded === text) await this.handoff(psid, reason || 'model', this.presentReply(text) || lines.holding);
+        else await this.send(psid, this.presentReply(guarded));
       }
       if ((this.rev.get(psid) || 0) !== rev) continue;
       return;
@@ -652,11 +770,13 @@ class Bot {
     // Canned fallback/holding lines are not part of the chat the model sees,
     // or the next reply continues them ("Pasensya na po... Nandito pa po ako").
     // They are still appended to the conversation export.
+    const provider = opts.provider || (this.llm && this.llm.lastProvider) || '';
     this.store.addTurn(psid, 'assistant', clean, this.now(), {
       history: !isCannedLine(clean),
       handoffReason: t.handoffReason || '',
+      provider,
     });
-    this.log.info(`replied to ${short(psid)} (${clean.length} chars)`);
+    this.log.info(`replied to ${short(psid)} (${clean.length} chars)${provider ? ` provider=${provider}` : ''}`);
     if (opts.armVideo) this.armVideoFollowup(psid);
     if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
   }
@@ -710,16 +830,17 @@ class Bot {
     if (mid) this.store.seen(mid);
     const now = this.now();
     const t = this.store.thread(psid);
-    t.pausedUntil = now + this.cfg.humanPauseHours * HOUR;
+    t.pausedUntil = now + this.pauseMs();
     t.lastHumanEchoAt = now;
     t.pauseSource = 'dashboard reply';
+    this.clearStaffResume(psid);
     this.stopVideoFollowup(psid, 'Ivan replied from the dashboard');
     this.cancelPending(psid);
     this.store.addTurn(psid, 'assistant', clean, now, { via: 'ivan' });
     this.store.markIvanReplied(psid, now);
     this.dashRecent.set(psid, { text: clean, at: now });
     this.store.save();
-    this.log.info(`dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseHours}h`);
+    this.log.info(`dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseMinutes}m`);
     return { ok: true, status: 200 };
   }
 
@@ -769,14 +890,15 @@ class Bot {
       return;
     }
     // A person (Ivan) replied from the Page: pause the bot here.
-    t.pausedUntil = this.now() + this.cfg.humanPauseHours * HOUR;
+    t.pausedUntil = this.now() + this.pauseMs();
     t.lastHumanEchoAt = this.now();
     t.pauseSource = `human echo app_id=${appId || 'none'}`;
+    this.clearStaffResume(psid);
     this.stopVideoFollowup(psid, 'paused for a human');
     if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now(), { via: 'ivan' });
     this.cancelPending(psid);
     this.store.save();
-    this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseHours}h`);
+    this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseMinutes}m`);
   }
 
   // Why a Page echo is an automation rather than Ivan typing ('' = treat as human).
@@ -790,16 +912,16 @@ class Bot {
 
   // Human pause still in force? Ends early when Ivan has gone quiet (HUMAN_IDLE_RESUME_HOURS).
   humanPaused(t, now = this.now()) {
-    if (!t.pausedUntil || now >= t.pausedUntil) return false;
-    const idle = this.cfg.humanIdleResumeHours;
-    if (idle > 0) {
-      const last = t.lastHumanEchoAt || (t.pausedUntil - this.cfg.humanPauseHours * HOUR);
-      if (now - last > idle * HOUR) {
-        t.pausedUntil = 0; t.pauseSource = '';
-        this.store.save();
-        return false;
-      }
+    if (!t || !t.pausedUntil || now >= t.pausedUntil) return false;
+    const last = this.lastHumanAt(t);
+    const idle = Number(this.cfg.humanIdleResumeHours) || 0;
+    if (idle > 0 && last && now - last > idle * HOUR) {
+      t.pausedUntil = 0; t.pauseSource = '';
+      this.store.save();
+      return false;
     }
+    const grace = this.staffGraceMs();
+    if (grace > 0 && (t.lastUserTs || 0) > last && now - last >= grace) return false;
     return true;
   }
 
@@ -810,8 +932,14 @@ class Bot {
     const now = this.now();
     for (const [psid, t] of Object.entries(this.store.data.threads || {})) {
       if (!t.pausedUntil || now >= t.pausedUntil || t.lastHumanEchoAt) continue;
-      const start = t.pausedUntil - this.cfg.humanPauseHours * HOUR;
+      const offsets = [...new Set([this.pauseMs(), this.cfg.humanPauseHours * HOUR].filter(Boolean))];
       const hist = t.history || [];
+      let start = 0;
+      for (const off of offsets) {
+        const candidate = t.pausedUntil - off;
+        if (hist.some((h) => h.role === 'assistant' && Math.abs(h.ts - candidate) <= 2000)) { start = candidate; break; }
+      }
+      if (!start) continue;
       const trigger = hist.filter((h) => h.role === 'assistant' && Math.abs(h.ts - start) <= 2000);
       if (!trigger.length) continue;
       const users = hist.filter((h) => h.role === 'user' && h.ts <= start);
@@ -1178,6 +1306,9 @@ class Bot {
       const day = 24 * HOUR;
       const windowMs = 23 * HOUR;
       const now = this.now();
+      // A job-status line answers the customer. Send it before a sales catch-up
+      // so the same chat does not get two bubbles in one pass.
+      await this.maybeDailyStatus(now);
       let slots = 1;
       for (const [psid, t] of Object.entries(this.store.data.threads)) {
         try {
@@ -1190,7 +1321,6 @@ class Bot {
           }
         } catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
       }
-      await this.maybeDailyStatus(now);
     } finally {
       this._followRunning = false;
     }
@@ -1198,7 +1328,9 @@ class Bot {
 
   followUpSkip(psid, t, now, windowMs, { ignorePending = false } = {}) {
     if (!ignorePending && t.followupPending) return 'already sending a follow-up';
-    if ((t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
+    const last = (t.history || [])[(t.history || []).length - 1];
+    const catching = this.shouldCatchHotLead(t, now, last);
+    if (!catching && (t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
     if (t.bookingDone) return 'booking form already submitted';
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
@@ -1214,19 +1346,41 @@ class Bot {
     const ageMs = (this.cfg.followupMaxAgeHours || 6) * HOUR;
     if (now - (t.lastUserTs || 0) > ageMs) return 'last customer message is older than the follow-up window';
     if (now - (t.lastUserTs || 0) > windowMs) return 'outside 23h messaging window';
-    const last = (t.history || [])[(t.history || []).length - 1];
-    if (!last || last.role !== 'assistant') return 'customer spoke last';
+    if (!last || last.role !== 'assistant') {
+      if (!catching) return 'customer spoke last';
+    }
     return '';
+  }
+
+  shouldCatchHotLead(t, now, last) {
+    if (!last || last.role !== 'user') return false;
+    if ((t.hotCatchAt || 0) >= (t.lastUserTs || 0)) return false;
+    const info = hotLeadInfo(t, now);
+    return Boolean(info && info.unanswered);
   }
 
   async maybeFollowUp(psid, t, { now, max, afterMs, day, windowMs }) {
     const skip = this.followUpSkip(psid, t, now, windowMs);
     if (skip) return 'skip';
     const count = t.followupCount || 0;
-    if (count >= max) return 'skip';
     const last = t.history[t.history.length - 1];
+    if (last && last.role === 'user') {
+      t.followupPending = true;
+      this.store.save();
+      try {
+        await this.resumeAfterGrace(psid);
+        return 'sent';
+      } finally {
+        const row = this.store.thread(psid);
+        row.followupPending = false;
+        this.store.save();
+      }
+    }
+    if (count >= max) return 'skip';
+    const info = hotLeadInfo(t, now);
     if (count === 0) {
-      if (now - (last.ts || 0) < afterMs) return 'skip';
+      const wait = info && info.warm ? HOT_LEAD_WAIT_MS : afterMs;
+      if (now - (last.ts || 0) < wait) return 'skip';
     } else if (now - (t.lastFollowupAt || 0) < day) return 'skip';
     t.followupPending = true;
     this.store.save();
@@ -1234,10 +1388,11 @@ class Bot {
       const followHistory = visibleHistory(t.history, this.now(), { pendingReview: reviewPending(t) });
       const raw = await this.llm.followUp(followHistory, { nowText: this.nowText(), videoMissing: Boolean(t.awaitingVideo) });
       const { text } = parseHandoff(raw);
-      if (!sanitizeOutgoing(text)) return 'skip';
+      const capped = this.presentReply(text);
+      if (!sanitizeOutgoing(capped)) return 'skip';
       const fresh = this.store.thread(psid);
       if (this.followUpSkip(psid, fresh, this.now(), windowMs, { ignorePending: true })) return 'skip';
-      await this.send(psid, text);
+      await this.send(psid, capped);
       fresh.followupCount = (fresh.followupCount || 0) + 1;
       fresh.lastFollowupAt = this.now();
       fresh.followupFails = 0;

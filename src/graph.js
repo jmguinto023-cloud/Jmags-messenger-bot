@@ -20,7 +20,10 @@ class Graph {
     this.cfg = cfg;
     this.log = log;
     this.labelIds = new Map();
+    this.labelFailed = new Set();
+    this.labelErrorLogged = false;
     this.conversationCache = new Map(); // psid -> { at, value }
+    this.messageCache = new Map(); // psid -> { at, value }
   }
   url(pathPart, params = {}) {
     const u = new URL(`${this.cfg.graphBase}/${this.cfg.graphVersion}/${pathPart}`);
@@ -152,6 +155,42 @@ class Graph {
       return '';
     }
   }
+  // Page Inbox history, including messages Ivan sent. Last 30, within 7 days.
+  // Cached for a minute. A miss or a Graph error returns [] and does not throw.
+  async recentMessages(psid, { limit = 30, withinMs = 7 * 86400e3 } = {}) {
+    const key = String(psid || '');
+    if (!key) return [];
+    const hit = this.messageCache.get(key);
+    if (hit && Date.now() - hit.at < 60 * 1000) return hit.value;
+    const convo = await this.findConversation(key);
+    let value = [];
+    if (convo && convo.id) {
+      try {
+        const json = await this.call('GET', `${encodeURIComponent(convo.id)}/messages`, {
+          params: { fields: 'message,from,created_time', limit: String(limit) },
+        });
+        const pageId = String(this.cfg.pageId || '');
+        const cutoff = Date.now() - withinMs;
+        for (const row of (json && json.data) || []) {
+          const raw = row && row.message;
+          const text = String(raw && typeof raw === 'object' ? raw.text || raw.message || '' : raw || '').trim();
+          const ts = Date.parse(row && row.created_time) || 0;
+          if (!text || !ts || ts < cutoff) continue;
+          const fromId = String((row.from && row.from.id) || '');
+          const fromPage = Boolean(pageId && fromId === pageId);
+          value.push({ role: fromPage ? 'assistant' : 'user', content: text, ts, via: fromPage ? 'ivan' : '' });
+        }
+        value.sort((a, b) => a.ts - b.ts);
+        if (value.length > limit) value = value.slice(-limit);
+      } catch (e) {
+        this.log.warn('inbox history lookup failed', e.message);
+        value = [];
+      }
+    }
+    this.messageCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
   // Tag the customer with a Page Inbox label.
   // Find or create via /{page-id}/custom_labels, then POST /{label-id}/label?user={psid}.
   // Never POST /{psid}/label — that node rejects the method with "Unsupported request".
@@ -159,6 +198,25 @@ class Graph {
     const name = String(labelName || '').trim();
     const user = String(psid || '').trim();
     if (!name || !user) return null;
+    if (this.labelFailed.has(user)) return null;
+    try {
+      return await this._addLabel(user, name);
+    } catch (e) {
+      const status = Number(e.status) || 0;
+      if (status === 400) {
+        this.labelFailed.add(user);
+        if (!this.labelErrorLogged) {
+          this.labelErrorLogged = true;
+          const body = e.body ? JSON.stringify(e.body).slice(0, 500) : '';
+          this.log.warn(`label failed once: ${e.message}${body ? ` ${body}` : ''}`);
+        }
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  async _addLabel(user, name) {
     let labelId = this.labelIds.get(name);
     if (!labelId) {
       const page = this.pageNode();

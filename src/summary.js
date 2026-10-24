@@ -1,7 +1,7 @@
 'use strict';
 // Pull TV size, brand, problem, and location out of the chat at the moment a photo or video arrives.
 
-const BRANDS = ['samsung', 'tcl', 'lg', 'sony', 'panasonic', 'skyworth', 'hisense', 'konka', 'haier', 'sharp', 'xiaomi', 'philips', 'devant', 'coocaa'];
+const BRANDS = ['samsung', 'tcl', 'lg', 'sony', 'panasonic', 'skyworth', 'hisense', 'konka', 'haier', 'sharp', 'xiaomi', 'philips', 'devant', 'coocaa', 'astron'];
 
 function brandLabel(b) {
   return b.length <= 3 ? b.toUpperCase() : b.charAt(0).toUpperCase() + b.slice(1);
