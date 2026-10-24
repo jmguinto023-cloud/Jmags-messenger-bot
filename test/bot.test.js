@@ -2743,17 +2743,70 @@ test('Page Inbox history is loaded and a known size gets a confirmed price', asy
   } finally { await s.close(); }
 });
 
-test('a long model reply is cut to four short lines without emoji', async () => {
+test('a long model reply is rewritten once, then cut to three short lines', async () => {
   const s = await setup();
   s.mock.state.llmResponder = () => `${'😊 '.repeat(10)}line one po.\n`.repeat(8);
   try {
     await s.post(msg('long-reply', { text: 'hello po lang' }));
     const text = s.mock.calls.messages.at(-1).message.text;
+    assert.equal(s.mock.calls.llm.length, 2);
     assert.ok(text.length <= 300);
-    assert.ok(text.split('\n').length <= 4);
+    assert.ok(text.split('\n').filter(Boolean).length <= 3);
     assert.equal(text.includes('😊'), false);
     const logged = s.app.store.readConversations().filter((r) => r.role === 'assistant');
     assert.ok(logged.some((r) => r.text === text && r.provider === 'mock-model'));
+  } finally { await s.close(); }
+});
+
+test('a CRT inquiry is one short line to Ivan, not a Tagalog essay', async () => {
+  const s = await setup();
+  const essay = 'Ang iyong mensahe ay isang pagtatanong (inquiry). Nauunawaan ko na nakakadismaya. Dahil ang mga CRT TV ay nangangailangan ng specialized na piyesa. Maaari ko bang malaman kung saan mo nakitang may problema sa capacitor.';
+  s.mock.state.llmResponder = () => essay;
+  try {
+    await s.post(msg('crt-1', { text: 'CRT TV po, may problema sa capacitor' }));
+    assert.equal(s.mock.calls.llm.length, 0);
+    const text = s.mock.calls.messages[0].message.text;
+    assert.equal(text, 'CRT po ba sir? Si Ivan na po ang sasagot dito.');
+    assert.ok(text.length <= 300);
+    assert.ok(text.split('\n').filter(Boolean).length <= 3);
+    assert.match(text, /po/);
+    assert.match(text, /sir|maam/i);
+    assert.doesNotMatch(text, /iyong mensahe|Nauunawaan|nakakadismaya|specialized|capacitor|flatscreen lang/i);
+    assert.equal(s.mock.calls.pass.length, 1);
+    assert.equal(s.app.store.thread('crt-1').handedOff, true);
+    assert.match(s.app.store.thread('crt-1').handoffReason, /non-flatscreen/);
+
+    await s.post(msg('proj-1', { text: 'rear projection tv po, blurred' }));
+    const other = s.mock.calls.messages.at(-1).message.text;
+    assert.equal(other, 'Hindi po flatscreen ito sir? Si Ivan na po ang sasagot dito.');
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(s.app.store.thread('proj-1').handedOff, true);
+
+    const prompt = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8');
+    assert.match(prompt, /Never restate or summarize the customer's message/);
+    assert.match(prompt, /CRT po ba sir\? Si Ivan na po ang sasagot dito\./);
+    assert.match(prompt, /2 or 3 short lines/);
+  } finally { await s.close(); }
+});
+
+test('an essay over 300 characters is replaced by the short rewrite', async () => {
+  const s = await setup();
+  let n = 0;
+  const essay = 'Ang iyong mensahe ay isang pagtatanong (inquiry) tungkol sa TV. Nauunawaan ko na nakakadismaya ito. Dahil kailangan pa ng mahabang paliwanag, ipapaliwanag ko ang buong proseso ng serbisyo bago magbigay ng presyo. '.repeat(3);
+  s.mock.state.llmResponder = () => {
+    n += 1;
+    return n === 1 ? essay : 'Samsung 40 po sir, walang display. Palit backlight po ay ₱4,000. Kailan po sila free?';
+  };
+  try {
+    await s.post(msg('essay-1', { text: 'samsung 40 inch po walang display' }));
+    assert.equal(n, 2);
+    const text = s.mock.calls.messages.at(-1).message.text;
+    assert.match(text, /₱4,000/);
+    assert.match(text, /po/);
+    assert.doesNotMatch(text, /iyong mensahe|Nauunawaan|nakakadismaya/i);
+    assert.ok(text.length <= 300);
+    assert.ok(text.split('\n').filter(Boolean).length <= 3);
+    assert.equal(s.mock.calls.pass.length, 0);
   } finally { await s.close(); }
 });
 

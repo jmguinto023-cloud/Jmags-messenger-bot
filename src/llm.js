@@ -61,7 +61,7 @@ class LLM {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const messages = [
       { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message in 2 or 3 short Taglish lines, under 300 characters, with po and sir or maam. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog essay. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
       { role: 'system', content: behaviorContext([...history].reverse().find(h => h.role === 'user')?.content || '') },
       ...normalizeTurns(history, { attachmentNote }),
     ];
@@ -81,7 +81,7 @@ class LLM {
       : '';
     const messages = [
       { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-4 short lines, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-3 short lines, under 300 characters, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
       ...turns,
     ];
     return this.chat(messages, { priority: 'low' });

@@ -6,15 +6,34 @@ function bookingFormMessage(url) {
 }
 
 // Messenger shows raw Markdown. Drop the markers the model copies from the prompt.
-// Live replies were 260–908 characters. Keep a normal answer to about four short lines.
+// A normal answer is 2–3 short lines and must stay under 300 characters.
 function capCustomerReply(text) {
   let s = String(text || '').replace(/\p{Extended_Pictographic}/gu, '');
   s = s.replace(/[ \t]+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n').trim();
-  s = s.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 4).join('\n');
+  s = s.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 3).join('\n');
   if (s.length <= 300) return s;
   const cut = s.slice(0, 300);
   const at = Math.max(cut.lastIndexOf('\n'), cut.lastIndexOf('. '), cut.lastIndexOf('? '));
   return (at >= 80 ? cut.slice(0, at + 1) : cut).trim();
+}
+
+function replyOverflows(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  const count = s.split('\n').map((line) => line.trim()).filter(Boolean).length;
+  return s.length > 300 || count > 3;
+}
+
+// CRT, tube, and other non-flatscreen units. Do not guess whether JMAG repairs them.
+const NON_FLATSCREEN = /\bcrt\b|cathode|picture tube|\btube tv\b|rear projection|projection tv|non-?flatscreen|hindi flat(?:\s*screen)?|not a flat screen|makapal na tv/i;
+
+function nonFlatscreenLine(text) {
+  const t = String(text || '');
+  if (!NON_FLATSCREEN.test(t)) return '';
+  if (/\bcrt\b|cathode|picture tube|\btube tv\b|makapal na tv/i.test(t)) {
+    return 'CRT po ba sir? Si Ivan na po ang sasagot dito.';
+  }
+  return 'Hindi po flatscreen ito sir? Si Ivan na po ang sasagot dito.';
 }
 
 function sanitizeOutgoing(text) {
@@ -52,6 +71,8 @@ const lines = {
     'Sige po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito. Saglit lang po.',
   sanitizeOutgoing,
   capCustomerReply,
+  replyOverflows,
+  nonFlatscreenLine,
   bookingFormMessage,
   DEFAULT_TIPS,
 };

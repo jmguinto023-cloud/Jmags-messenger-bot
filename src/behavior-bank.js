@@ -73,7 +73,7 @@ function behaviorContext(customerText) {
   const head = [
     'CURRENT CUSTOMER MESSAGE — BEHAVIOR GUIDANCE ONLY.',
     'First identify what they actually mean: question, advice, positive/neutral/negative feedback, joke, complaint or unclear request.',
-    'Respond to their message with empathy and balanced judgment. Do not give automatic positive/negative agreement, invent facts or force a booking.',
+    'Respond to their message with balanced judgment. Do not restate or summarize what they said. Do not write an empathy paragraph. 2 or 3 short Taglish lines with po and sir or maam. Do not give automatic positive/negative agreement, invent facts or force a booking.',
     'If the issue needs private records, pricing exceptions, staff verification or judgment, explain the limitation politely and route to staff with the standard [HANDOFF: reason] mechanism.',
     'Ask at most one genuinely useful question and do not repeat already known information.',
   ];

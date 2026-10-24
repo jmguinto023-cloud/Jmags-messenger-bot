@@ -283,6 +283,22 @@
       "guidance": "Remain calm and respectful, do not insult back or abandon a legitimate issue. Briefly acknowledge their frustration and route complaints to staff.",
       "example": "Naiintindihan kong naiinis po kayo. Kung may service concern, tutulungan po kayo ng staff namin.",
       "handoff": true
+    },
+    {
+      "id": "non-flatscreen",
+      "status": "owner-guidance",
+      "triggers": [
+        "crt",
+        "crt tv",
+        "picture tube",
+        "tube tv",
+        "projection tv",
+        "hindi flatscreen",
+        "makapal na tv"
+      ],
+      "guidance": "CRT, tube, projection, or another non-flatscreen unit. Do not explain parts. Do not say whether JMAG repairs it. One short Taglish line with po and sir or maam, then staff handoff.",
+      "example": "CRT po ba sir? Si Ivan na po ang sasagot dito.",
+      "handoff": true
     }
   ]
 }

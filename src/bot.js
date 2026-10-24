@@ -2,7 +2,7 @@
 // Core logic: turns Messenger webhook events into Ivan-style replies, handoffs, or follow-ups.
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
-const { sanitizeOutgoing, capCustomerReply, bookingFormMessage } = lines;
+const { sanitizeOutgoing, capCustomerReply, replyOverflows, nonFlatscreenLine, bookingFormMessage } = lines;
 const { short } = require('./log');
 const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
@@ -542,6 +542,27 @@ class Bot {
     this.store.save();
   }
 
+  // A weak model sometimes writes an essay. Ask once for a short rewrite, then cut.
+  async fitModelReply(psid, raw) {
+    const parsed = parseHandoff(String(raw || ''));
+    if (!replyOverflows(parsed.text)) return raw;
+    let next = '';
+    try {
+      next = await this.llm.chat([
+        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 300 characters. Conversational Taglish with po and sir or maam. Do not restate or summarize the customer. No empathy paragraph. No formal Tagalog (iyong, ninyo). No emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
+        { role: 'user', content: String(raw).slice(0, 1500) },
+      ], { priority: 'high' });
+      this.log.info(`rewrote long reply for ${short(psid)}`);
+    } catch (e) {
+      this.log.warn('short rewrite failed', e.message);
+    }
+    const again = next ? parseHandoff(next) : null;
+    const chosen = again && again.text && again.text.length <= parsed.text.length ? again : parsed;
+    const clipped = capCustomerReply(chosen.text);
+    if (parsed.handoff) return `${clipped}\n[HANDOFF: ${parsed.reason || 'model'}]`;
+    return clipped;
+  }
+
   presentReply(text) {
     if (!text) return text;
     if (text === CLOSE_LINE) return text;
@@ -581,6 +602,13 @@ class Bot {
       }
 
       const latestUser = latestUserText(t);
+      const scopeLine = nonFlatscreenLine(latestUser);
+      if (scopeLine) {
+        this.repliedRev.set(psid, rev);
+        await this.handoff(psid, 'CRT or non-flatscreen', scopeLine);
+        if ((this.rev.get(psid) || 0) !== rev) continue;
+        return;
+      }
       const priced = !hadMedia && !reviewPending(t) ? confirmedPriceReply(latestUser, t) : '';
       if (priced) {
         const parsed = parseHandoff(priced);
@@ -652,6 +680,7 @@ class Bot {
           intakeNote: intakeContext(t),
           mediaStatus: mediaStatus(t),
         });
+        raw = await this.fitModelReply(psid, raw);
       } catch (e) {
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return this.giveUpOnAi(psid, e, { rev, hadMedia, hadVideo });
