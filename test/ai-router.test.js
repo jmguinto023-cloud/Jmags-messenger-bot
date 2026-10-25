@@ -89,6 +89,24 @@ test('invalid provider response triggers backup', async () => {
   assert.equal(await router.complete({ messages: [] }), 'Fallback');
 });
 
+test('a full cooldown waits at most 20s and then tries a provider', async () => {
+  const called = [];
+  let slept = 0;
+  let now = 1_000_000;
+  const router = new AiRouter({
+    providers: buildProviders(cfg()),
+    now: () => now,
+    sleep: async (ms) => { slept += ms; now += ms; },
+    fetcher: async (url) => { called.push(url); return ok('after wait'); },
+  });
+  router.cooldowns.set('gemini', now + 60_000);
+  router.cooldowns.set('groq', now + 45_000);
+  assert.equal(await router.complete({ messages: [] }), 'after wait');
+  assert.equal(slept, 20000);
+  assert.equal(called.length, 1);
+  assert.equal(router.lastProvider, 'gemini');
+});
+
 test('retries both providers once after a shared outage, then fails', async () => {
   const called = [];
   let slept = 0;

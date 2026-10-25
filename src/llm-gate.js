@@ -31,9 +31,10 @@ function retryDelayMs(err, attempt) {
 }
 
 class LlmGate {
-  constructor({ rpm = 8, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  constructor({ rpm = 15, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), maxWaitMs = 20000 } = {}) {
     const rate = Number(rpm);
     this.minGap = rate > 0 ? 60000 / rate : 0;
+    this.maxWaitMs = Math.max(0, Number(maxWaitMs) || 0);
     this.now = now;
     this.sleep = sleep;
     this.high = [];
@@ -56,7 +57,9 @@ class LlmGate {
     try {
       while (this.high.length || this.low.length) {
         const job = this.high.shift() || this.low.shift();
-        const wait = this.nextAt - this.now();
+        let wait = this.nextAt - this.now();
+        // Queue a backed-up call, but do not hold the customer past 20s and do not drop it.
+        if (this.maxWaitMs > 0 && wait > this.maxWaitMs) wait = this.maxWaitMs;
         if (wait > 0) await this.sleep(wait);
         this.nextAt = this.now() + this.minGap;
         try {

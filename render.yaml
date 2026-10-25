@@ -120,7 +120,7 @@ services:
         sync: false
       - key: LLM_MAX_TOKENS
         sync: false
-      # Empty keeps the code default (8 requests per minute). 0 turns the gap off.
+      # Empty keeps the code default (15 requests per minute). 0 turns the gap off. A wait is capped at 20 seconds.
       - key: LLM_MAX_RPM
         sync: false
       # Empty keeps SMS off. Turn on in the dashboard only after Semaphore is ready.

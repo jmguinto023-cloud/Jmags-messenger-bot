@@ -151,46 +151,156 @@ function knownSize(text) {
 
 function faultKind(text) {
   const t = String(text || '');
-  if (/backlight|walang display|no display|black screen|walang ilaw|no visual/i.test(t)) return 'backlight';
-  if (/lcd modification|modif|gumuguhit|flicker|bar line|\blines\b/i.test(t)) return 'lcd-mod';
+  const dark = /walang (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen/i.test(t);
+  if (/(?:sound|tunog)/i.test(t) && dark) return 'backlight';
+  if (/may linya|\blinya\b|may lines|\blines\b|lcd modification|\bmodif/i.test(t) || /gumuguhit|flicker|bar line/i.test(t)) return 'lcd-mod';
+  if (/backlight/i.test(t)) return 'backlight';
   return '';
 }
 
-// A short confirmed-table answer when they ask the price and the size is already known.
-// Fault unknown: one check question plus the two confirmed repair prices. No emoji.
+const BRANDS = ['samsung', 'tcl', 'lg', 'sony', 'panasonic', 'skyworth', 'hisense', 'konka', 'haier', 'sharp', 'xiaomi', 'philips', 'devant', 'coocaa', 'astron'];
+
+function brandLabel(name) {
+  return name.length <= 3 ? name.toUpperCase() : name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function unitLabel(blob, size) {
+  const brand = BRANDS.find((b) => new RegExp(`\\b${b}\\b`, 'i').test(blob));
+  return brand ? `${brandLabel(brand)} ${size}` : `${size}"`;
+}
+
+function chatBlob(latest, thread = {}) {
+  const slots = thread.slots || {};
+  const users = (thread.history || []).filter((h) => h && h.role === 'user').map((h) => h.content || '').join('\n');
+  return `${slots.brandSize || ''}\n${slots.problemText || ''}\n${users}\n${latest || ''}`;
+}
+
+function asksPrice(text) {
+  return /magkano|presyo|how much|\bhm\b|\bprice\b/i.test(text || '');
+}
+
+function backlightQuote(label, price, possible) {
+  const head = possible ? 'Possible backlight po' : 'Palit backlight';
+  return `${label} po sir. ${head}, ${phpAmount(price)}. Kasama testing, 6 months warranty, at home service.`;
+}
+
+function lcdQuote(label, price) {
+  return `${label} po sir. LCD modification ${phpAmount(price)}. Kasama repair, warranty, at home service.`;
+}
+
+// One price row for the model. Other sizes stay out of the request so Groq accepts it.
+function priceHint(size) {
+  const n = Number(size) || 0;
+  if (!n) return 'No size yet. Ask brand and size. Do not invent a price.';
+  if (n === 85) return '85" backlight ₱22,000 other brands, ₱28,000 Samsung, Sony, Sharp, LG, Hisense, Devant. No LCD modification price. Hand off for LCD modification.';
+  const bits = [];
+  if (BACKLIGHT[n]) bits.push(`backlight ${phpAmount(BACKLIGHT[n])}`);
+  if (LCD_MOD[n]) bits.push(`LCD modification ${phpAmount(LCD_MOD[n])}`);
+  let line = bits.length ? `${n}" ${bits.join(', ')}.` : `${n}" has no confirmed backlight or LCD modification price. Hand off.`;
+  if (n === 55) line += ' 55" Samsung brand-new nasa around ₱35,000. Repair ₱8,500. About ₱26,500 less.';
+  else line += ' Do not invent a brand-new price.';
+  return line;
+}
+
+// A short table answer. No "Confirmed:". Do not ask the fault again once it is known.
 function confirmedPriceReply(latest, thread = {}) {
   const ask = String(latest || '');
-  if (!/magkano|presyo|how much|\bhm\b|\bprice\b/i.test(ask)) return '';
-  const slots = thread.slots || {};
-  const prior = (thread.history || []).slice(0, -1).map((h) => h.content || '').join('\n');
-  const blob = `${slots.brandSize || ''}\n${slots.problemText || ''}\n${prior}\n${ask}`;
+  const blob = chatBlob(ask, thread);
   const size = knownSize(blob);
   if (!size) return '';
-  const label = slots.brandSize || `${size}"`;
   const fault = faultKind(blob);
+  const stated = Boolean(faultKind(ask));
+  if (!asksPrice(ask) && !stated) return '';
+  const label = unitLabel(blob, size);
+  const possible = /sound|tunog/i.test(blob) && !/\bbacklight\b/i.test(ask);
   if (fault === 'backlight') {
     if (size === 85) {
       const premium = PREMIUM_85.test(blob);
       const price = premium ? 28000 : 22000;
-      const who = premium ? 'Samsung, Sony, Sharp, LG, Hisense, o Devant' : 'ibang brand';
-      return `${label} po, palit backlight: ${phpAmount(price)} (${who}). Kasama ang testing, 6 months warranty, at home service sa package.\nKailan po sila free?`;
+      const who = premium ? 'Samsung, Sony, Sharp, LG, Hisense, Devant' : 'ibang brand';
+      return `${label} po sir. ${possible ? 'Possible backlight po' : 'Palit backlight'}, ${phpAmount(price)} (${who}). 6 months warranty, home service.`;
     }
     const price = BACKLIGHT[size];
     if (!price) return '';
-    return `${label} po, palit backlight: ${phpAmount(price)}. Kasama ang LED strips, testing, 6 months warranty, at home service sa package.\nKailan po sila free?`;
+    return backlightQuote(label, price, possible);
   }
   if (fault === 'lcd-mod') {
     if (!LCD_MOD[size]) return '85" LCD modification po, wala pang confirmed price. Si Ivan na po ang magko-confirm.\n[HANDOFF: 85 inch LCD modification has no confirmed price]';
-    return `${label} po, LCD modification: ${phpAmount(LCD_MOD[size])}. Kasama ang repair, testing, warranty, at home service sa package.\nKailan po sila free?`;
+    return lcdQuote(label, LCD_MOD[size]);
   }
+  if (!asksPrice(ask)) return '';
   if (size === 85) {
-    return `85" po. Backlight ${phpAmount(22000)} sa ibang brand, ${phpAmount(28000)} kung Samsung, Sony, Sharp, LG, Hisense, o Devant. LCD modification, si Ivan na po.\nAno po ang sira?`;
+    return `85" po sir. Backlight ${phpAmount(22000)} other brands, ${phpAmount(28000)} Samsung, Sony, Sharp, LG, Hisense, Devant. LCD modification, si Ivan na po.\nAno po ang sira?`;
   }
   const back = BACKLIGHT[size];
   const mod = LCD_MOD[size];
   if (!back && !mod) return '';
   const bits = [back ? `backlight ${phpAmount(back)}` : '', mod ? `LCD modification ${phpAmount(mod)}` : ''].filter(Boolean);
-  return `${label} po. Confirmed: ${bits.join(', ')}.\nAno po ang sira, walang display o may lines?`;
+  return `${label} po sir. ${bits.join(', ')}.\nAno po ang sira, walang display o may linya?`;
+}
+
+const LOCATION_LINE = 'home service po kami sir, Cavite, Laguna at Batangas. saan po location nyo?';
+const WARRANTY_LINE = 'May warranty po sir. Backlight at new LCD 6 months. Motherboard at power supply 5 months. Rebonding 3 months. LCD repair 3 months (32-65) o 2 months (70-85).';
+
+function discountReply(text) {
+  if (!/discount|tawad|\bpromo\b|less pa|pa[\s-]*less|ibababa|lower (?:the )?price/i.test(text || '')) return '';
+  return 'Fixed po ang presyo sir. Kasama ang warranty at home service, walang hakot. Si Ivan na po ang kakausap.\n[HANDOFF: asked for a discount]';
+}
+
+function locationReply(text) {
+  if (!/san po kayo|saan po kayo|saan (?:po )?(?:ang )?(?:shop|branch)|nasaan (?:po )?(?:kayo|ang shop|ang branch)|where are you|\blocated\b|location (?:nyo|niyo|ninyo)|anong address|address (?:nyo|niyo)|hanggang saan/i.test(text || '')) return '';
+  return LOCATION_LINE;
+}
+
+function warrantyReply(text) {
+  const t = String(text || '');
+  if (!/warranty|garantiya|garanty/i.test(t)) return '';
+  if (/sira ulit|nasira|backjob|walang resibo|no receipt/i.test(t)) {
+    return 'Warranty po nito, si Ivan na ang titingin sir.\n[HANDOFF: warranty question]';
+  }
+  if (/backlight/i.test(t)) return 'Backlight po sir, 6 months warranty.';
+  if (/new lcd|lcd panel/i.test(t)) return 'New LCD panel po sir, 6 months warranty.';
+  if (/motherboard|\bboard\b|power supply|\bpsu\b/i.test(t) && /power|psu|supply/i.test(t)) return 'Power supply po sir, 5 months warranty.';
+  if (/motherboard|\bboard\b/i.test(t)) return 'Motherboard po sir, 5 months warranty.';
+  if (/rebond/i.test(t)) return 'Rebonding po sir, 3 months warranty.';
+  if (/lcd repair|lcd modification|\bmodif/i.test(t)) return 'LCD repair po sir, 3 months (32-65) o 2 months (70-85).';
+  if (/warranty (?:ng|sa|for)\b/i.test(t)) {
+    return 'Warranty po nito, si Ivan na ang magko-confirm sir.\n[HANDOFF: warranty question]';
+  }
+  return WARRANTY_LINE;
+}
+
+function homeSoonReply(text) {
+  const t = String(text || '');
+  if (!/home\s*service/i.test(t)) return '';
+  if (!/\bbukas\b|tomorrow|pwede|pede|puwede/i.test(t)) return '';
+  return 'Pwede po magpa-home service sir. ₱1,000 check-up, waived pag tinuloy ang repair. Bukas hindi pa confirmed.';
+}
+
+function hesitationReply(latest, thread) {
+  if (!/\bmahal\b|too expensive|low budget|pag-?iisipan|iisipin ko/i.test(latest || '')) return '';
+  const blob = chatBlob(latest, thread);
+  if (/\b55\b/.test(blob) && /samsung/i.test(blob)) {
+    return '55 Samsung brand-new nasa around ₱35,000 po sir. Repair ₱8,500, about ₱26,500 less, may warranty at home service. Kailan po kayo free?';
+  }
+  return 'Repair po sir is less than brand new, may warranty at home service, walang hakot. Kailan po kayo free?';
+}
+
+function vagueRepairReply(text) {
+  if (knownSize(text)) return '';
+  if (!/hm po repair ng tv|repair ng tv/i.test(text || '')) return '';
+  return 'Anong brand at size po ng TV sir?';
+}
+
+// Answers that must not go to the small model.
+function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
+  return discountReply(latest)
+    || locationReply(latest)
+    || warrantyReply(latest)
+    || homeSoonReply(latest)
+    || (allowPrice ? (confirmedPriceReply(latest, thread) || vagueRepairReply(latest)) : '')
+    || hesitationReply(latest, thread)
+    || '';
 }
 
 module.exports = {
@@ -198,6 +308,11 @@ module.exports = {
   LCD_MOD,
   BACKLIGHT,
   confirmedPriceReply,
+  scriptedReply,
+  priceHint,
+  knownSize,
+  LOCATION_LINE,
+  WARRANTY_LINE,
   CHECKUP_FEE_PLAIN,
   SHOP_CHECKUP_PHP,
   SHOP_CHECKUP_FEE_PLAIN,

@@ -4,7 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { LlmGate, retryDelayMs } = require('./llm-gate');
 const { AiRouter, buildProviders } = require('./ai-router');
-const { behaviorBaseline, behaviorContext } = require('./behavior-bank');
+const { behaviorBaseline } = require('./behavior-bank');
+const { knownSize, priceHint } = require('./estimate');
+const { bookingFormMessage } = require('./messages');
 
 const RETRIES = 3;
 const RETRY_BUDGET_MS = 90_000;
@@ -60,9 +62,8 @@ class LLM {
   async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const messages = [
-      { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message in 2 or 3 short Taglish lines, under 300 characters, with po and sir or maam. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog essay. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
-      { role: 'system', content: behaviorContext([...history].reverse().find(h => h.role === 'user')?.content || '') },
+      { role: 'system', content: compactPrompt(history, this.cfg) },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message in 2 or 3 short Taglish lines, under 200 characters, with po and sir or maam. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
       ...normalizeTurns(history, { attachmentNote }),
     ];
     return this.chat(messages, { priority: 'high' });
@@ -80,20 +81,22 @@ class LLM {
       ? ' They were asked for a video and have not sent it. Remind them to send the video.'
       : '';
     const messages = [
-      { role: 'system', content: this.systemPrompt() },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-3 short lines, under 300 characters, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
+      { role: 'system', content: compactPrompt(history, this.cfg) },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-3 short lines, under 200 characters, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
       ...turns,
     ];
     return this.chat(messages, { priority: 'low' });
   }
 
   async chat(messages, { priority = 'high' } = {}) {
+    this.lastProvider = '';
     if (this.router) {
       try {
         const answer = await this.gate.schedule(() => this.router.complete(this.payload(messages)), { priority });
         this.lastProvider = this.router.lastProvider || '';
         return answer;
       } catch (e) {
+        this.lastProvider = '';
         this.noteError(e);
         throw e;
       }
@@ -117,13 +120,16 @@ class LLM {
 
   async once(messages, priority) {
     try {
+      const answer = await this.gate.schedule(() => this.complete(messages), { priority });
       this.lastProvider = this.cfg.llmModel || 'llm';
-      return await this.gate.schedule(() => this.complete(messages), { priority });
+      return answer;
     } catch (e) {
+      this.lastProvider = '';
       if (!this.shouldDropTemperature(e)) throw e;
       this.omitTemperature = true;
+      const answer = await this.gate.schedule(() => this.complete(messages), { priority });
       this.lastProvider = this.cfg.llmModel || 'llm';
-      return await this.gate.schedule(() => this.complete(messages), { priority });
+      return answer;
     }
   }
 
@@ -198,4 +204,26 @@ function parseHandoff(raw) {
   const text = raw.replace(re, '').replace(/\n{3,}/g, '\n\n').trim();
   return { text, handoff: reason !== null, reason: reason || '' };
 }
-module.exports = { LLM, parseHandoff, normalizeTurns };
+function estimateTokens(text) {
+  return Math.ceil(String(text || '').length / 4);
+}
+
+// What the provider actually sees. The full markdown file is too big for Groq (HTTP 413).
+function compactPrompt(history, cfg = {}) {
+  const blob = (history || []).map((h) => (h && h.content) || '').join('\n');
+  const size = knownSize(blob);
+  const url = cfg.bookingFormUrl || '';
+  const lines = [
+    "You are the Messenger reply assistant of JMAG's Appliances. Staff Taglish with po and sir or maam. 2 or 3 lines, under 200 characters. No emoji.",
+    'Never restate the customer. No empathy paragraph. Never write inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan.',
+    'Do not name a city, street, or shop address. Home service areas: Cavite, Laguna, Batangas. Ask where they are.',
+    'Warranty only: backlight and new LCD 6 months; motherboard and power supply 5 months; rebonding 3 months; LCD repair 3 months (32-65) or 2 months (70-85). If unsure, hand off. Do not invent a warranty.',
+    'Shop check-up ₱300. Home check-up ₱1,000, waived if the repair proceeds. Never offer a discount.',
+    'Price for this chat only: ' + priceHint(size),
+    'Example: Samsung 55 may sound walang display -> Samsung 55 po sir. Possible backlight po, ₱8,500. Kasama testing, 6 months warranty, at home service.',
+  ];
+  if (url) lines.push(bookingFormMessage(url));
+  return lines.join('\n');
+}
+
+module.exports = { LLM, parseHandoff, normalizeTurns, compactPrompt, estimateTokens };

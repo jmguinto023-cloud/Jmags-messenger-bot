@@ -357,8 +357,14 @@ test('LLM failure does not send the canned greeting and hands the chat to Ivan o
   s.mock.state.llmStatus = 429;
   s.mock.state.llmError = 'resource exhausted';
   try {
+    const notes = [];
+    s.app.log.info = (...a) => notes.push(a.map(String).join(' '));
     await s.post(msg('chat-ai-4401', { text: 'hm po' }));
     assert.equal(s.mock.calls.llm.length, 3);
+    assert.ok(notes.some((l) => /replied to/.test(l) && !/provider=/.test(l)));
+    assert.equal(notes.some((l) => /provider=gemini|provider=groq/.test(l)), false);
+    const holding = s.app.store.readConversations().find((r) => /Si Ivan na po ang tutuloy/.test(r.text));
+    assert.equal(holding.provider, undefined);
     assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
     assert.equal(s.mock.calls.messages.length, 1);
     assert.match(s.mock.calls.messages[0].message.text, /Si Ivan na po ang tutuloy/);
@@ -1048,16 +1054,16 @@ test('a received video stays in later model calls and is never treated as missin
   } finally { await s.close(); }
 });
 
-test('a price range from a description invites a personal check-up', async () => {
+test('lines on a known size quote LCD modification without a checkup essay', async () => {
   const s = await setup();
   s.mock.state.llmResponder = () => 'Karaniwang range po ay ₱9,000–₱10,000.';
   try {
     await s.post(msg('rng', { text: 'may lines po sa TCL 40 inch, taga Cabuyao' }));
+    assert.equal(s.mock.calls.llm.length, 0);
     const text = s.mock.calls.messages[0].message.text;
-    assert.match(text, /₱9,000–₱10,000/);
-    assert.match(text, /Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate/);
-    assert.match(text, /home-service check-up/);
-    assert.match(text, /waived kung itutuloy ang repair/);
+    assert.match(text, /TCL 40/);
+    assert.match(text, /LCD modification ₱4,500/);
+    assert.doesNotMatch(text, /₱9,000|₱1,000|check-up|Cabuyao/);
   } finally { await s.close(); }
 });
 
@@ -2613,8 +2619,20 @@ test('LLM retries honor Retry-After and Gemini retryDelay, and fresh replies go 
   assert.equal(retryDelayMs({ body: JSON.stringify({ error: { details: [{ retryDelay: '30s' }] } }) }, 0), 30000);
   assert.equal(retryDelayMs({ status: 500 }, 0), 2000);
   assert.equal(retryDelayMs({ status: 500 }, 1), 4000);
-  assert.equal(loadConfig({}).llmMaxRpm, 8);
+    assert.equal(loadConfig({}).llmMaxRpm, 15);
   assert.equal(loadConfig({ LLM_MAX_RPM: '0' }).llmMaxRpm, 0);
+  let rpmNow = 0;
+  const rpmSlept = [];
+  const rpmGate = new LlmGate({
+    rpm: 15,
+    now: () => rpmNow,
+    sleep: async (ms) => { rpmSlept.push(ms); rpmNow += ms; },
+  });
+  rpmGate.nextAt = 60_000;
+  let rpmRan = false;
+  assert.equal(await rpmGate.schedule(async () => { rpmRan = true; return 'ok'; }), 'ok');
+  assert.equal(rpmRan, true);
+  assert.deepEqual(rpmSlept, [20000]);
   assert.equal(loadConfig({}).followupMaxAgeHours, 6);
 
   const order = [];
@@ -2739,7 +2757,125 @@ test('Page Inbox history is loaded and a known size gets a confirmed price', asy
     const hist = s.app.store.thread('astron-40').history.map((h) => h.content).join('\n');
     assert.match(hist, /Astron 40 inch/);
     const rows = await (await fetch(`${s.base}/admin/conversations`, { headers: { Authorization: 'Bearer adm' } })).json();
-    assert.ok(rows.some((r) => r.role === 'assistant' && /4,000/.test(r.text) && r.provider === 'price-table'));
+    assert.ok(rows.some((r) => r.role === 'assistant' && /4,000/.test(r.text) && r.provider === 'rules'));
+    assert.doesNotMatch(sent, /Confirmed:/);
+  } finally { await s.close(); }
+});
+
+test('the ten live messages get short rule answers instead of a model essay', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Ang iyong mensahe ay isang pagtatanong. Nauunawaan ko na nakakadismaya. Maaari ko po bang malaman ang inyong lokasyon sa Makati?';
+  const send = async (id, text) => {
+    await s.post(msg(id, { text }));
+    return s.mock.calls.messages.at(-1).message.text;
+  };
+  try {
+    const vague = await send('live-1', 'hm po repair ng tv');
+    assert.equal(vague, 'Anong brand at size po ng TV sir?');
+    assert.doesNotMatch(vague, /₱|Makati/);
+
+    const sound = await send('live-2', 'samsung 55 inch may sound pero walang display');
+    assert.match(sound, /Possible backlight po/);
+    assert.match(sound, /8,500/);
+    assert.doesNotMatch(sound, /Confirmed:|Makati/);
+
+    const bl = await send('live-3', 'magkano po backlight ng 43 lg');
+    assert.match(bl, /LG 43/);
+    assert.match(bl, /4,500/);
+    assert.match(bl, /Palit backlight/);
+    assert.doesNotMatch(bl, /Possible backlight|8,500|Confirmed:/);
+
+    const mahal = await send('live-2', 'ang mahal naman po');
+    assert.match(mahal, /35,000/);
+    assert.match(mahal, /8,500/);
+    assert.match(mahal, /26,500/);
+    assert.doesNotMatch(mahal, /discount|tawad|promo|ibababa/i);
+    assert.equal(s.app.store.thread('live-2').handedOff, false);
+
+    const loc = await send('live-4', 'san po kayo located');
+    assert.equal(loc, 'home service po kami sir, Cavite, Laguna at Batangas. saan po location nyo?');
+    assert.doesNotMatch(loc, /Makati|Santan|San Pablo/);
+
+    const war = await send('live-5', 'may warranty po ba');
+    assert.match(war, /6 months/);
+    assert.match(war, /5 months/);
+    assert.match(war, /3 months/);
+    assert.match(war, /2 months/);
+    assert.doesNotMatch(war, /store|Makati|12 months|1 year/i);
+    assert.equal(s.app.store.thread('live-5').handedOff, false);
+
+    const crt = await send('live-6', 'JVC CRT tv po namamatay');
+    assert.equal(crt, 'CRT po ba sir? Si Ivan na po ang sasagot dito.');
+    assert.equal(s.app.store.thread('live-6').handedOff, true);
+
+    const home = await send('live-7', 'pwede po ba bukas home service');
+    assert.match(home, /₱1,000/);
+    assert.match(home, /waived/i);
+    assert.match(home, /hindi pa confirmed/);
+    assert.doesNotMatch(home, /Makati|Santan/);
+    assert.equal(s.app.store.thread('live-7').handedOff, false);
+
+    await send('live-8', 'Astron 40 may linya');
+    const price = await send('live-8', 'magkano po kaya');
+    assert.match(price, /LCD modification/);
+    assert.match(price, /4,500/);
+    assert.doesNotMatch(price, /Ano po ang sira|Confirmed:|4,000/);
+
+    const disc = await send('live-9', 'pa discount naman po');
+    assert.match(disc, /Fixed po ang presyo/);
+    assert.match(disc, /warranty/);
+    assert.match(disc, /home service/);
+    assert.doesNotMatch(disc, /discount|tawad|promo|₱|ibababa/i);
+    assert.equal(s.app.store.thread('live-9').handedOff, true);
+    assert.match(s.app.store.thread('live-9').handoffReason, /discount/);
+
+    assert.equal(s.mock.calls.llm.length, 0);
+    for (const text of s.mock.calls.messages.map((m) => m.message.text)) {
+      assert.ok(text.length <= 200, text);
+      assert.ok(text.split('\n').filter(Boolean).length <= 3, text);
+      assert.doesNotMatch(text, /\b(?:inyong|ninyong|iyong|nararanasan|maaari)\b|pasensya na|naiintindihan ko|nauunawaan/i);
+    }
+  } finally { await s.close(); }
+});
+
+test('the prompt sent to a provider is one size row and stays under the Groq limit', () => {
+  const { compactPrompt, estimateTokens, LLM } = require('../src/llm');
+  const history = [{ role: 'user', content: 'samsung 55 inch may sound pero walang display' }];
+  const prompt = compactPrompt(history, {});
+  const payload = [
+    prompt,
+    'Current date/time in the Philippines: Sat Oct 25. Reply only to the latest message in 2 or 3 short Taglish lines, under 200 characters.',
+    history[0].content,
+  ].join('\n');
+  assert.match(prompt, /JMAG's Appliances/);
+  assert.match(prompt, /8,500/);
+  assert.match(prompt, /35,000/);
+  assert.match(prompt, /26,500/);
+  assert.doesNotMatch(prompt, /Santan|Makati|Gen\.?\s*Trias|JMAGS Behavior Bank/);
+  assert.doesNotMatch(prompt, /₱2,500|₱16,000|₱22,000/);
+  assert.ok(estimateTokens(payload) < 6000);
+  const small = compactPrompt([{ role: 'user', content: 'lg 32 inch po' }], {});
+  assert.match(small, /Price for this chat only: 32" backlight ₱2,500/);
+  assert.doesNotMatch(small, /Price for this chat only:[\s\S]*₱22,000|Price for this chat only:[\s\S]*₱16,000/);
+  const llm = new LLM({ systemPromptFile: path.join(__dirname, '..', 'prompts', 'system-prompt.md') });
+  assert.ok(estimateTokens(llm.systemPrompt()) > 6000);
+});
+
+test('a formal rewrite is dropped for the short template', async () => {
+  const s = await setup();
+  let n = 0;
+  s.mock.state.llmResponder = () => {
+    n += 1;
+    return n === 1
+      ? 'Ang iyong mensahe ay mahaba. Nauunawaan ko po. '.repeat(8)
+      : 'Naiintindihan ko po ang inyong problema sir, maaari ko bang malaman?';
+  };
+  try {
+    await s.post(msg('formal-1', { text: 'hello po, update lang' }));
+    assert.equal(n, 2);
+    const text = s.mock.calls.messages.at(-1).message.text;
+    assert.equal(text, 'Sige po sir. Anong brand at size po ng TV, at ano pong sira?');
+    assert.equal(s.app.store.readConversations().some((r) => r.provider === 'template'), true);
   } finally { await s.close(); }
 });
 
@@ -2750,11 +2886,12 @@ test('a long model reply is rewritten once, then cut to three short lines', asyn
     await s.post(msg('long-reply', { text: 'hello po lang' }));
     const text = s.mock.calls.messages.at(-1).message.text;
     assert.equal(s.mock.calls.llm.length, 2);
-    assert.ok(text.length <= 300);
+    assert.equal(text, 'Sige po sir. Anong brand at size po ng TV, at ano pong sira?');
+    assert.ok(text.length <= 200);
     assert.ok(text.split('\n').filter(Boolean).length <= 3);
     assert.equal(text.includes('😊'), false);
     const logged = s.app.store.readConversations().filter((r) => r.role === 'assistant');
-    assert.ok(logged.some((r) => r.text === text && r.provider === 'mock-model'));
+    assert.ok(logged.some((r) => r.text === text && r.provider === 'template'));
   } finally { await s.close(); }
 });
 
@@ -2798,7 +2935,7 @@ test('an essay over 300 characters is replaced by the short rewrite', async () =
     return n === 1 ? essay : 'Samsung 40 po sir, walang display. Palit backlight po ay ₱4,000. Kailan po sila free?';
   };
   try {
-    await s.post(msg('essay-1', { text: 'samsung 40 inch po walang display' }));
+    await s.post(msg('essay-1', { text: 'hello po, update lang sa tv namin' }));
     assert.equal(n, 2);
     const text = s.mock.calls.messages.at(-1).message.text;
     assert.match(text, /₱4,000/);
