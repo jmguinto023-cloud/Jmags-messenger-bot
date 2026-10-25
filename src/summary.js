@@ -14,7 +14,8 @@ function summarizeConversation(history) {
   let problem = '';
   if (/backlight|no visual|walang display|no display|black screen|walang ilaw/i.test(text)) problem = 'no display / backlight';
   else if (/basag|cracked|smashed|broken lcd|\blcd\b/i.test(text)) problem = 'cracked or LCD';
-  else if (/gumuguhit|flicker|bar line|\blines\b/i.test(text)) problem = 'lines / flicker';
+  else if (/flicker|blink(?:ing)?|kislap/i.test(text)) problem = 'flicker / backlight';
+  else if (/gumuguhit|bar line|\blines\b/i.test(text)) problem = 'lines';
   const loc = text.match(/\b(biñan|binan|cabuyao|san pablo|imus|dasmariñas|dasmarinas|manila|laguna|cavite|batangas|general trias|sta\.?\s*rosa|santa rosa|calamba|lipa|quezon city|makati|pasig|taguig|parañaque|paranaque)\b[^.\n]{0,20}/i);
   return {
     size: sizeM ? `${sizeM[1]}"` : '',

@@ -149,11 +149,15 @@ function knownSize(text) {
   return m ? Number(m[1]) : 0;
 }
 
+const FLICKER = /flicker|blink(?:ing)?|kislap/i;
+
 function faultKind(text) {
   const t = String(text || '');
   const dark = /walang (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen/i.test(t);
+  // Flicker and blinking are a backlight fault, including "nag fflicker" and "kumikislap".
+  if (FLICKER.test(t)) return 'backlight';
   if (/(?:sound|tunog)/i.test(t) && dark) return 'backlight';
-  if (/may linya|\blinya\b|may lines|\blines\b|lcd modification|\bmodif/i.test(t) || /gumuguhit|flicker|bar line/i.test(t)) return 'lcd-mod';
+  if (/may linya|\blinya\b|may lines|\blines\b|lcd modification|\bmodif/i.test(t) || /gumuguhit|bar line/i.test(t)) return 'lcd-mod';
   if (/backlight/i.test(t)) return 'backlight';
   return '';
 }
@@ -208,7 +212,8 @@ function confirmedPriceReply(latest, thread = {}) {
   const blob = chatBlob(ask, thread);
   const size = knownSize(blob);
   if (!size) return '';
-  const fault = faultKind(blob);
+  // The latest message wins. A stored label must not turn "may lines" into flicker.
+  const fault = faultKind(ask) || faultKind(blob);
   const stated = Boolean(faultKind(ask));
   if (!asksPrice(ask) && !stated) return '';
   const label = unitLabel(blob, size);
@@ -270,11 +275,21 @@ function warrantyReply(text) {
   return WARRANTY_LINE;
 }
 
+const DURATION_LINE = 'Depende po sa sira sir. Anong brand at size po ng TV para ma-check namin?';
+
+function durationReply(text) {
+  const t = String(text || '');
+  // "Ilang taon" is the age of the TV, not how long the repair takes.
+  if (/\bilang taon\b|\btaon na\b|how old|\bedad\b|\byears? old\b/i.test(t)) return '';
+  if (!/\bilang araw\b|\bgaano katagal\b|\bkailan\b[\s\S]{0,40}\b(?:matatapos|matapos|tapos|maaayos|maayos)\b|\bhow long\b|\bturnaround\b/i.test(t)) return '';
+  return DURATION_LINE;
+}
+
 function homeSoonReply(text) {
   const t = String(text || '');
   if (!/home\s*service/i.test(t)) return '';
   if (!/\bbukas\b|tomorrow|pwede|pede|puwede/i.test(t)) return '';
-  return 'Pwede po magpa-home service sir. ₱1,000 check-up, waived pag tinuloy ang repair. Bukas hindi pa confirmed.';
+  return 'Pwede po sir. ₱1,000 check-up, waived pag tinuloy ang repair. Saan po location nyo at anong oras po kayo free?';
 }
 
 function hesitationReply(latest, thread) {
@@ -297,6 +312,7 @@ function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
   return discountReply(latest)
     || locationReply(latest)
     || warrantyReply(latest)
+    || durationReply(latest)
     || homeSoonReply(latest)
     || (allowPrice ? (confirmedPriceReply(latest, thread) || vagueRepairReply(latest)) : '')
     || hesitationReply(latest, thread)
