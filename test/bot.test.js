@@ -2811,8 +2811,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
     const home = await send('live-7', 'pwede po ba bukas home service');
     assert.match(home, /₱1,000/);
     assert.match(home, /waived/i);
-    assert.match(home, /hindi pa confirmed/);
-    assert.doesNotMatch(home, /Makati|Santan/);
+    assert.match(home, /Saan po location nyo at anong oras/);
+    assert.doesNotMatch(home, /hindi pa confirmed|Makati|Santan/);
     assert.equal(s.app.store.thread('live-7').handedOff, false);
 
     await send('live-8', 'Astron 40 may linya');
@@ -2838,6 +2838,42 @@ test('the ten live messages get short rule answers instead of a model essay', as
   } finally { await s.close(); }
 });
 
+test('flicker quotes backlight, repair time stays unstated, and tomorrow asks where and when', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Mga 3 araw po sir bago matapos. LCD modification po yan.';
+  const send = async (id, text) => {
+    await s.post(msg(id, { text }));
+    return s.mock.calls.messages.at(-1).message.text;
+  };
+  try {
+    for (const text of ['LG 50 nag fflicker', 'kumikislap po ang LG 50', 'blinking po yung LG 50 inch']) {
+      const quote = await send(`flick-${text.length}`, text);
+      assert.match(quote, /LG 50/);
+      assert.match(quote, /Palit backlight/);
+      assert.match(quote, /5,500/);
+      assert.doesNotMatch(quote, /LCD modification|Possible backlight|3 araw/);
+      assert.ok(quote.length <= 200, quote);
+    }
+    const duration = 'Depende po sa sira sir. Anong brand at size po ng TV para ma-check namin?';
+    for (const text of ['ilang araw po ang repair', 'gaano katagal po', 'kailan po matatapos']) {
+      const answer = await send(`time-${text.length}`, text);
+      assert.equal(answer, duration);
+      assert.doesNotMatch(answer, /\d+\s*araw|days|turnaround|LCD/i);
+      assert.ok(answer.length <= 200);
+    }
+    const age = await send('age-1', 'samsung 55 ilang taon na po');
+    assert.notEqual(age, duration);
+    assert.match(age, /3 araw|Taglish|po/i);
+    assert.ok(s.mock.calls.llm.length >= 1);
+
+    const home = await send('home-1', 'pwede po ba bukas home service');
+    assert.equal(home, 'Pwede po sir. ₱1,000 check-up, waived pag tinuloy ang repair. Saan po location nyo at anong oras po kayo free?');
+    assert.doesNotMatch(home, /hindi pa confirmed|Bukas/);
+    assert.ok(home.length <= 200);
+    assert.equal(s.app.store.thread('home-1').handedOff, false);
+  } finally { await s.close(); }
+});
+
 test('the prompt sent to a provider is one size row and stays under the Groq limit', () => {
   const { compactPrompt, estimateTokens, LLM } = require('../src/llm');
   const history = [{ role: 'user', content: 'samsung 55 inch may sound pero walang display' }];
@@ -2848,6 +2884,7 @@ test('the prompt sent to a provider is one size row and stays under the Groq lim
     history[0].content,
   ].join('\n');
   assert.match(prompt, /JMAG's Appliances/);
+  assert.match(prompt, /Never state a repair duration or turnaround time/);
   assert.match(prompt, /8,500/);
   assert.match(prompt, /35,000/);
   assert.match(prompt, /26,500/);
