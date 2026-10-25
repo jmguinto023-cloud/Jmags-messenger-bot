@@ -112,6 +112,17 @@ class AiRouter {
         await this.sleep(this.retryBackoffMs);
         continue;
       }
+      // Every provider was on cooldown, so nobody was called. Wait for the soonest
+      // cooldown, at most 20s, then try them. Do not fail with an empty provider list.
+      if (round === 0 && triedThisCall.size === 0) {
+        const waits = this.providers
+          .map((provider) => (this.cooldowns.get(provider.name) || 0) - this.now())
+          .filter((ms) => ms > 0);
+        const wait = Math.min(20000, waits.length ? Math.min(...waits) : 0);
+        if (wait > 0) await this.sleep(wait);
+        for (const provider of this.providers) this.cooldowns.delete(provider.name);
+        continue;
+      }
       break;
     }
     const err = new Error('AI providers unavailable (' + failures.join('; ') + ')');

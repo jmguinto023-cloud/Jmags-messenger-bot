@@ -2,7 +2,7 @@
 // Core logic: turns Messenger webhook events into Ivan-style replies, handoffs, or follow-ups.
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
-const { sanitizeOutgoing, capCustomerReply, replyOverflows, nonFlatscreenLine, bookingFormMessage } = lines;
+const { sanitizeOutgoing, capCustomerReply, replyRejected, SAFE_TEMPLATE, nonFlatscreenLine, bookingFormMessage } = lines;
 const { short } = require('./log');
 const { psidHash } = require('./store');
 const { candidateInboxUrls } = require('./inbox-link');
@@ -17,7 +17,7 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
-const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, confirmedPriceReply, CHECKUP_NUDGE } = require('./estimate');
+const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
@@ -542,38 +542,44 @@ class Bot {
     this.store.save();
   }
 
-  // A weak model sometimes writes an essay. Ask once for a short rewrite, then cut.
+  // A weak model writes formal Tagalog essays. Rewrite once, then use a short template.
   async fitModelReply(psid, raw) {
+    this.forceProvider = '';
     const parsed = parseHandoff(String(raw || ''));
-    if (!replyOverflows(parsed.text)) return raw;
+    if (!replyRejected(parsed.text)) return raw;
     let next = '';
     try {
       next = await this.llm.chat([
-        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 300 characters. Conversational Taglish with po and sir or maam. Do not restate or summarize the customer. No empathy paragraph. No formal Tagalog (iyong, ninyo). No emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
-        { role: 'user', content: String(raw).slice(0, 1500) },
+        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 200 characters. Conversational Taglish with po and sir or maam. Do not restate the customer. No empathy. Do not use inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan. No emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
+        { role: 'user', content: String(raw).slice(0, 800) },
       ], { priority: 'high' });
       this.log.info(`rewrote long reply for ${short(psid)}`);
     } catch (e) {
       this.log.warn('short rewrite failed', e.message);
     }
     const again = next ? parseHandoff(next) : null;
-    const chosen = again && again.text && again.text.length <= parsed.text.length ? again : parsed;
-    const clipped = capCustomerReply(chosen.text);
-    if (parsed.handoff) return `${clipped}\n[HANDOFF: ${parsed.reason || 'model'}]`;
-    return clipped;
+    if (again && again.text && !replyRejected(again.text)) {
+      if (parsed.handoff) return `${again.text}\n[HANDOFF: ${parsed.reason || 'model'}]`;
+      return again.text;
+    }
+    this.forceProvider = 'template';
+    if (this.llm) this.llm.lastProvider = '';
+    const line = SAFE_TEMPLATE;
+    if (parsed.handoff) return `${line}\n[HANDOFF: ${parsed.reason || 'model'}]`;
+    return line;
   }
 
   presentReply(text) {
     if (!text) return text;
     if (text === CLOSE_LINE) return text;
     if (this.cfg.bookingFormUrl && text.includes(this.cfg.bookingFormUrl)) return text;
-    // The home-visit fee sentence is required policy. Cap the lead-in, keep the fee.
+    // The home-visit fee sentence is required policy. Keep it whole.
     const nudgeAt = String(text).indexOf(CHECKUP_NUDGE);
     if (nudgeAt >= 0) {
-      const lead = capCustomerReply(text.slice(0, nudgeAt));
+      const lead = text.slice(0, nudgeAt).trim();
       return lead ? `${lead}\n${CHECKUP_NUDGE}` : CHECKUP_NUDGE;
     }
-    return capCustomerReply(text);
+    return capCustomerReply(text, 200);
   }
 
   async replyWithAI(psid, ts) {
@@ -609,12 +615,13 @@ class Bot {
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
       }
-      const priced = !hadMedia && !reviewPending(t) ? confirmedPriceReply(latestUser, t) : '';
-      if (priced) {
-        const parsed = parseHandoff(priced);
+      const scripted = scriptedReply(latestUser, t, { allowPrice: !hadMedia && !reviewPending(t) });
+      if (scripted) {
+        const parsed = parseHandoff(scripted);
         this.repliedRev.set(psid, rev);
-        if (parsed.handoff) await this.handoff(psid, parsed.reason || 'no confirmed price', this.presentReply(parsed.text) || lines.holding);
-        else await this.send(psid, this.presentReply(parsed.text), { provider: 'price-table' });
+        const body = this.presentReply(parsed.text) || lines.holding;
+        if (parsed.handoff) await this.handoff(psid, parsed.reason || 'rules', body, { provider: 'rules' });
+        else await this.send(psid, body, { provider: 'rules' });
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
       }
@@ -743,6 +750,8 @@ class Bot {
 
   // The canned greeting is never the answer to an AI failure, and never goes out twice.
   async giveUpOnAi(psid, e, { rev, hadMedia, hadVideo }) {
+    if (this.llm) this.llm.lastProvider = '';
+    this.forceProvider = '';
     const t = this.store.thread(psid);
     const reason = this.aiOutageReason(e);
     this.log.error(`LLM outage for ${short(psid)}: ${reason}. ${e && e.message ? e.message : ''} No canned greeting.`);
@@ -799,7 +808,8 @@ class Bot {
     // Canned fallback/holding lines are not part of the chat the model sees,
     // or the next reply continues them ("Pasensya na po... Nandito pa po ako").
     // They are still appended to the conversation export.
-    const provider = opts.provider || (this.llm && this.llm.lastProvider) || '';
+    const provider = opts.provider != null ? opts.provider : (this.forceProvider || (this.llm && this.llm.lastProvider) || '');
+    this.forceProvider = '';
     this.store.addTurn(psid, 'assistant', clean, this.now(), {
       history: !isCannedLine(clean),
       handoffReason: t.handoffReason || '',

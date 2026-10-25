@@ -67,7 +67,7 @@ function loadConfig(env = process.env) {
     llmTemperature: /^off$/i.test(env.LLM_TEMPERATURE || '') ? null : num(env.LLM_TEMPERATURE, 0.4),
     llmMaxTokens: num(env.LLM_MAX_TOKENS, 400),
     // Global cap so a restart or a 429 retry loop cannot burst the free-tier quota. 0 disables the gap.
-    llmMaxRpm: num(env.LLM_MAX_RPM, 8),
+    llmMaxRpm: num(env.LLM_MAX_RPM, 15),
     // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),

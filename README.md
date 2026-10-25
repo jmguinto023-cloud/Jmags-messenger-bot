@@ -21,7 +21,7 @@ npm start           # run (needs env, see .env.example)
   The wait uses `Retry-After` or a Gemini `retryDelay` when the provider sends one. If it still fails, the customer
   does not get the canned greeting. The chat is handed to Ivan (one holding line at most for that outage) and listed
   on the operations Today tab under "Needs Ivan". `GET /health` includes `llmErrors` and `llmLastError`.
-  Calls are spaced by `LLM_MAX_RPM` (default 8; 0 turns the gap off). A fresh customer reply is served before a follow-up.
+  Calls are spaced by `LLM_MAX_RPM` (default 15; 0 turns the gap off). A backed-up call waits at most 20 seconds, then still runs. A fresh customer reply is served before a follow-up.
   A 400 that says temperature is rejected is retried once without temperature, then omitted for the process.
 - Schedule form (`BOOKING_FORM_URL`, default the Netlify form) is injected into the system prompt. The model sends it
   in the same reply when the customer agrees, asks to be scheduled, or gives a date/time — not on a first price question,
