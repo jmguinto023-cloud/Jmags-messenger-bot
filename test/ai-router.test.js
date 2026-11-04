@@ -25,6 +25,12 @@ test('only Gemini then Groq are allowed; no legacy provider', () => {
 test('missing API keys are never selected', () => {
   assert.deepEqual(buildProviders(cfg({ geminiApiKey: '' })).map((p) => p.name), ['groq']);
 });
+test('default order is Groq only; Gemini runs only when the order lists it', () => {
+  const both = { aiAllowExternalData: true, geminiApiKey: 'test-gemini', groqApiKey: 'test-groq' };
+  assert.deepEqual(buildProviders(both).map((p) => p.name), ['groq']);
+  assert.deepEqual(buildProviders({ ...both, aiProviderOrder: 'gemini' }).map((p) => p.name), ['gemini']);
+  assert.deepEqual(buildProviders({ ...both, aiProviderOrder: 'groq,gemini' }).map((p) => p.name), ['groq', 'gemini']);
+});
 test('redacts emails and Philippine mobile numbers', () => {
   const cleaned = redactContact('Contact: jo@example.com and 09171234567');
   assert.doesNotMatch(cleaned, /jo@example.com|09171234567/);

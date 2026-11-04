@@ -2876,8 +2876,22 @@ test('flicker quotes backlight, repair time stays unstated, and tomorrow asks wh
 
 test('the prompt sent to a provider is one size row and stays under the Groq limit', () => {
   const { compactPrompt, estimateTokens, LLM } = require('../src/llm');
+  const { howIvanThinks } = require('../src/ivan-thinks');
   const history = [{ role: 'user', content: 'samsung 55 inch may sound pero walang display' }];
   const prompt = compactPrompt(history, {});
+  const thinks = howIvanThinks();
+  assert.match(thinks, /How Ivan thinks/);
+  assert.match(thinks, /1\. Qualify/);
+  assert.match(thinks, /2\. Diagnose/);
+  assert.match(thinks, /do not lower the price/i);
+  assert.match(thinks, /Push for a schedule/);
+  assert.match(thinks, /A photo or video is not a handoff/);
+  assert.match(prompt, /How Ivan thinks/);
+  assert.ok(prompt.includes(thinks));
+  const full = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'system-prompt.md'), 'utf8');
+  assert.ok(full.includes(thinks));
+  assert.equal(loadConfig({}).aiProviderOrder, 'groq');
+  assert.equal(loadConfig({ AI_PROVIDER_ORDER: 'groq,gemini' }).aiProviderOrder, 'groq,gemini');
   const payload = [
     prompt,
     'Current date/time in the Philippines: Sat Oct 25. Reply only to the latest message in 2 or 3 short Taglish lines, under 200 characters.',

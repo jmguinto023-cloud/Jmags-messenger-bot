@@ -7,6 +7,7 @@ const { AiRouter, buildProviders } = require('./ai-router');
 const { behaviorBaseline } = require('./behavior-bank');
 const { knownSize, priceHint } = require('./estimate');
 const { bookingFormMessage } = require('./messages');
+const { howIvanThinks } = require('./ivan-thinks');
 
 const RETRIES = 3;
 const RETRY_BUDGET_MS = 90_000;
@@ -215,6 +216,7 @@ function compactPrompt(history, cfg = {}) {
   const url = cfg.bookingFormUrl || '';
   const lines = [
     "You are the Messenger reply assistant of JMAG's Appliances. Staff Taglish with po and sir or maam. 2 or 3 lines, under 200 characters. No emoji.",
+    howIvanThinks(),
     'Never restate the customer. No empathy paragraph. Never write inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan.',
     'Never state a repair duration or turnaround time. If they ask how long, ask for the brand and size.',
     'Do not name a city, street, or shop address. Home service areas: Cavite, Laguna, Batangas. Ask where they are.',

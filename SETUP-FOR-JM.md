@@ -87,6 +87,11 @@ Goji will send you two things: the **Callback URL** (like `https://jmags-messeng
 | `CAVITE_PAGE_ID` | Already known: 61591823125793. Same check as `PAGE_ID`, on the Cavite Page row. | no |
 | `LLM_BASE_URL`, `LLM_MODEL` | AI provider's docs (Goji can fill these in) | no |
 | `LLM_API_KEY` | AI provider dashboard | **YES** |
+| `AI_PROVIDER_ORDER` | Set this to `groq` in Render. Groq is the only model that answers customers. Gemini is not used unless the value lists `gemini` (for example `groq,gemini`). If Render already has `gemini,groq`, replace it. | no |
+| `GROQ_API_KEY` | Groq dashboard. Required for customer replies through the Groq router. | **YES** |
+| `GROQ_MODEL` | Leave as `openai/gpt-oss-20b`. | no |
+| `AI_ROUTER_ENABLED` | Set `true` so customer replies use Groq instead of `LLM_BASE_URL`. | no |
+| `AI_EXTERNAL_DATA_ALLOWED` | Set `true` only after you accept that chat text is sent to Groq. The router stays empty until this is true. | no |
 | `VERIFY_TOKEN` | Render makes it automatically. Goji tells you what it is for step 11. | low |
 | Your and Ivan's test IDs | They show up automatically after you each message the Page (step 18) | no |
 | Business hours for soft launch | Your decision (for example 18:00–08:00, plus Sundays) | no |

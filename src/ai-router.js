@@ -1,5 +1,6 @@
 'use strict';
-// JMAGS Gemini -> Groq provider failover. Enabled only by explicit Render flags.
+// Customer replies use Groq unless AI_PROVIDER_ORDER explicitly lists another provider.
+// Gemini is not called when it is absent from that list. Enabled only by explicit Render flags.
 // Never store provider keys in GitHub or log provider responses.
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai';
@@ -19,7 +20,7 @@ function buildProviders(cfg) {
       thirdParty: true,
     } : null,
   };
-  const order = String(cfg.aiProviderOrder || 'gemini,groq')
+  const order = String(cfg.aiProviderOrder || 'groq')
     .split(',').map((x) => x.trim().toLowerCase());
   return [...new Set(order)].map((key) => known[key]).filter(Boolean);
 }

@@ -54,7 +54,8 @@ function loadConfig(env = process.env) {
     aiRouterEnabled: bool(env.AI_ROUTER_ENABLED, false),
     aiSmartRulesEnabled: bool(env.AI_SMART_RULES_ENABLED, false),
     aiAllowExternalData: bool(env.AI_EXTERNAL_DATA_ALLOWED, false),
-    aiProviderOrder: env.AI_PROVIDER_ORDER || 'gemini,groq',
+    // Groq only. Gemini is used only when AI_PROVIDER_ORDER lists it, for example groq,gemini.
+    aiProviderOrder: env.AI_PROVIDER_ORDER || 'groq',
     aiMaxDailyCalls: num(env.AI_MAX_DAILY_CALLS, 100),
     aiProviderTimeoutMs: num(env.AI_PROVIDER_TIMEOUT_MS, 12000),
     aiRedactPII: bool(env.AI_REDACT_PII, true),
