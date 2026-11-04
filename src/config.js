@@ -2,6 +2,7 @@
 // All settings come from environment variables. See .env.example for explanations.
 const path = require('node:path');
 const { DEFAULT_TIPS } = require('./messages');
+const { loadPages } = require('./pages');
 
 function bool(v, def = false) {
   if (v === undefined || v === '') return def;
@@ -30,6 +31,8 @@ function loadConfig(env = process.env) {
     appId: String(env.APP_ID || ''),
     pageId: String(env.PAGE_ID || ''),
     pageAccessToken: env.PAGE_ACCESS_TOKEN || '',
+    // Main Page plus any others (Cavite). pageId/pageAccessToken stay the main Page.
+    pages: loadPages(env),
     graphBase: (env.GRAPH_API_BASE || 'https://graph.facebook.com').replace(/\/+$/, ''),
     graphVersion: env.GRAPH_API_VERSION || 'v26.0',
     pageInboxAppId: String(env.PAGE_INBOX_APP_ID || '263902037430900'),

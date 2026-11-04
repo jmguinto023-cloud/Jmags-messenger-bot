@@ -4,6 +4,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { currentPage, storageKey } = require('./pages');
 
 const CONV_KEEP_MS = 60 * 86400e3;
 // Technician photo/video cards. Same 60-day window as the conversation export.
@@ -11,6 +12,14 @@ const REVIEW_KEEP_MS = 60 * 86400e3;
 
 function psidHash(psid) {
   return crypto.createHash('sha256').update(String(psid)).digest('hex').slice(0, 16);
+}
+
+// Main Page logs stay keyed by the bare PSID. Other Pages mix in the Page id
+// so two customers who share a PSID string do not share an export line.
+function convHash(psid) {
+  const page = currentPage();
+  if (page && !page.primary && page.id) return psidHash(`${page.id}:${psid}`);
+  return psidHash(psid);
 }
 
 class Store {
@@ -46,7 +55,9 @@ class Store {
     }
   }
   thread(psid) {
-    const t = (this.data.threads[psid] ||= {
+    const page = currentPage();
+    const key = storageKey(psid, page);
+    const t = (this.data.threads[key] ||= {
       history: [], lastUserTs: 0, handedOff: false, handoffAt: 0, handoffReason: '',
       pausedUntil: 0, fallbackCount: 0, passedByBot: false,
       followupCount: 0, lastFollowupAt: 0, followupPending: false, awaitingVideo: false,
@@ -54,7 +65,24 @@ class Store {
       bookingFormSent: false, bookingDone: false, pendingMedia: [], attachmentNote: '',
       mediaNotes: [], tipsSent: false, problemViaVideo: false,
     });
+    if (!t.psid) t.psid = String(psid || '');
+    if (page && page.id && !t.pageId) t.pageId = page.id;
     return t;
+  }
+  // The thread for this PSID on the current Page, or null. Does not create one.
+  // Outside a Page context, the main-Page (bare) key wins, then a single namespaced match.
+  findThread(psid) {
+    const id = String(psid || '');
+    if (!id) return null;
+    const threads = this.data.threads || {};
+    const page = currentPage();
+    const key = storageKey(id, page);
+    if (threads[key]) return threads[key];
+    if (page && page.id) return null;
+    for (const t of Object.values(threads)) {
+      if (t && String(t.psid || '') === id) return t;
+    }
+    return null;
   }
   addTurn(psid, role, content, ts = Date.now(), opts = {}) {
     const t = this.thread(psid);
@@ -68,7 +96,7 @@ class Store {
     if (role === 'user') t.lastUserTs = Math.max(t.lastUserTs || 0, ts);
     this.appendConv({
       timestamp: new Date(ts).toISOString(),
-      psidHash: psidHash(psid),
+      psidHash: convHash(psid),
       psidLast4: String(psid).slice(-4),
       role,
       text: String(content ?? ''),
@@ -138,11 +166,14 @@ class Store {
     this.save();
     return true;
   }
-  markIvanReplied(psid, now = Date.now()) {
+  markIvanReplied(psid, now = Date.now(), pageId = '') {
     const when = new Date(now).toISOString();
     let n = 0;
     for (const row of this.data.reviews || []) {
-      if (row.psid === psid) { row.ivanRepliedAt = when; n += 1; }
+      if (row.psid !== psid) continue;
+      if (pageId && row.pageId && row.pageId !== pageId) continue;
+      row.ivanRepliedAt = when;
+      n += 1;
     }
     if (n) this.save();
     return n;
@@ -209,11 +240,22 @@ class Store {
   // Remove every stored record for one PSID. Returns counts of what was deleted.
   forget(psid) {
     const key = String(psid || '').trim();
-    const hash = key ? psidHash(key) : '';
-    const thread = key ? this.data.threads[key] : null;
-    const followups = thread && (thread.followupCount || thread.followupPending || thread.lastFollowupAt || thread.videoReplyAt || thread.videoFollowupCount) ? 1 : 0;
-    const threads = thread ? 1 : 0;
-    if (thread) delete this.data.threads[key];
+    const hashes = new Set(key ? [psidHash(key)] : []);
+    const dropKeys = [];
+    for (const [k, t] of Object.entries(this.data.threads || {})) {
+      const raw = t && t.psid ? String(t.psid) : k;
+      if (k === key || raw === key) {
+        dropKeys.push(k);
+        if (t && t.pageId) hashes.add(psidHash(`${t.pageId}:${key}`));
+      }
+    }
+    let followups = 0;
+    for (const k of dropKeys) {
+      const t = this.data.threads[k];
+      if (t && (t.followupCount || t.followupPending || t.lastFollowupAt || t.videoReplyAt || t.videoFollowupCount)) followups += 1;
+      delete this.data.threads[k];
+    }
+    const threads = dropKeys.length;
     if (this.data.ops && Array.isArray(this.data.ops.jobs)) {
       for (const job of this.data.ops.jobs) {
         if (job && job.psid === key) job.psid = '';
@@ -221,13 +263,14 @@ class Store {
     }
     this.data.reviews ||= [];
     const beforeReviews = this.data.reviews.length;
-    this.data.reviews = this.data.reviews.filter((r) => r.psid !== key && r.psidHash !== hash);
+    this.data.reviews = this.data.reviews.filter((r) => r.psid !== key && !hashes.has(r.psidHash));
     const reviews = beforeReviews - this.data.reviews.length;
-    const conversations = this.dropConversationLines(hash);
+    let conversations = 0;
+    for (const hash of hashes) conversations += this.dropConversationLines(hash);
     let pushSubscriptions = 0;
     try {
       const subs = this.readSubscriptions();
-      const kept = subs.filter((s) => !s || (s.psid !== key && s.psidHash !== hash));
+      const kept = subs.filter((s) => !s || (s.psid !== key && !hashes.has(s.psidHash)));
       pushSubscriptions = subs.length - kept.length;
       if (pushSubscriptions) this.writeSubscriptions(kept);
     } catch { pushSubscriptions = 0; }

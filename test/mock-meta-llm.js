@@ -4,7 +4,7 @@
 const http = require('node:http');
 
 function startMock({ llmResponder } = {}) {
-  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [], conversations: [], lookups: [] };
+  const calls = { messages: [], typing: [], pass: [], take: [], labels: [], labelCreates: [], llm: [], alerts: [], conversations: [], lookups: [], pages: [] };
   const state = { llmResponder: llmResponder || (() => 'Noted po maam/sir 😊 Taga saan po sila?'), llmFail: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -35,6 +35,16 @@ function startMock({ llmResponder } = {}) {
         return json(200, { choices: [{ message: { role: 'assistant', content } }] });
       }
       if (!url.searchParams.get('access_token')) return json(400, { error: { message: 'no token' } });
+      const note = (kind) => calls.pages.push({ kind, token: url.searchParams.get('access_token') || '', path: url.pathname });
+      const pathName = url.pathname;
+      const kind = pathName.endsWith('/messages') ? 'message'
+        : pathName.endsWith('/pass_thread_control') ? 'pass'
+          : pathName.endsWith('/take_thread_control') ? 'take'
+            : pathName.endsWith('/custom_labels') ? 'labels'
+              : pathName.endsWith('/label') ? 'label'
+                : pathName.endsWith('/conversations') ? 'conversation'
+                  : 'lookup';
+      note(kind);
       if (url.pathname.endsWith('/messages') && req.method === 'GET') {
         calls.threadMessages = calls.threadMessages || [];
         const parts = url.pathname.split('/').filter(Boolean);

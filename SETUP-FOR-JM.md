@@ -81,8 +81,10 @@ Goji will send you two things: the **Callback URL** (like `https://jmags-messeng
 |---|---|---|
 | `APP_ID` | App settings → Basic | no |
 | `APP_SECRET` | App settings → Basic → Show | **YES** |
-| `PAGE_ACCESS_TOKEN` | Messenger API Settings → Generate (step 10) | **YES** |
+| `PAGE_ACCESS_TOKEN` | Messenger API Settings → Generate (step 10), for **JMAG's Appliances** | **YES** |
 | `PAGE_ID` | Already known: 102622881557025. Check that it matches the number under the Page name in step 10. | no |
+| `CAVITE_PAGE_ACCESS_TOKEN` | Same Messenger settings → Generate, for **Jmag's Appliances Cavite**. Leave empty until that Page is connected; those chats are ignored until then. | **YES** |
+| `CAVITE_PAGE_ID` | Already known: 61591823125793. Same check as `PAGE_ID`, on the Cavite Page row. | no |
 | `LLM_BASE_URL`, `LLM_MODEL` | AI provider's docs (Goji can fill these in) | no |
 | `LLM_API_KEY` | AI provider dashboard | **YES** |
 | `VERIFY_TOKEN` | Render makes it automatically. Goji tells you what it is for step 11. | low |

@@ -5,6 +5,7 @@
 const { chatCustomerName, summarizeConversation } = require('./summary');
 const { inboxLinks, genericInboxUrl } = require('./inbox-link');
 const { statusLine } = require('./schedule');
+const { currentPage } = require('./pages');
 
 const STATUSES = ['Inquiry', 'Scheduled', 'Checked', 'Under Repair', 'For Delivery', 'Completed', 'Cancelled'];
 const TECHS = ['JM', 'Joshua', 'Unassigned'];
@@ -617,8 +618,24 @@ function suggestionFor(ops, history) {
 }
 
 function jobByPsid(ops, psid) {
-  const rows = (ops.jobs || []).filter((j) => j.psid && j.psid === psid);
+  let rows = (ops.jobs || []).filter((j) => j.psid && j.psid === psid);
+  const page = currentPage();
+  if (page && page.id) {
+    const scoped = rows.filter((j) => j.pageId === page.id);
+    if (scoped.length) rows = scoped;
+    else if (page.primary) rows = rows.filter((j) => !j.pageId);
+    else rows = [];
+  }
   return pickJob(rows) || rows[0] || null;
+}
+
+function threadForPsid(threads, psid) {
+  if (!threads || !psid) return null;
+  if (threads[psid]) return threads[psid];
+  for (const t of Object.values(threads)) {
+    if (t && String(t.psid || '') === String(psid)) return t;
+  }
+  return null;
 }
 
 function matchIdentity(ops, { name, phone }) {
@@ -960,12 +977,13 @@ function hotLeadInfo(thread, now = Date.now()) {
 }
 
 function hotLeads(threads, reviews, now, cfg) {
-  const pageId = (cfg && cfg.pageId) || '';
   const rows = [];
-  for (const [psid, thread] of Object.entries(threads || {})) {
+  for (const [key, thread] of Object.entries(threads || {})) {
     const info = hotLeadInfo(thread, now);
     if (!info) continue;
-    const review = (reviews || []).find((r) => r && r.psid === psid && (r.conversationLink || r.conversationId));
+    const psid = (thread && thread.psid) || key;
+    const pageId = (thread && thread.pageId) || (cfg && cfg.pageId) || '';
+    const review = (reviews || []).find((r) => r && r.psid === psid && (!thread.pageId || !r.pageId || r.pageId === thread.pageId) && (r.conversationLink || r.conversationId));
     let href = '';
     if (review) href = inboxLinks(pageId, review).messenger || '';
     // A raw PSID in the page HTML is a customer id. Without a stored thread link, open the Page inbox.
@@ -999,7 +1017,7 @@ function needsTextUpdates(ops, threads, now, cfg, branch) {
   const rows = [];
   for (const job of filterBranch(ops.jobs, branch)) {
     if (job.status !== 'Under Repair' || !job.psid) continue;
-    const thread = (threads || {})[job.psid];
+    const thread = threadForPsid(threads, job.psid);
     if (thread && (thread.handedOff || pausedReadOnly(thread, now, cfg))) continue;
     const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
     if (last && now - last <= windowMs) continue;
@@ -1017,7 +1035,7 @@ function needsDeliveryUpdates(ops, threads, now, cfg, branch) {
   const rows = [];
   for (const job of filterBranch(ops.jobs, branch)) {
     if (job.status !== 'For Delivery' || job.deliveryNotifiedAt) continue;
-    const thread = job.psid ? (threads || {})[job.psid] : null;
+    const thread = job.psid ? threadForPsid(threads, job.psid) : null;
     if (job.psid && thread && (thread.handedOff || pausedReadOnly(thread, now, cfg))) continue;
     const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
     const outside = !job.psid || !last || now - last > windowMs;
@@ -1033,9 +1051,10 @@ function needsDeliveryUpdates(ops, threads, now, cfg, branch) {
 
 function aiHandoffs(threads, jobs) {
   const rows = [];
-  for (const [psid, thread] of Object.entries(threads || {})) {
+  for (const [key, thread] of Object.entries(threads || {})) {
     if (!thread || !thread.aiNeedsIvan) continue;
-    const job = (jobs || []).find((item) => item.psid === psid);
+    const psid = (thread && thread.psid) || key;
+    const job = (jobs || []).find((item) => item.psid === psid && (!thread.pageId || !item.pageId || item.pageId === thread.pageId));
     rows.push({
       last4: String(psid).slice(-4),
       name: job && job.customerName ? job.customerName : 'Chat',
@@ -1457,13 +1476,16 @@ function linkReviewToJob(store, reviewId, jobId) {
   for (const other of ops.jobs) {
     if (other !== job && other.psid === review.psid) other.psid = '';
   }
-  if (job.psid && job.psid !== review.psid && store.data.threads && store.data.threads[job.psid]) {
-    const prev = store.data.threads[job.psid];
-    if (prev.jobId === job.id) prev.jobId = '';
+  if (job.psid && job.psid !== review.psid) {
+    const prev = store.findThread ? store.findThread(job.psid) : (store.data.threads && store.data.threads[job.psid]);
+    if (prev && prev.jobId === job.id) prev.jobId = '';
   }
   job.psid = review.psid;
+  if (review.pageId) job.pageId = review.pageId;
   job.updatedAt = new Date().toISOString();
-  const thread = store.thread(review.psid);
+  const thread = (review.threadKey && store.data.threads && store.data.threads[review.threadKey])
+    || (store.findThread && store.findThread(review.psid))
+    || store.thread(review.psid);
   thread.jobId = job.id;
   thread.jobSuggestion = null;
   thread.opsAwait = '';
@@ -1473,7 +1495,7 @@ function linkReviewToJob(store, reviewId, jobId) {
 
 function noteSuggestion(store, psid) {
   const ops = ensureOps(store);
-  const thread = store.data.threads && store.data.threads[psid];
+  const thread = store.findThread ? store.findThread(psid) : (store.data.threads && store.data.threads[psid]);
   if (!thread) return null;
   if (jobByPsid(ops, psid)) {
     if (thread.jobSuggestion) {
@@ -1497,6 +1519,8 @@ function linkCustomer(store, psid, customer) {
     if (other !== job && other.psid === psid) other.psid = '';
   }
   job.psid = psid;
+  const page = currentPage();
+  if (page && page.id) job.pageId = page.id;
   const thread = store.thread(psid);
   thread.jobId = job.id;
   thread.jobSuggestion = null;

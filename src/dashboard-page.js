@@ -122,6 +122,17 @@ function jobPicker(row, thread, jobs) {
   </form>`;
 }
 
+function reviewThread(threads, row) {
+  if (!row) return {};
+  const all = threads || {};
+  if (row.threadKey && all[row.threadKey]) return all[row.threadKey];
+  return all[row.psid] || {};
+}
+
+function reviewPageId(row, fallback) {
+  return (row && row.pageId) || fallback || '';
+}
+
 function reviewCard(row, pageId, thread, now, windowMs, jobs) {
   const summary = row.summary || {};
   const named = String(row.customerName || '').trim();
@@ -177,7 +188,7 @@ function listPage(cfg, reviews, threads, now = Date.now(), jobs = []) {
   const windowMs = (cfg.replyWindowHours || 23.5) * 3600 * 1000;
   const jobList = [...(jobs || [])].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   const cards = rows.length
-    ? rows.map((r) => reviewCard(r, cfg.pageId, (threads || {})[r.psid], now, windowMs, jobList)).join('\n')
+    ? rows.map((r) => reviewCard(r, reviewPageId(r, cfg.pageId), reviewThread(threads, r), now, windowMs, jobList)).join('\n')
     : '<p class="empty">No photos or videos yet.</p>';
   return shell({
     title,
@@ -208,7 +219,7 @@ function threadsPayload(reviews, threads, now, windowMs) {
   return {
     ids: rows.map((r) => r.id),
     cards: rows.map((r) => {
-      const thread = (threads || {})[r.psid] || {};
+      const thread = reviewThread(threads, r);
       return {
         id: r.id,
         ivanReplied: Boolean(r.ivanRepliedAt),
@@ -223,6 +234,7 @@ function publicReview(row) {
   if (!row) return row;
   const copy = { ...row };
   delete copy.psid;
+  delete copy.threadKey;
   return copy;
 }
 

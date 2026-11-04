@@ -34,7 +34,9 @@ if (require.main === module) {
   const unpaused = app.bot.clearAutomatedPauses();
   if (unpaused.length) log.info(`resumed ${unpaused.length} chat(s) paused by automated Page echoes`);
   app.bot.startFollowups();
-  app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'}`));
+  const livePages = (cfg.pages || []).filter((p) => p.token).map((p) => p.key).join('+') || 'none';
+  const heldPages = (cfg.pages || []).filter((p) => p.id && !p.token).map((p) => p.key);
+  app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'} | pages=${livePages}${heldPages.length ? ` | no-token=${heldPages.join('+')}` : ''}`));
   if (process.env.AI_SMOKE_TEST_ON_STARTUP === 'true') {
     // Synthetic-only connectivity check. Its own guard refuses to run if
     // customer replies or external customer routing are enabled.

@@ -1,6 +1,7 @@
 'use strict';
 // Minimal client for Meta's official Graph API (Messenger Send API + Conversation Routing).
 const crypto = require('node:crypto');
+const { currentPage } = require('./pages');
 
 function participantRows(row) {
   const people = (row && row.participants && row.participants.data) || [];
@@ -25,12 +26,23 @@ class Graph {
     this.conversationCache = new Map(); // psid -> { at, value }
     this.messageCache = new Map(); // psid -> { at, value }
   }
+  accessToken() {
+    const page = currentPage();
+    if (page && page.token) return page.token;
+    return this.cfg.pageAccessToken || '';
+  }
+  pageNode() {
+    const page = currentPage();
+    if (page && page.id) return page.id;
+    return this.cfg.pageId || 'me';
+  }
   url(pathPart, params = {}) {
+    const token = this.accessToken();
     const u = new URL(`${this.cfg.graphBase}/${this.cfg.graphVersion}/${pathPart}`);
-    u.searchParams.set('access_token', this.cfg.pageAccessToken);
-    if (this.cfg.appSecret && this.cfg.pageAccessToken) {
+    u.searchParams.set('access_token', token);
+    if (this.cfg.appSecret && token) {
       // appsecret_proof proves the call comes from our server (works with "Require App Secret").
-      u.searchParams.set('appsecret_proof', crypto.createHmac('sha256', this.cfg.appSecret).update(this.cfg.pageAccessToken).digest('hex'));
+      u.searchParams.set('appsecret_proof', crypto.createHmac('sha256', this.cfg.appSecret).update(token).digest('hex'));
     }
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, typeof v === 'string' ? v : JSON.stringify(v));
     return u;
@@ -51,8 +63,6 @@ class Graph {
     }
     return json;
   }
-  pageNode() { return this.cfg.pageId || 'me'; }
-
   typingOn(psid) {
     return this.call('POST', `${this.pageNode()}/messages`, { body: { recipient: { id: psid }, sender_action: 'typing_on' } });
   }
@@ -95,11 +105,12 @@ class Graph {
   // participants is requested so a missing profile name can still be shown. If that
   // field is rejected, the lookup is repeated without it.
   async findConversation(psid) {
-    const key = String(psid || '');
-    if (!key) return null;
+    const id = String(psid || '');
+    if (!id) return null;
+    const key = `${this.pageNode()}:${id}`;
     const hit = this.conversationCache.get(key);
     if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
-    const base = { platform: 'messenger', user_id: key };
+    const base = { platform: 'messenger', user_id: id };
     let json = null;
     try {
       json = await this.call('GET', `${this.pageNode()}/conversations`, {
@@ -122,7 +133,7 @@ class Graph {
         id: String(row.id),
         link: String(row.link || ''),
         updatedTime: String(row.updated_time || ''),
-        name: participantName(row, this.cfg.pageId),
+        name: participantName(row, this.pageNode()),
         participants: participantRows(row),
       };
     }
@@ -132,16 +143,19 @@ class Graph {
   // Business Manager id for this Page, if the token can read it. Cached 10 minutes.
   // The desktop inbox redirect calls this id bpn_id. Null when the field is missing.
   async pageBusiness() {
-    if (this.businessCache && Date.now() - this.businessCache.at < 10 * 60 * 1000) return this.businessCache.value;
+    const node = this.pageNode();
+    this.businesses ||= new Map();
+    const hit = this.businesses.get(node);
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
     let value = null;
     try {
-      const json = await this.call('GET', this.pageNode(), { params: { fields: 'business' } });
+      const json = await this.call('GET', node, { params: { fields: 'business' } });
       const b = json && json.business;
       if (b && b.id) value = { id: String(b.id), name: String(b.name || '') };
     } catch (e) {
       this.log.warn('page business lookup failed', e.message);
     }
-    this.businessCache = { at: Date.now(), value };
+    this.businesses.set(node, { at: Date.now(), value });
     return value;
   }
   // Best-effort public name. Missing permission (often HTTP 400 until Advanced Access)
@@ -158,18 +172,19 @@ class Graph {
   // Page Inbox history, including messages Ivan sent. Last 30, within 7 days.
   // Cached for a minute. A miss or a Graph error returns [] and does not throw.
   async recentMessages(psid, { limit = 30, withinMs = 7 * 86400e3 } = {}) {
-    const key = String(psid || '');
-    if (!key) return [];
+    const id = String(psid || '');
+    if (!id) return [];
+    const key = `${this.pageNode()}:${id}`;
     const hit = this.messageCache.get(key);
     if (hit && Date.now() - hit.at < 60 * 1000) return hit.value;
-    const convo = await this.findConversation(key);
+    const convo = await this.findConversation(id);
     let value = [];
     if (convo && convo.id) {
       try {
         const json = await this.call('GET', `${encodeURIComponent(convo.id)}/messages`, {
           params: { fields: 'message,from,created_time', limit: String(limit) },
         });
-        const pageId = String(this.cfg.pageId || '');
+        const pageId = String(this.pageNode() || '');
         const cutoff = Date.now() - withinMs;
         for (const row of (json && json.data) || []) {
           const raw = row && row.message;
@@ -198,13 +213,14 @@ class Graph {
     const name = String(labelName || '').trim();
     const user = String(psid || '').trim();
     if (!name || !user) return null;
-    if (this.labelFailed.has(user)) return null;
+    const failKey = `${this.pageNode()}:${user}`;
+    if (this.labelFailed.has(failKey)) return null;
     try {
       return await this._addLabel(user, name);
     } catch (e) {
       const status = Number(e.status) || 0;
       if (status === 400) {
-        this.labelFailed.add(user);
+        this.labelFailed.add(failKey);
         if (!this.labelErrorLogged) {
           this.labelErrorLogged = true;
           const body = e.body ? JSON.stringify(e.body).slice(0, 500) : '';
@@ -217,7 +233,8 @@ class Graph {
   }
 
   async _addLabel(user, name) {
-    let labelId = this.labelIds.get(name);
+    const cacheName = `${this.pageNode()}::${name}`;
+    let labelId = this.labelIds.get(cacheName);
     if (!labelId) {
       const page = this.pageNode();
       if (/^\d+$/.test(name) && name !== user) labelId = name;
@@ -230,7 +247,7 @@ class Graph {
           labelId = created && created.id ? String(created.id) : '';
         }
       }
-      if (labelId && labelId !== user) this.labelIds.set(name, labelId);
+      if (labelId && labelId !== user) this.labelIds.set(cacheName, labelId);
     }
     if (!labelId || labelId === user) {
       throw new Error(`refusing to POST /${user}/label; no custom label id`);

@@ -87,9 +87,13 @@ function extract(b, text, { asked = '', now, cfg } = {}) {
     else if (!normPhone(t) || t.replace(/(?:\+?63|0)9\d{9}/, '').trim().length > 10) set('address', t.replace(/(?:\+?63|0)9[\d\s-]{9,12}/, '').trim());
   }
   if (loc.province && (asked === 'address' || asked === 'city' || asked === 'barangay' || !f.province)) {
-    set('province', loc.province); set('branch', loc.branch);
+    set('province', loc.province);
+    // Cavite Page sets defaultBranch and keeps that branch. The main Page leaves it
+    // empty and uses location (src/branch.js): Laguna and nearby Batangas -> San Pablo.
+    if (!(cfg && cfg.defaultBranch)) set('branch', loc.branch);
     if (loc.city) set('city', loc.city);
   }
+  if (cfg && cfg.defaultBranch) set('branch', cfg.defaultBranch);
   set('appliance', f.appliance ? '' : applianceOf(t));
   const size = knownSize(t);
   if (size && !f.size) set('size', `${size}"`);
@@ -228,7 +232,9 @@ async function bookingTurn(thread, text, { cfg = {}, now = Date.now(), fetchImpl
   if (b && b.submittedAt) return null;
   if (!b || !b.active) {
     if (!bookingIntent(msg)) return null;
-    b = thread.booking = { active: true, fields: {}, asked: '', confirmPending: false, startedAt: now };
+    const fields = {};
+    if (cfg.defaultBranch) fields.branch = cfg.defaultBranch;
+    b = thread.booking = { active: true, fields, asked: '', confirmPending: false, startedAt: now };
     // Prefill from what the customer already said in this chat.
     for (const h of (thread.history || [])) if (h && h.role === 'user') extract(b, h.content, { now, cfg });
   }

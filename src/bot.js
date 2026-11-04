@@ -18,6 +18,7 @@ const {
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
+const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
@@ -152,6 +153,51 @@ class Bot {
     return t.pausedUntil - this.pauseMs();
   }
 
+  // In-memory maps use the same key as the store, so two Pages cannot share a debounce.
+  slot(psid) {
+    return storageKey(psid, currentPage());
+  }
+
+  pageForThread(thread, key) {
+    const pages = this.cfg.pages || [];
+    const primary = pages.find((p) => p.primary) || null;
+    if (thread && thread.pageId) {
+      const hit = pages.find((p) => p.id === thread.pageId);
+      if (hit) return hit;
+    }
+    if (key && String(key).includes(':')) {
+      const id = String(key).slice(0, String(key).indexOf(':'));
+      const hit = pages.find((p) => p.id === id);
+      if (hit) return hit;
+    }
+    return primary;
+  }
+
+  pageForReview(row) {
+    const pages = this.cfg.pages || [];
+    if (row && row.pageId) {
+      const hit = pages.find((p) => p.id === row.pageId);
+      if (hit) return hit;
+    }
+    if (row && row.threadKey) return this.pageForThread(null, row.threadKey);
+    return pages.find((p) => p.primary) || null;
+  }
+
+  locateThread(psid) {
+    const id = String(psid || '');
+    const threads = this.store.data.threads || {};
+    const here = currentPage();
+    if (here) {
+      const key = storageKey(id, here);
+      if (threads[key]) return { key, thread: threads[key], page: here };
+    }
+    if (threads[id]) return { key: id, thread: threads[id], page: this.pageForThread(threads[id], id) };
+    for (const [key, thread] of Object.entries(threads)) {
+      if (thread && String(thread.psid || '') === id) return { key, thread, page: this.pageForThread(thread, key) };
+    }
+    return { key: id, thread: null, page: (this.cfg.pages || []).find((p) => p.primary) || null };
+  }
+
   clearStaffResume(psid) {
     if (!this.staffResume) return;
     if (!psid) {
@@ -159,17 +205,30 @@ class Bot {
       this.staffResume.clear();
       return;
     }
-    const timer = this.staffResume.get(psid);
+    const slot = this.slot(psid);
+    const timer = this.staffResume.get(slot);
     if (timer) clearTimeout(timer);
-    this.staffResume.delete(psid);
+    this.staffResume.delete(slot);
   }
 
   // Entry point for a verified webhook body. Never throws.
   handleWebhook(body) {
     if (!body || body.object !== 'page') return;
     for (const entry of body.entry || []) {
-      for (const ev of entry.messaging || []) this.safe(() => this.onEvent(ev, false));
-      for (const ev of entry.standby || []) this.safe(() => this.onEvent(ev, true));
+      const page = routeEntry(this.cfg, entry && entry.id);
+      const entryId = entry && entry.id ? String(entry.id) : '';
+      if (!page) {
+        this.log.info(`ignored webhook entry ${entryId || '?'}: unknown page`);
+        continue;
+      }
+      if (!page.token) {
+        this.log.info(`ignored webhook entry ${page.id}: no page access token`);
+        continue;
+      }
+      withPage(page, () => {
+        for (const ev of entry.messaging || []) this.safe(() => this.onEvent(ev, false));
+        for (const ev of entry.standby || []) this.safe(() => this.onEvent(ev, true));
+      });
     }
   }
   safe(fn) {
@@ -201,7 +260,9 @@ class Bot {
     if (ev.message && ev.message.is_echo) return this.onEcho(ev);
 
     const psid = ev.sender && ev.sender.id;
-    if (!psid || psid === this.cfg.pageId) return;
+    const pageIds = new Set((this.cfg.pages || []).map((p) => p.id).filter(Boolean));
+    if (this.cfg.pageId) pageIds.add(String(this.cfg.pageId));
+    if (!psid || pageIds.has(String(psid))) return;
 
     let text = '';
     let forceReason = '';
@@ -327,8 +388,9 @@ class Bot {
   }
 
   bump(psid) {
-    const n = (this.rev.get(psid) || 0) + 1;
-    this.rev.set(psid, n);
+    const slot = this.slot(psid);
+    const n = (this.rev.get(slot) || 0) + 1;
+    this.rev.set(slot, n);
     return n;
   }
 
@@ -362,26 +424,30 @@ class Bot {
 
   // Short batching so 3 quick messages get 1 reply instead of 3.
   queueText(psid, ts) {
-    const p = this.pending.get(psid) || { timer: null, latestTs: 0 };
+    const page = currentPage();
+    const slot = this.slot(psid);
+    const p = this.pending.get(slot) || { timer: null, latestTs: 0 };
     p.latestTs = Math.max(p.latestTs, ts);
     if (p.timer) clearTimeout(p.timer);
     p.timer = setTimeout(() => {
       p.timer = null;
-      this.pending.delete(psid);
-      this.enqueue(psid, () => this.replyWithAI(psid, p.latestTs));
+      this.pending.delete(slot);
+      withPage(page, () => this.enqueue(psid, () => this.replyWithAI(psid, p.latestTs)));
     }, this.cfg.batchWindowMs);
-    this.pending.set(psid, p);
+    this.pending.set(slot, p);
   }
   cancelPending(psid) {
-    const p = this.pending.get(psid);
+    const slot = this.slot(psid);
+    const p = this.pending.get(slot);
     if (p && p.timer) clearTimeout(p.timer);
-    this.pending.delete(psid);
+    this.pending.delete(slot);
   }
   enqueue(psid, fn) {
-    const prev = this.chains.get(psid) || Promise.resolve();
+    const slot = this.slot(psid);
+    const prev = this.chains.get(slot) || Promise.resolve();
     const next = prev.then(fn).catch((e) => this.log.error(`reply error for ${short(psid)}:`, e.message));
-    this.chains.set(psid, next);
-    next.finally(() => { if (this.chains.get(psid) === next) this.chains.delete(psid); });
+    this.chains.set(slot, next);
+    next.finally(() => { if (this.chains.get(slot) === next) this.chains.delete(slot); });
     return next;
   }
 
@@ -426,10 +492,13 @@ class Bot {
     for (const m of items) {
       const type = m.type === 'image' ? 'photo' : m.type;
       const reviewId = crypto.randomBytes(8).toString('hex');
+      const page = currentPage();
       this.store.addReview({
         id: reviewId,
         timestamp: when,
         psid,
+        pageId: (page && page.id) || this.cfg.pageId || '',
+        threadKey: storageKey(psid, page),
         psidHash: psidHash(psid),
         psidLast4: String(psid).slice(-4),
         customerName,
@@ -489,16 +558,18 @@ class Bot {
   }
 
   scheduleStaffResume(psid) {
+    const page = currentPage();
+    const slot = this.slot(psid);
     const t = this.store.thread(psid);
     const due = this.lastHumanAt(t) + this.staffGraceMs();
     const wait = Math.max(0, due - this.now());
     this.clearStaffResume(psid);
     const timer = setTimeout(() => {
-      this.staffResume.delete(psid);
-      this.enqueue(psid, () => this.resumeAfterGrace(psid));
+      this.staffResume.delete(slot);
+      withPage(page, () => this.enqueue(psid, () => this.resumeAfterGrace(psid)));
     }, wait);
     timer.unref?.();
-    this.staffResume.set(psid, timer);
+    this.staffResume.set(slot, timer);
   }
 
   async resumeAfterGrace(psid) {
@@ -512,7 +583,7 @@ class Bot {
     if (block) return;
     t.hotCatchAt = now;
     this.store.save();
-    if (this.repliedRev.get(psid) === (this.rev.get(psid) || 0)) this.bump(psid);
+    if (this.repliedRev.get(this.slot(psid)) === (this.rev.get(this.slot(psid)) || 0)) this.bump(psid);
     return this.replyWithAI(psid, t.lastUserTs || now);
   }
 
@@ -586,8 +657,8 @@ class Bot {
   async replyWithAI(psid, ts) {
     await this.loadInboxHistory(psid);
     for (let attempt = 0; attempt < 4; attempt++) {
-      const rev = this.rev.get(psid) || 0;
-      if (this.repliedRev.get(psid) === rev) return; // a newer pass already covered these messages
+      const rev = this.rev.get(this.slot(psid)) || 0;
+      if (this.repliedRev.get(this.slot(psid)) === rev) return; // a newer pass already covered these messages
       const t = this.store.thread(psid);
       const block = this.blockReason(psid, t, ts); // re-check: Ivan may have jumped in meanwhile
       if (block) {
@@ -602,7 +673,7 @@ class Bot {
       const attachmentNote = t.attachmentNote || '';
       t.attachmentNote = '';
       await this.flagPendingMedia(psid);
-      if ((this.rev.get(psid) || 0) !== rev) {
+      if ((this.rev.get(this.slot(psid)) || 0) !== rev) {
         this.cancelPending(psid);
         this.log.info(`newer message from ${short(psid)} before reply, combining`);
         continue;
@@ -611,39 +682,41 @@ class Bot {
       const latestUser = latestUserText(t);
       const scopeLine = nonFlatscreenLine(latestUser);
       if (scopeLine) {
-        this.repliedRev.set(psid, rev);
+        this.repliedRev.set(this.slot(psid), rev);
         await this.handoff(psid, 'CRT or non-flatscreen', scopeLine);
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
       if (this.cfg.bookingAgentEnabled && !hadMedia) {
+        const page = currentPage();
+        const bookingCfg = page && page.defaultBranch ? { ...this.cfg, defaultBranch: page.defaultBranch } : this.cfg;
         const booked = await bookingTurn(t, latestUser, {
-          cfg: this.cfg, now: this.now(), log: this.log, psidTag: short(psid), fetchImpl: this.fetchImpl,
+          cfg: bookingCfg, now: this.now(), log: this.log, psidTag: short(psid), fetchImpl: this.fetchImpl,
         });
         if (booked) {
-          this.repliedRev.set(psid, rev);
+          this.repliedRev.set(this.slot(psid), rev);
           this.store.save();
           await this.send(psid, booked.text, { provider: 'booking', ops: true });
-          if ((this.rev.get(psid) || 0) !== rev) continue;
+          if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
           return;
         }
       }
       const scripted = scriptedReply(latestUser, t, { allowPrice: !hadMedia && !reviewPending(t) });
       if (scripted) {
         const parsed = parseHandoff(scripted);
-        this.repliedRev.set(psid, rev);
+        this.repliedRev.set(this.slot(psid), rev);
         const body = this.presentReply(parsed.text) || lines.holding;
         if (parsed.handoff) await this.handoff(psid, parsed.reason || 'rules', body, { provider: 'rules' });
         else await this.send(psid, body, { provider: 'rules' });
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
       if (asksCheckupFee(latestUser)) {
-        this.repliedRev.set(psid, rev);
+        this.repliedRev.set(this.slot(psid), rev);
         const checkupAnswer = checkupFeeReply(latestUser, t);
         if (hadMedia) await this.sendMediaAck(psid, checkupAnswer, true, { armVideo: hadVideo });
         else await this.send(psid, checkupAnswer);
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
 
@@ -652,27 +725,27 @@ class Bot {
         t.lastAskedTopic = '';
         t.awaitingVideo = false;
         if (hadMedia) t.lastMediaAckAt = this.now();
-        this.repliedRev.set(psid, rev);
+        this.repliedRev.set(this.slot(psid), rev);
         await this.send(psid, CLOSE_LINE, { armVideo: hadVideo });
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
 
       if (await this.handleOpsTurn(psid, latestUser, { rev, hadVideo })) {
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
 
       if (reviewPending(t) && asksReviewStatus(latestUser)) {
-        this.repliedRev.set(psid, rev);
+        this.repliedRev.set(this.slot(psid), rev);
         await this.send(psid, PENDING_REVIEW_STATUS, { armVideo: hadVideo });
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
       if (reviewPending(t) && isUnclearDuringReview(latestUser)) {
-        this.repliedRev.set(psid, rev);
+        this.repliedRev.set(this.slot(psid), rev);
         await this.send(psid, REVIEW_CLARIFY, { armVideo: hadVideo });
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
 
@@ -680,10 +753,10 @@ class Bot {
       if (this.cfg.aiSmartRulesEnabled && !hadMedia && !reviewPending(t)) {
         const canned = quickReply(latestUser, this.cfg, t);
         if (canned) {
-          this.repliedRev.set(psid, rev);
+          this.repliedRev.set(this.slot(psid), rev);
           if (this.blockReason(psid, t, ts)) return;
           await this.send(psid, canned);
-          if ((this.rev.get(psid) || 0) !== rev) continue;
+          if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
           return;
         }
       }
@@ -702,10 +775,10 @@ class Bot {
         });
         raw = await this.fitModelReply(psid, raw);
       } catch (e) {
-        if ((this.rev.get(psid) || 0) !== rev) continue;
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return this.giveUpOnAi(psid, e, { rev, hadMedia, hadVideo });
       }
-      if ((this.rev.get(psid) || 0) !== rev) {
+      if ((this.rev.get(this.slot(psid)) || 0) !== rev) {
         this.cancelPending(psid);
         this.log.info(`discarding in-flight reply for ${short(psid)}; a newer message arrived`);
         continue;
@@ -720,7 +793,7 @@ class Bot {
         applyCustomerGuard(t, applyReplyGuard(t, text), latestUserText(t)),
         latestUserText(t),
       );
-      this.repliedRev.set(psid, rev);
+      this.repliedRev.set(this.slot(psid), rev);
       // A photo or video never passes the thread. A keyword in the caption already handed off above.
       if (hadMedia && !t.intakeCloseSent) {
         await this.sendMediaAck(psid, this.presentReply(guarded), true, { armVideo: hadVideo });
@@ -737,7 +810,7 @@ class Bot {
         else if (handoff && guarded === text) await this.handoff(psid, reason || 'model', this.presentReply(text) || lines.holding);
         else await this.send(psid, this.presentReply(guarded));
       }
-      if ((this.rev.get(psid) || 0) !== rev) continue;
+      if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
       return;
     }
   }
@@ -770,7 +843,7 @@ class Bot {
     this.log.error(`LLM outage for ${short(psid)}: ${reason}. ${e && e.message ? e.message : ''} No canned greeting.`);
     t.aiNeedsIvan = true;
     t.handoffReason = reason;
-    this.repliedRev.set(psid, rev);
+    this.repliedRev.set(this.slot(psid), rev);
     this.store.save();
     if (hadMedia) {
       await this.sendMediaAck(psid, lines.mediaAck, true, { armVideo: hadVideo });
@@ -847,17 +920,22 @@ class Bot {
   // Ivan typed this on the video dashboard. One RESPONSE send, then the same
   // pause a human inbox reply would set. The echo of our own app is ignored.
   async replyFromDashboard(reviewId, text) {
+    const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
+    const page = row ? this.pageForReview(row) : null;
+    if (page && currentPage() !== page) return withPage(page, () => this.replyFromDashboard(reviewId, text));
+    if (row && row.pageId && page && !page.token) {
+      return { ok: false, status: 409, error: 'Walang token para sa Page na ito.' };
+    }
     const clean = sanitizeOutgoing(text);
     if (!clean) return { ok: false, status: 400, error: 'Walang laman.' };
     if (clean.length > 2000) return { ok: false, status: 400, error: 'Masyadong mahaba. Max 2000 characters.' };
-    const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
     if (!row || !row.psid) return { ok: false, status: 404, error: 'Hindi makita ang chat.' };
     const psid = row.psid;
-    const recent = this.dashRecent.get(psid);
+    const recent = this.dashRecent.get(this.slot(psid));
     if (recent && recent.text === clean && this.now() - recent.at < 3000) {
       return { ok: true, status: 200, duplicate: true };
     }
-    const inflight = this.dashInflight.get(psid);
+    const inflight = this.dashInflight.get(this.slot(psid));
     if (inflight && inflight.text === clean) return inflight.promise;
     if (inflight) return { ok: false, status: 409, error: 'Sandali lang, may pinapadala pa.' };
     const t = this.store.thread(psid);
@@ -867,12 +945,12 @@ class Bot {
       return { ok: false, status: 409, error: 'Lampas na sa 24 oras, i-reply sa Business Suite' };
     }
     const promise = this.deliverDashboardReply(psid, clean);
-    this.dashInflight.set(psid, { text: clean, promise });
+    this.dashInflight.set(this.slot(psid), { text: clean, promise });
     try {
       return await promise;
     } finally {
-      const cur = this.dashInflight.get(psid);
-      if (cur && cur.promise === promise) this.dashInflight.delete(psid);
+      const cur = this.dashInflight.get(this.slot(psid));
+      if (cur && cur.promise === promise) this.dashInflight.delete(this.slot(psid));
     }
   }
 
@@ -889,8 +967,9 @@ class Bot {
     this.stopVideoFollowup(psid, 'Ivan replied from the dashboard');
     this.cancelPending(psid);
     this.store.addTurn(psid, 'assistant', clean, now, { via: 'ivan' });
-    this.store.markIvanReplied(psid, now);
-    this.dashRecent.set(psid, { text: clean, at: now });
+    const page = currentPage();
+    this.store.markIvanReplied(psid, now, page && page.id);
+    this.dashRecent.set(this.slot(psid), { text: clean, at: now });
     this.store.save();
     this.log.info(`dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseMinutes}m`);
     return { ok: true, status: 200 };
@@ -1013,10 +1092,14 @@ class Bot {
     const now = this.now();
     return Object.entries(this.store.data.threads || {})
       .filter(([, t]) => t.handedOff || (t.pausedUntil && now < t.pausedUntil))
-      .map(([psid, t]) => ({
-        psid, last4: String(psid).slice(-4), handedOff: Boolean(t.handedOff), handoffReason: t.handoffReason || '',
-        pausedUntil: t.pausedUntil ? new Date(t.pausedUntil).toISOString() : '', pauseSource: t.pauseSource || '',
-      }));
+      .map(([key, t]) => {
+        const psid = (t && t.psid) || key;
+        return {
+          psid, pageId: (t && t.pageId) || this.cfg.pageId || '', last4: String(psid).slice(-4),
+          handedOff: Boolean(t.handedOff), handoffReason: t.handoffReason || '',
+          pausedUntil: t.pausedUntil ? new Date(t.pausedUntil).toISOString() : '', pauseSource: t.pauseSource || '',
+        };
+      });
   }
 
   onThreadControl(ev) {
@@ -1164,12 +1247,12 @@ class Bot {
     const job = jobByPsid(ops, psid);
     const tz = this.cfg.timezone || 'Asia/Manila';
     if (job && inWarranty(job, this.now(), tz) && asksWarrantyProblem(latestUser)) {
-      this.repliedRev.set(psid, rev);
+      this.repliedRev.set(this.slot(psid), rev);
       await this.handoff(psid, 'warranty problem', warrantyText(job), { ops: true });
       return true;
     }
     if (job && asksJobStatus(latestUser)) {
-      this.repliedRev.set(psid, rev);
+      this.repliedRev.set(this.slot(psid), rev);
       await this.send(psid, jobStatusText(job), { ops: true, armVideo: hadVideo });
       return true;
     }
@@ -1191,7 +1274,7 @@ class Bot {
     const ops = ensureOps(this.store);
     if (name && phone) {
       const found = matchIdentity(ops, { name, phone });
-      this.repliedRev.set(psid, rev);
+      this.repliedRev.set(this.slot(psid), rev);
       thread.opsAwait = '';
       if (found.status === 'one') {
         const job = linkCustomer(this.store, psid, found.customer);
@@ -1203,7 +1286,7 @@ class Bot {
       await this.handoff(psid, 'job status not matched', UNSURE, { ops: true });
       return true;
     }
-    this.repliedRev.set(psid, rev);
+    this.repliedRev.set(this.slot(psid), rev);
     if (phone && !name) {
       thread.opsAwait = 'name';
       await this.send(psid, ASK_NAME, { ops: true, armVideo: hadVideo });
@@ -1231,8 +1314,10 @@ class Bot {
     for (const job of ops.jobs) {
       if (job.status !== 'Under Repair' || !job.psid) continue;
       if (job.lastDailyStatusDate === stamp.date) continue;
-      const thread = this.store.data.threads[job.psid];
+      const located = this.locateThread(job.psid);
+      const thread = located.thread;
       if (thread && (thread.handedOff || this.humanPaused(thread, now))) continue;
+      if (!located.page || !located.page.token) continue;
       if (!this.cfg.botEnabled || !this.scheduleOpen(now)) continue;
       if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) continue;
       const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
@@ -1251,7 +1336,7 @@ class Bot {
       job.dailyStatusSkip = '';
       changed = true;
       try {
-        await this.send(job.psid, dailyStatusText(job), { ops: true });
+        await withPage(located.page, () => this.send(job.psid, dailyStatusText(job), { ops: true }));
         sent.push(job.id);
         this.log.info(`daily status sent to ${short(job.psid)}`);
       } catch (e) {
@@ -1271,8 +1356,10 @@ class Bot {
     if (job.deliveryNotifiedAt) return { sent: false, reason: 'already' };
     if (!job.psid) return { sent: false, reason: 'unlinked' };
     const now = this.now();
-    const thread = (this.store.data.threads || {})[job.psid];
+    const located = this.locateThread(job.psid);
+    const thread = located.thread;
     if (thread && (thread.handedOff || this.humanPaused(thread, now))) return { sent: false, reason: 'paused' };
+    if (!located.page || !located.page.token) return { sent: false, reason: 'page' };
     if (!this.cfg.botEnabled) return { sent: false, reason: 'disabled' };
     if (!this.scheduleOpen(now)) return { sent: false, reason: 'schedule' };
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) return { sent: false, reason: 'allowlist' };
@@ -1284,7 +1371,7 @@ class Bot {
     job.deliveryNotifiedAt = new Date(now).toISOString();
     this.store.save();
     try {
-      await this.send(job.psid, DELIVERY_NOTICE, { ops: true });
+      await withPage(located.page, () => this.send(job.psid, DELIVERY_NOTICE, { ops: true }));
       this.log.info(`delivery notice sent to ${short(job.psid)}`);
       return { sent: true, reason: 'sent' };
     } catch (e) {
@@ -1362,15 +1449,21 @@ class Bot {
       // so the same chat does not get two bubbles in one pass.
       await this.maybeDailyStatus(now);
       let slots = 1;
-      for (const [psid, t] of Object.entries(this.store.data.threads)) {
+      for (const [key, t] of Object.entries(this.store.data.threads)) {
+        const page = this.pageForThread(t, key);
+        if (!page || !page.token) continue;
+        const psid = (t && t.psid) || (page && !page.primary && String(key).startsWith(`${page.id}:`)
+          ? String(key).slice(page.id.length + 1)
+          : key);
         try {
           if (slots <= 0) break;
-          const sentVideo = await this.maybeVideoFollowUp(psid, t, now);
-          if (sentVideo) { slots -= 1; continue; }
-          if (max > 0) {
-            const outcome = await this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
-            if (outcome === 'sent' || outcome === 'failed') slots -= 1;
-          }
+          const outcome = await withPage(page, async () => {
+            const sentVideo = await this.maybeVideoFollowUp(psid, this.store.thread(psid), now);
+            if (sentVideo) return 'video';
+            if (max > 0) return this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
+            return 'skip';
+          });
+          if (outcome === 'video' || outcome === 'sent' || outcome === 'failed') slots -= 1;
         } catch (e) { this.log.error(`follow-up error for ${short(psid)}:`, e.message); }
       }
     } finally {
@@ -1482,7 +1575,8 @@ class Bot {
       const needsId = !row.conversationId;
       const needsName = !String(row.customerName || '').trim();
       if (!needsId && !needsName) continue;
-      const found = await this.graph.findConversation(row.psid);
+      const page = this.pageForReview(row);
+      const found = await withPage(page, () => this.graph.findConversation(row.psid));
       if (found) {
         if (needsId && found.id) {
           row.conversationId = found.id;
@@ -1496,7 +1590,7 @@ class Bot {
         }
       }
       if (!String(row.customerName || '').trim()) {
-        const thread = this.store.data.threads[row.psid];
+        const thread = (row.threadKey && this.store.data.threads[row.threadKey]) || this.store.data.threads[row.psid];
         const chatName = thread && summarizeConversation(thread.history).name;
         if (chatName) {
           row.customerName = chatName;
@@ -1560,17 +1654,36 @@ class Bot {
   // Admin and Meta deletion: drop queued work, then every stored record for this PSID.
   forgetCustomer(psid) {
     const key = String(psid || '');
-    this.cancelPending(key);
-    this.rev.delete(key);
-    this.repliedRev.delete(key);
-    this.chains.delete(key);
+    const slots = new Set([key]);
+    for (const page of this.cfg.pages || []) {
+      if (page && page.id && !page.primary) slots.add(`${page.id}:${key}`);
+    }
+    for (const slot of slots) {
+      const pending = this.pending.get(slot);
+      if (pending && pending.timer) clearTimeout(pending.timer);
+      this.pending.delete(slot);
+      const timer = this.staffResume && this.staffResume.get(slot);
+      if (timer) clearTimeout(timer);
+      if (this.staffResume) this.staffResume.delete(slot);
+      this.rev.delete(slot);
+      this.repliedRev.delete(slot);
+      this.chains.delete(slot);
+      this.dashInflight.delete(slot);
+      this.dashRecent.delete(slot);
+    }
     return this.store.forget(key);
   }
 
   // Admin: let the bot answer this customer again.
   resume(psid) {
-    const t = this.store.thread(psid);
-    t.handedOff = false; t.pausedUntil = 0; t.handoffReason = ''; t.passedByBot = false;
+    const id = String(psid || '');
+    const threads = this.store.data.threads || {};
+    const keys = Object.keys(threads).filter((k) => k === id || (threads[k] && String(threads[k].psid || '') === id));
+    if (!keys.length) keys.push(id);
+    for (const key of keys) {
+      const t = threads[key] || this.store.thread(id);
+      t.handedOff = false; t.pausedUntil = 0; t.handoffReason = ''; t.passedByBot = false;
+    }
     this.store.save();
   }
 }
