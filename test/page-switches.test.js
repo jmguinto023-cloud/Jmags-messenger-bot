@@ -9,7 +9,7 @@ const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { loadConfig } = require('../src/config');
 const { CAVITE_PAGE_ID, CAVITE_PROFILE_ID, withPage } = require('../src/pages');
-const { PageSwitches } = require('../src/page-switches');
+const { PageSwitches, isJwt } = require('../src/page-switches');
 
 const SECRET = 'test_app_secret';
 const MAIN = '102622881557025';
@@ -116,7 +116,56 @@ test('a failed or missing switch read is off, and a good read is cached for 15 s
   assert.equal(reads, 2);
   assert.equal(seen.url, 'https://fhjarnogglakehaztbbj.supabase.co/rest/v1/bot_switches?select=page_key,enabled');
   assert.equal(seen.opts.headers.apikey, 'svc-key');
-  assert.equal(seen.opts.headers.Authorization, 'Bearer svc-key');
+  assert.equal(seen.opts.headers.Authorization, undefined);
+
+  const secret = ['sb', 'secret', 'x'.repeat(31)].join('_');
+  assert.equal(secret.length, 41);
+  assert.equal(isJwt(secret), false);
+  const notes = [];
+  let secretHeaders;
+  const secretRead = new PageSwitches({
+    supabaseUrl: 'https://fhjarnogglakehaztbbj.supabase.co',
+    supabaseServiceRoleKey: secret,
+  }, {
+    log: { warn: (line) => notes.push(line) },
+    fetchImpl: async (url, opts) => {
+      secretHeaders = opts.headers;
+      assert.match(url, /select=page_key,enabled$/);
+      assert.doesNotMatch(url, /label|updated_by/);
+      return { ok: false, status: 401, text: async () => `{"message":"Invalid JWT","key":"${secret}"}` };
+    },
+  });
+  const failed = await secretRead.stateFor(mainPage);
+  assert.equal(failed.ok, false);
+  assert.equal(secretHeaders.apikey, secret);
+  assert.equal(secretHeaders.Authorization, undefined);
+  assert.match(notes[0], /page switch read failed: HTTP 401/);
+  assert.match(notes[0], /Invalid JWT/);
+  assert.equal(notes[0].includes(secret), false);
+  assert.match(failed.error, /HTTP 401/);
+  assert.equal(failed.error.includes(secret), false);
+
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.sig';
+  let jwtHeaders;
+  const jwtRead = new PageSwitches({
+    supabaseUrl: 'https://fhjarnogglakehaztbbj.supabase.co',
+    supabaseServiceRoleKey: jwt,
+  }, {
+    fetchImpl: async (url, opts) => {
+      jwtHeaders = opts.headers;
+      return {
+        ok: true,
+        text: async () => JSON.stringify([
+          { page_key: 'sanpablo', label: 'San Pablo', enabled: true, updated_at: '2026-11-04T00:00:00Z', updated_by: 'jm' },
+          { page_key: 'cavite', label: 'Cavite', enabled: false, updated_at: '2026-11-04T00:00:00Z', updated_by: 'jm' },
+        ]),
+      };
+    },
+  });
+  assert.equal(await jwtRead.enabled(mainPage), true);
+  assert.equal(await jwtRead.enabled(cavitePage), false);
+  assert.equal(jwtHeaders.apikey, jwt);
+  assert.equal(jwtHeaders.Authorization, `Bearer ${jwt}`);
 
   const fuzzy = new PageSwitches({
     supabaseUrl: 'https://fhjarnogglakehaztbbj.supabase.co',

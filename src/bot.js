@@ -127,7 +127,7 @@ function keywordHit(text, keywords) {
 class Bot {
   constructor({ cfg, store, graph, llm, log, push = null, now = () => Date.now(), switches = null }) {
     Object.assign(this, { cfg, store, graph, llm, log, push, now });
-    this.switches = switches || new PageSwitches(cfg, { now: () => this.now() });
+    this.switches = switches || new PageSwitches(cfg, { now: () => this.now(), log: this.log });
     this.pending = new Map(); // psid -> { texts:[], timer, latestTs }
     this.chains = new Map(); // psid -> promise (keeps one reply at a time per customer)
     this.inflight = new Set();
@@ -419,7 +419,7 @@ class Bot {
     if (!page) page = (this.cfg.pages || []).find((p) => p.primary) || null;
     try {
       const state = await this.switches.stateFor(page);
-      if (!state.ok) return 'page switch unread';
+      if (!state.ok) return state.error ? `page switch unread (${state.error})` : 'page switch unread';
       if (!state.enabled) return `page switch is off (${state.key})`;
       return '';
     } catch {
