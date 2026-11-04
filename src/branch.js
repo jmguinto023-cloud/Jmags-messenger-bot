@@ -1,11 +1,15 @@
 'use strict';
 // Which branch serves a customer, by province (and optional city override).
-// Default: Laguna -> San Pablo; Cavite -> Cavite (General Trias); Batangas -> Cavite (ASSUMPTION, confirm with Jm).
+// Default: Laguna -> San Pablo; Cavite -> Cavite (General Trias); Batangas -> Cavite, except Lipa, Sto. Tomas, Tanauan, Malvar -> San Pablo.
 // Override with BRANCH_MAP JSON, e.g. {"provinces":{"batangas":"San Pablo"},"cities":{"lipa":"San Pablo"}}.
 
 const DEFAULT_MAP = {
   provinces: { laguna: 'San Pablo', cavite: 'Cavite', batangas: 'Cavite' },
-  cities: {},
+  // Batangas towns closer to San Pablo (approved by Jm, Nov 4 2026). Rest of Batangas -> Cavite.
+  cities: {
+    lipa: 'San Pablo', 'lipa city': 'San Pablo', 'sto tomas': 'San Pablo', 'santo tomas': 'San Pablo',
+    'sto. tomas': 'San Pablo', tanauan: 'San Pablo', malvar: 'San Pablo',
+  },
   fallback: '',
 };
 

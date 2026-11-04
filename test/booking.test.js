@@ -56,8 +56,11 @@ test('branch routing by province/city, configurable', () => {
   assert.equal(detectLocation('Brgy Bagong Bayan, San Pablo City, Laguna').branch, 'San Pablo');
   assert.equal(detectLocation('Brgy Salitran 2, Dasmariñas, Cavite').branch, 'Cavite');
   assert.equal(detectLocation('brgy 1 gentri').province, 'Cavite');
-  assert.equal(detectLocation('Lipa').branch, 'Cavite');
-  assert.equal(detectLocation('Lipa', { branchMap: '{"cities":{"lipa":"San Pablo"}}' }).branch, 'San Pablo');
+  for (const town of ['Lipa', 'Brgy Marawoy, Lipa City, Batangas', 'Sto. Tomas Batangas', 'Santo Tomas', 'Tanauan', 'Malvar']) {
+    assert.equal(detectLocation(town).branch, 'San Pablo', town);
+  }
+  for (const town of ['Nasugbu', 'Batangas City', 'Lemery, Batangas', 'Batangas']) assert.equal(detectLocation(town).branch, 'Cavite', town);
+  assert.equal(detectLocation('Lipa', { branchMap: '{"cities":{"lipa":"Cavite"}}' }).branch, 'Cavite');
   assert.equal(detectLocation('Rosario, Batangas').province, 'Batangas');
   assert.equal(detectLocation('Quezon City').branch, '');
 });
