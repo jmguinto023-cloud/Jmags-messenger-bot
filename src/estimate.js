@@ -3,22 +3,12 @@
 const { questionTopic } = require('./intake');
 const { HOME_VISIT_FEE_LINE, homeTerms } = require('./home-visit-fee');
 
+// All prices come from knowledge/prices.json (built by scripts/build-prices.py from the
+// 2026 price list xlsx plus owner-confirmed TV prices). Edit that file, not this one.
+const PRICES = require('../knowledge/prices.json');
+const numKeys = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [Number(k), v]));
 // Low and high of each size row on the price table (before the internal distance add-on).
-const PRICE_RANGE = {
-  32: [2000, 4800],
-  40: [3000, 10000],
-  43: [3500, 12000],
-  48: [4500, 14000],
-  49: [4500, 15000],
-  50: [4500, 15000],
-  55: [5000, 18000],
-  60: [6000, 25000],
-  65: [8000, 27000],
-  70: [9500, 38000],
-  75: [10500, 40000],
-  80: [11500, 43000],
-  85: [11500, 46000],
-};
+const PRICE_RANGE = numKeys(PRICES.priceRange);
 
 // Owner-confirmed service rates. Never imply a waiver for shop checkups.
 const SHOP_CHECKUP_PHP = 300;
@@ -136,9 +126,10 @@ function applyCustomerGuard(thread, text, latestUser) {
   return appendCheckupNudge(out, thread);
 }
 
-const LCD_MOD = { 32: 2500, 40: 4500, 43: 5000, 50: 6500, 55: 8500, 60: 9500, 65: 9500, 70: 12500, 75: 14000 };
-const BACKLIGHT = { 32: 2500, 40: 4000, 43: 4500, 50: 5500, 55: 8500, 60: 9000, 65: 9500, 70: 12000, 75: 16000 };
-const PREMIUM_85 = /samsung|sony|sharp|\blg\b|hisense|devant/i;
+const LCD_MOD = numKeys(PRICES.lcdMod);
+const BACKLIGHT = numKeys(PRICES.backlight);
+const BL85 = PRICES.backlight85;
+const PREMIUM_85 = new RegExp(`\\b(?:${BL85.premiumBrands.join('|')})\\b`, 'i');
 
 function phpAmount(n) {
   return `₱${Number(n).toLocaleString('en-US')}`;
@@ -196,7 +187,7 @@ function lcdQuote(label, price) {
 function priceHint(size) {
   const n = Number(size) || 0;
   if (!n) return 'No size yet. Ask brand and size. Do not invent a price.';
-  if (n === 85) return '85" backlight ₱22,000 other brands, ₱28,000 Samsung, Sony, Sharp, LG, Hisense, Devant. No LCD modification price. Hand off for LCD modification.';
+  if (n === 85) return `85" backlight ${phpAmount(BL85.other)} other brands, ${phpAmount(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant. No LCD modification price. Hand off for LCD modification.`;
   const bits = [];
   if (BACKLIGHT[n]) bits.push(`backlight ${phpAmount(BACKLIGHT[n])}`);
   if (LCD_MOD[n]) bits.push(`LCD modification ${phpAmount(LCD_MOD[n])}`);
@@ -221,7 +212,7 @@ function confirmedPriceReply(latest, thread = {}) {
   if (fault === 'backlight') {
     if (size === 85) {
       const premium = PREMIUM_85.test(blob);
-      const price = premium ? 28000 : 22000;
+      const price = premium ? BL85.premium : BL85.other;
       const who = premium ? 'Samsung, Sony, Sharp, LG, Hisense, Devant' : 'ibang brand';
       return `${label} po sir. ${possible ? 'Possible backlight po' : 'Palit backlight'}, ${phpAmount(price)} (${who}). 6 months warranty, home service.`;
     }
@@ -235,7 +226,7 @@ function confirmedPriceReply(latest, thread = {}) {
   }
   if (!asksPrice(ask)) return '';
   if (size === 85) {
-    return `85" po sir. Backlight ${phpAmount(22000)} other brands, ${phpAmount(28000)} Samsung, Sony, Sharp, LG, Hisense, Devant. LCD modification, si Ivan na po.\nAno po ang sira?`;
+    return `85" po sir. Backlight ${phpAmount(BL85.other)} other brands, ${phpAmount(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant. LCD modification, si Ivan na po.\nAno po ang sira?`;
   }
   const back = BACKLIGHT[size];
   const mod = LCD_MOD[size];
@@ -320,6 +311,7 @@ function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
 }
 
 module.exports = {
+  PRICES,
   PRICE_RANGE,
   LCD_MOD,
   BACKLIGHT,

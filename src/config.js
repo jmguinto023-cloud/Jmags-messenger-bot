@@ -70,6 +70,14 @@ function loadConfig(env = process.env) {
     llmMaxRpm: num(env.LLM_MAX_RPM, 15),
     // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
+    // Messenger booking agent (off by default). BOOKING_INTAKE_URL unset = dry run, nothing is sent.
+    bookingAgentEnabled: bool(env.BOOKING_AGENT_ENABLED, false),
+    bookingIntakeUrl: (env.BOOKING_INTAKE_URL || '').trim(),
+    bookingIntakeKey: (env.BOOKING_INTAKE_KEY || '').trim(),
+    bookingIntakeTimeoutMs: num(env.BOOKING_INTAKE_TIMEOUT_MS, 10000),
+    bookingHours: env.BOOKING_HOURS || '08:00-17:00',
+    bookingClosedDays: env.BOOKING_CLOSED_DAYS == null ? '0' : env.BOOKING_CLOSED_DAYS,
+    branchMap: env.BRANCH_MAP || '',
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
     brandNewReferenceFile: env.BRAND_NEW_REFERENCE_FILE || path.join(__dirname, '..', 'prompts', 'brand-new-reference.md'),
     // Safety switches

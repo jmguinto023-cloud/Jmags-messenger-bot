@@ -17,6 +17,7 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
+const { bookingTurn } = require('./booking');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
@@ -614,6 +615,18 @@ class Bot {
         await this.handoff(psid, 'CRT or non-flatscreen', scopeLine);
         if ((this.rev.get(psid) || 0) !== rev) continue;
         return;
+      }
+      if (this.cfg.bookingAgentEnabled && !hadMedia) {
+        const booked = await bookingTurn(t, latestUser, {
+          cfg: this.cfg, now: this.now(), log: this.log, psidTag: short(psid), fetchImpl: this.fetchImpl,
+        });
+        if (booked) {
+          this.repliedRev.set(psid, rev);
+          this.store.save();
+          await this.send(psid, booked.text, { provider: 'booking', ops: true });
+          if ((this.rev.get(psid) || 0) !== rev) continue;
+          return;
+        }
       }
       const scripted = scriptedReply(latestUser, t, { allowPrice: !hadMedia && !reviewPending(t) });
       if (scripted) {
