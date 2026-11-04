@@ -33,6 +33,10 @@ function loadConfig(env = process.env) {
     pageAccessToken: env.PAGE_ACCESS_TOKEN || '',
     // Main Page plus any others (Cavite). pageId/pageAccessToken stay the main Page.
     pages: loadPages(env),
+    // Ops-dashboard per-Page on/off. Service role reads bot_switches. Empty stays off.
+    supabaseUrl: String(env.SUPABASE_URL || '').trim().replace(/\/+$/, ''),
+    supabaseServiceRoleKey: String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
+    pageSwitchCacheMs: num(env.PAGE_SWITCH_CACHE_MS, 15000),
     graphBase: (env.GRAPH_API_BASE || 'https://graph.facebook.com').replace(/\/+$/, ''),
     graphVersion: env.GRAPH_API_VERSION || 'v26.0',
     pageInboxAppId: String(env.PAGE_INBOX_APP_ID || '263902037430900'),

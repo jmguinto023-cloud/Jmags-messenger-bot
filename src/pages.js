@@ -6,7 +6,11 @@
 // or to supply the Cavite token. A Page with no token is recognized and ignored.
 const { AsyncLocalStorage } = require('node:async_hooks');
 
-const KNOWN_CAVITE_PAGE_ID = '61591823125793';
+// Graph Page id for Jmag's Appliances Cavite. The profile id is what some
+// Business Suite screens show; webhooks may use either, and both map here.
+const CAVITE_PAGE_ID = '1237499962773846';
+const CAVITE_PROFILE_ID = '61591823125793';
+const KNOWN_CAVITE_PAGE_ID = CAVITE_PAGE_ID;
 const context = new AsyncLocalStorage();
 
 function cleanId(v) {
@@ -93,6 +97,10 @@ function routeEntry(cfg, entryId) {
   if (!id) return primary;
   const hit = pages.find((p) => p.id && p.id === id);
   if (hit) return hit;
+  if (id === CAVITE_PAGE_ID || id === CAVITE_PROFILE_ID) {
+    const cavite = pages.find((p) => p.key === 'cavite');
+    if (cavite) return cavite;
+  }
   // Older single-Page deploys that never set PAGE_ID still have one token.
   if (primary && !primary.id) return primary;
   return null;
@@ -116,6 +124,8 @@ function storageKey(psid, page) {
 }
 
 module.exports = {
+  CAVITE_PAGE_ID,
+  CAVITE_PROFILE_ID,
   KNOWN_CAVITE_PAGE_ID,
   loadPages,
   routeEntry,

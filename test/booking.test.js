@@ -181,6 +181,7 @@ test('webhook: BOOKING_AGENT_ENABLED runs the booking flow and posts to intake',
   const env = {
     PORT: '0', VERIFY_TOKEN: 'v', APP_SECRET: 's', APP_ID: '1', PAGE_ID: PAGE, PAGE_ACCESS_TOKEN: 'T', GRAPH_API_BASE: mock.base,
     LLM_BASE_URL: `${mock.base}/v1`, LLM_API_KEY: 'k', LLM_MODEL: 'm', BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0',
+    SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
     DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-book-')), LOG_LEVEL: 'silent',
     BOOKING_AGENT_ENABLED: 'true', BOOKING_INTAKE_URL: `http://127.0.0.1:${intake.address().port}/functions/v1/ops-booking-intake`,
   };

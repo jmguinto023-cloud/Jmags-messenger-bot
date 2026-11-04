@@ -28,6 +28,7 @@ async function setup(extraEnv = {}) {
     CAVITE_PAGE_ID: CAVITE, CAVITE_PAGE_ACCESS_TOKEN: 'CAVITE_TOKEN',
     GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`, LLM_API_KEY: 'sk-test', LLM_MODEL: 'mock-model',
     BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0', LOG_LEVEL: 'silent',
+    SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
     DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-pages-')),
     ...extraEnv,
   };

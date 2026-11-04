@@ -41,6 +41,7 @@ async function main() {
     ...process.env, PORT: String(port), VERIFY_TOKEN: 'sim_verify', APP_SECRET: SECRET, APP_ID: APP, PAGE_ID: PAGE,
     PAGE_ACCESS_TOKEN: 'SIM_PAGE_TOKEN', GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`, LLM_API_KEY: 'sim', LLM_MODEL: 'mock',
     BOT_ENABLED: 'true', BOT_TEST_PSIDS: '', BOT_ACTIVE_HOURS: '', BATCH_WINDOW_MS: '500',
+    SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
     DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-sim-')), LOG_LEVEL: 'info',
   };
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'index.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });

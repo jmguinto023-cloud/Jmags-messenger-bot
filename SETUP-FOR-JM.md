@@ -84,7 +84,9 @@ Goji will send you two things: the **Callback URL** (like `https://jmags-messeng
 | `PAGE_ACCESS_TOKEN` | Messenger API Settings → Generate (step 10), for **JMAG's Appliances** | **YES** |
 | `PAGE_ID` | Already known: 102622881557025. Check that it matches the number under the Page name in step 10. | no |
 | `CAVITE_PAGE_ACCESS_TOKEN` | Same Messenger settings → Generate, for **Jmag's Appliances Cavite**. Leave empty until that Page is connected; those chats are ignored until then. | **YES** |
-| `CAVITE_PAGE_ID` | Already known: 61591823125793. Same check as `PAGE_ID`, on the Cavite Page row. | no |
+| `CAVITE_PAGE_ID` | Page id `1237499962773846` for **Jmag's Appliances Cavite**. The profile id `61591823125793` is the same Page. | no |
+| `SUPABASE_URL` | `https://fhjarnogglakehaztbbj.supabase.co` | no |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API → service_role. The bot reads `bot_switches` with this. Secret. If it is missing or the read fails, that Page stays silent. | **YES** |
 | `LLM_BASE_URL`, `LLM_MODEL` | AI provider's docs (Goji can fill these in) | no |
 | `LLM_API_KEY` | AI provider dashboard | **YES** |
 | `AI_PROVIDER_ORDER` | Set this to `groq` in Render. Groq is the only model that answers customers. Gemini is not used unless the value lists `gemini` (for example `groq,gemini`). If Render already has `gemini,groq`, replace it. | no |
