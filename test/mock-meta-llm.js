@@ -63,6 +63,11 @@ function startMock({ llmResponder } = {}) {
         const rows = (state.threadMessages && state.threadMessages[convoId]) || [];
         return json(200, { data: rows });
       }
+      if (req.method === 'POST' && url.pathname.endsWith('/comments')) {
+        calls.comments = calls.comments || [];
+        calls.comments.push({ path: url.pathname, message: body.message || '' });
+        return json(200, { id: `comment_${calls.comments.length}` });
+      }
       if (url.pathname.endsWith('/messages')) {
         if (body.sender_action) { calls.typing.push(body); return json(200, { recipient_id: body.recipient.id }); }
         calls.messages.push(body);

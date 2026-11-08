@@ -16,6 +16,7 @@ const {
   manilaStamp,
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk, questionTopic } = require('./intake');
+const { optOutReason, staffEscalation, publicCommentReply, STAFF_HANDOFF_LINE } = require('./reply-rules');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
@@ -230,6 +231,7 @@ class Bot {
       withPage(page, () => {
         for (const ev of entry.messaging || []) this.safe(() => this.onEvent(ev, false));
         for (const ev of entry.standby || []) this.safe(() => this.onEvent(ev, true));
+        for (const change of entry.changes || []) this.safe(() => this.onFeedChange(change));
       });
     }
   }
@@ -311,6 +313,14 @@ class Bot {
     this.store.addTurn(psid, 'user', logText, ts);
 
     const t = this.store.thread(psid);
+    if (optOutReason(spoken)) {
+      t.optedOut = true;
+      this.cancelPending(psid);
+      this.stopVideoFollowup(psid, 'opted out');
+      this.store.save();
+      this.log.info(`opt-out from ${short(psid)}: no further messages`);
+      return;
+    }
     t.followupFails = 0;
     t.followupNextAt = 0;
     noteSuggestion(this.store, psid);
@@ -368,6 +378,17 @@ class Bot {
       return;
     }
 
+    const escalate = staffEscalation(spoken);
+    if (!forceReason && escalate) {
+      t.needsStaff = true;
+      this.store.save();
+      this.bump(psid);
+      this.cancelPending(psid);
+      return this.enqueue(psid, async () => {
+        await this.flagPendingMedia(psid);
+        return this.handoff(psid, escalate, STAFF_HANDOFF_LINE);
+      });
+    }
     if (!forceReason) {
       // "bot ka ba? / tao ka ba?" is a question about the bot – let the AI answer honestly instead.
       const askingIfBot = /\b(ka ba|bot|robot|ai|automated)\b/i.test(spoken);
@@ -394,6 +415,54 @@ class Bot {
     const n = (this.rev.get(slot) || 0) + 1;
     this.rev.set(slot, n);
     return n;
+  }
+
+  // A public Page comment. Never ask for a phone number or a full address here.
+  async onFeedChange(change) {
+    if (!change || change.field !== 'feed') return;
+    const value = change.value || {};
+    if (value.item !== 'comment' || value.verb !== 'add') return;
+    const commentId = String(value.comment_id || '');
+    const text = String(value.message || '').trim();
+    const fromId = value.from && value.from.id ? String(value.from.id) : '';
+    const page = currentPage();
+    if (!commentId || !text || !fromId) return;
+    if (page && fromId === String(page.id)) return;
+    if (this.store.seen(commentId)) return;
+    const t = this.store.thread(fromId);
+    this.store.addTurn(fromId, 'user', text, this.now());
+    if (optOutReason(text)) {
+      t.optedOut = true;
+      this.store.save();
+      this.log.info(`opt-out on a public comment from ${short(fromId)}: no reply`);
+      return;
+    }
+    const block = this.blockReason(fromId, t, this.now()) || await this.pageSwitchReason(fromId);
+    if (block) {
+      this.log.info(`no comment reply to ${short(fromId)}: ${block}`);
+      return;
+    }
+    const reason = staffEscalation(text);
+    if (reason) {
+      t.needsStaff = true;
+      t.handedOff = true;
+      t.handoffAt = this.now();
+      t.handoffReason = reason;
+      t.passedByBot = true;
+      this.store.save();
+      this.log.info(`HANDOFF comment ${short(fromId)}: ${reason}`);
+      if (this.cfg.needsIvanLabel) {
+        try { await this.graph.addLabel(fromId, this.cfg.needsIvanLabel); }
+        catch (e) { this.log.warn('label failed (optional)', e.message); }
+      }
+    }
+    const reply = publicCommentReply(text);
+    try {
+      await this.graph.replyToComment(commentId, reply);
+      this.store.addTurn(fromId, 'assistant', reply, this.now());
+    } catch (e) {
+      this.log.error('comment reply failed', e.message);
+    }
   }
 
   async onStandby(psid, t) {
@@ -431,6 +500,7 @@ class Bot {
   blockReason(psid, t, ts) {
     const now = this.now();
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
+    if (t && t.optedOut) return 'opted out';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.handedOff) return `handed off to Ivan (${t.handoffReason})`;
@@ -1049,7 +1119,8 @@ class Bot {
       await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`);
     } catch (e) { this.log.error('pass_thread_control failed', e.message); }
     if (this.cfg.needsIvanLabel) {
-      this.graph.addLabel(psid, this.cfg.needsIvanLabel).catch((e) => this.log.warn('label failed (optional)', e.message));
+      try { await this.graph.addLabel(psid, this.cfg.needsIvanLabel); }
+      catch (e) { this.log.warn('label failed (optional)', e.message); }
     }
   }
 
@@ -1232,6 +1303,7 @@ class Bot {
     const tz = this.cfg.timezone || 'Asia/Manila';
     let skip = '';
     if (!this.cfg.botEnabled) skip = 'BOT_ENABLED is off';
+    else if (t.optedOut) skip = 'opted out';
     else if (!this.scheduleOpen(now)) {
       const until = nextOpenAt(this.cfg, now);
       if (!until || until <= now || until - lastUser > windowMs) {
@@ -1384,7 +1456,7 @@ class Bot {
       if (job.lastDailyStatusDate === stamp.date) continue;
       const located = this.locateThread(job.psid);
       const thread = located.thread;
-      if (thread && (thread.handedOff || this.humanPaused(thread, now))) continue;
+      if (thread && (thread.handedOff || thread.optedOut || this.humanPaused(thread, now))) continue;
       if (!located.page || !located.page.token) continue;
       const switched = await withPage(located.page, () => this.pageSwitchReason(job.psid));
       if (switched) {
@@ -1431,7 +1503,7 @@ class Bot {
     const now = this.now();
     const located = this.locateThread(job.psid);
     const thread = located.thread;
-    if (thread && (thread.handedOff || this.humanPaused(thread, now))) return { sent: false, reason: 'paused' };
+    if (thread && (thread.handedOff || thread.optedOut || this.humanPaused(thread, now))) return { sent: false, reason: 'paused' };
     if (!located.page || !located.page.token) return { sent: false, reason: 'page' };
     const switched = await withPage(located.page, () => this.pageSwitchReason(job.psid));
     if (switched) return { sent: false, reason: 'switch' };
@@ -1553,6 +1625,7 @@ class Bot {
     if (!catching && (t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
     if (t.bookingDone) return 'booking form already submitted';
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
+    if (t.optedOut) return 'opted out';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.intakeCloseSent || t.tipsSent) return 'intake closed, waiting on the technician';

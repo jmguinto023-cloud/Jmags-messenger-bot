@@ -90,6 +90,11 @@ class Graph {
       body: { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: c, metadata: 'jmags-ivan' } },
     });
   }
+  replyToComment(commentId, message) {
+    const id = String(commentId || '').trim();
+    if (!id) throw new Error('missing comment id');
+    return this.call('POST', `${id}/comments`, { body: { message: String(message || '').slice(0, 8000) } });
+  }
   passThreadControl(psid, targetAppId, metadata = '') {
     return this.call('POST', `${this.pageNode()}/pass_thread_control`, {
       body: { recipient: { id: psid }, target_app_id: targetAppId, metadata: metadata.slice(0, 1000) },
