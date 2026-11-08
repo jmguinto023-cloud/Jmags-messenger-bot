@@ -15,12 +15,12 @@ const {
   linkCustomer, extractPhone, nameGuess, ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE,
   manilaStamp,
 } = require('./ops');
-const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE } = require('./intake');
+const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk } = require('./intake');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
 const { PageSwitches } = require('./page-switches');
-const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, CHECKUP_NUDGE } = require('./estimate');
+const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, quoteKnownTv, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
@@ -632,6 +632,29 @@ class Bot {
     this.store.save();
   }
 
+  // A reply that only repeats known facts is thrown out. One rewrite, then the next question.
+  async ensureNotEcho(psid, text, thread) {
+    if (!isEchoOnly(text, thread)) return text;
+    const ask = nextAsk(thread) || quoteKnownTv(thread);
+    if (ask) {
+      this.log.info(`echo reply dropped for ${short(psid)}`);
+      return ask;
+    }
+    let retry = '';
+    try {
+      retry = await this.llm.chat([
+        { role: 'system', content: 'The draft only repeats the customer. Do not mention their brand, age, city, or "wala pa". Ask when they are free, or one missing fact.' },
+        { role: 'user', content: String(text || '').slice(0, 400) },
+      ], { priority: 'high' });
+    } catch (e) {
+      this.log.warn('echo rewrite failed', e.message);
+    }
+    const clean = parseHandoff(String(retry || '')).text;
+    if (clean && !isEchoOnly(clean, thread)) return clean;
+    this.log.info(`echo reply dropped for ${short(psid)}`);
+    return 'Kailan po sila free?';
+  }
+
   // A weak model writes formal Tagalog essays. Rewrite once, then use a short template.
   async fitModelReply(psid, raw) {
     this.forceProvider = '';
@@ -749,6 +772,14 @@ class Bot {
         return;
       }
 
+      const priced = !hadMedia && !reviewPending(t) && !t.problemViaVideo ? quoteKnownTv(t) : '';
+      if (priced) {
+        this.repliedRev.set(this.slot(psid), rev);
+        await this.send(psid, priced, { provider: 'rules' });
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
+        return;
+      }
+
       if (await this.handleOpsTurn(psid, latestUser, { rev, hadVideo })) {
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
@@ -806,11 +837,12 @@ class Bot {
       t.aiHoldingSent = false;
       const { text, handoff, reason } = parseHandoff(raw);
       if (this.blockReason(psid, t, ts)) return; // human took over while AI was thinking
-      const guarded = guardStaleReply(
+      let guarded = guardStaleReply(
         t,
         applyCustomerGuard(t, applyReplyGuard(t, text), latestUserText(t)),
         latestUserText(t),
       );
+      if (!handoff) guarded = await this.ensureNotEcho(psid, guarded, t);
       this.repliedRev.set(this.slot(psid), rev);
       // A photo or video never passes the thread. A keyword in the caption already handed off above.
       if (hadMedia && !t.intakeCloseSent) {

@@ -292,6 +292,26 @@ function hesitationReply(latest, thread) {
   return 'Repair po sir is less than brand new, may warranty at home service, walang hakot. Kailan po kayo free?';
 }
 
+function quoteKnownTv(thread = {}) {
+  const s = thread.slots || {};
+  const n = parseInt(s.size, 10);
+  if (!s.brand || !n || !s.symptom) return '';
+  const label = `${s.brand} ${n}`;
+  const when = 'Kailan po sila free?';
+  if (s.symptom === 'lines') {
+    const price = LCD_MOD[n];
+    if (!price) return `${label} po sir. LCD modification, si Ivan na po ang magko-confirm. ${when}`;
+    return `${label} po sir. LCD modification ${phpAmount(price)}. Kasama repair, warranty, at home service. ${when}`;
+  }
+  if (s.symptom === 'backlight') {
+    const price = n === 85 ? (PREMIUM_85.test(s.brand) ? BL85.premium : BL85.other) : BACKLIGHT[n];
+    if (!price) return '';
+    return `${label} po sir. Possible backlight po, ${phpAmount(price)}. Kasama testing, 6 months warranty, at home service. ${when}`;
+  }
+  if (s.symptom === 'power') return `${label} po sir. Possible power supply o motherboard po. ${when}`;
+  return '';
+}
+
 function vagueRepairReply(text) {
   if (knownSize(text)) return '';
   if (!/hm po repair ng tv|repair ng tv/i.test(text || '')) return '';
@@ -316,6 +336,7 @@ module.exports = {
   LCD_MOD,
   BACKLIGHT,
   confirmedPriceReply,
+  quoteKnownTv,
   scriptedReply,
   priceHint,
   knownSize,

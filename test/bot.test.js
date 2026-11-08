@@ -514,8 +514,10 @@ test('temperature 400 is retried once without temperature and then omitted', asy
     assert.equal(s.mock.calls.llm[1].body.temperature, undefined);
     assert.equal(s.mock.calls.pass.length, 0);
     await s.post(msg('temp', { text: '55 inch samsung po' }));
-    assert.equal(s.mock.calls.llm.length, 3);
-    assert.equal(s.mock.calls.llm[2].body.temperature, undefined);
+    assert.equal(s.mock.calls.llm.length, 2, 'brand, size, and symptom already known: one price, no extra model call');
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Samsung 55/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /₱8,500/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Kailan po sila free/);
     assert.equal(s.app.store.thread('temp').handedOff, false);
   } finally { await s.close(); }
 });
