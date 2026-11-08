@@ -2,7 +2,7 @@
 // What we already know about a TV job, so the bot does not ask for it again.
 const { summarizeConversation } = require('./summary');
 
-const CLOSE_LINE = 'Salamat po. Ang technician po namin ang nagre-review ng video at ipapadala po namin ang all-in price shortly.';
+const CLOSE_LINE = 'Salamat po. Ang staff po namin ang nagre-review ng video at ipapadala po namin ang all-in price shortly.';
 
 const QUESTIONS = {
   symptom: 'Ano po ang sira? May sound pero walang picture, may lines, o ayaw mag-on?',
@@ -18,7 +18,7 @@ const QUESTIONS = {
 // "Sira" by itself is not a diagnosis. These are the symptoms we can price.
 function specificSymptom(text) {
   const t = String(text || '');
-  if (/\bbacklight\b|walang (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen|flicker|blink(?:ing)?|kislap|kumikislap/i.test(t)) return 'backlight';
+  if (/\bbacklight\b|walang (?:display|picture|ilaw)|nawala(?:n)?(?: ng| ang| yung)? (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen|flicker|blink(?:ing)?|kislap|kumikislap/i.test(t)) return 'backlight';
   if (/may (?:sound|tunog).{0,40}walang|walang.{0,30}(?:sound|tunog)/i.test(t)) return 'backlight';
   if (/may linya|\blinya\b|may lines|\blines\b|gumuguhit|bar line/i.test(t)) return 'lines';
   if (/ayaw mag-?on|hindi (?:nag-?o?on|bumubukas)|di umaandar|walang power|no power|won'?t turn on|will not turn on/i.test(t)) return 'power';
@@ -49,7 +49,7 @@ function problemClaim(text) {
 function questionTopic(text) {
   const t = String(text || '');
   if (!/\?/.test(t)) return '';
-  if (/ano po ang sira\?|may sound pero walang picture|may lines, o ayaw/i.test(t)) return 'symptom';
+  if (/ano(?:ng)? po ang sira\?|may sound pero walang picture|may lines, o ayaw/i.test(t)) return 'symptom';
   if (/ilang inches|ilang inch/i.test(t)) return 'size';
   if (/anong brand po ng tv/i.test(t)) return 'brand';
   if (/taga saan po kayo/i.test(t)) return 'location';

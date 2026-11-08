@@ -49,7 +49,8 @@ function hideStaffName(text) {
     .replace(/\bsi Ivan\b/gi, 'ang technician po namin')
     .replace(/\bni Ivan\b/gi, 'ng technician')
     .replace(/\bkay Ivan\b/gi, 'sa technician')
-    .replace(/\bIvan\b/g, 'technician');
+    .replace(/\bIvan\b/g, 'technician')
+    .replace(/\bAnong po ang sira\b/g, 'Ano po ang sira');
 }
 
 function sanitizeOutgoing(text) {
@@ -82,7 +83,7 @@ const lines = {
     'Noted po maam/sir. Natanggap po namin. Ang technician po namin ang titingin dito. Saglit lang po.',
   // Photo/video stay in this chat. No "video" in the text (a later follow-up treats that word as a request).
   mediaAck:
-    'Salamat po! Ipapacheck ko po sa technician.',
+    'Staff na po namin ang magrereview ng photo or video na sinend nyo, pa hintay na lang po salamat po 🙂',
   holdingPerson:
     'Sige po maam/sir. Ang technician po namin ang tutuloy dito. Saglit lang po.',
   sanitizeOutgoing,

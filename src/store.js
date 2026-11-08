@@ -163,6 +163,7 @@ class Store {
     if (!row) return false;
     row.status = 'reviewed';
     row.reviewedAt = new Date(now).toISOString();
+    if (row.psid) this.thread(row.psid).videoReviewed = true;
     this.save();
     return true;
   }

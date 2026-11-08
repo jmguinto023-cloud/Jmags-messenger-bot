@@ -9,10 +9,11 @@ function brandLabel(b) {
 
 function summarizeConversation(history) {
   const text = (history || []).map((h) => h.content || '').join('\n');
-  const sizeM = text.match(/\b(\d{2})\s*(?:["”]|inch(?:es)?|in\b)/i);
+  const sizeM = text.match(/\b(\d{2})\s*(?:["”]|inch(?:es)?|in\b)/i)
+    || text.match(/\b(32|40|43|48|49|50|55|60|65|70|75|80|85)\b(?!\s*(?:taon|years?|yrs?|buwan|months?))/i);
   const brand = BRANDS.find((b) => new RegExp(`\\b${b}\\b`, 'i').test(text));
   let problem = '';
-  if (/backlight|no visual|walang display|no display|black screen|walang ilaw/i.test(text)) problem = 'no display / backlight';
+  if (/backlight|no visual|walang display|nawala(?:n)?(?: ng| ang| yung)? (?:display|picture|ilaw)|no display|black screen|walang ilaw/i.test(text)) problem = 'no display / backlight';
   else if (/basag|cracked|smashed|broken lcd|\blcd\b/i.test(text)) problem = 'cracked or LCD';
   else if (/flicker|blink(?:ing)?|kislap/i.test(text)) problem = 'flicker / backlight';
   else if (/gumuguhit|bar line|\blines\b/i.test(text)) problem = 'lines';

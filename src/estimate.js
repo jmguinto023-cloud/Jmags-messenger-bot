@@ -156,7 +156,7 @@ const FLICKER = /flicker|blink(?:ing)?|kislap/i;
 
 function faultKind(text) {
   const t = String(text || '');
-  const dark = /walang (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen/i.test(t);
+  const dark = /walang (?:display|picture|ilaw)|nawala(?:n)?(?: ng| ang| yung)? (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen/i.test(t);
   // Flicker and blinking are a backlight fault, including "nag fflicker" and "kumikislap".
   if (FLICKER.test(t)) return 'backlight';
   if (/(?:sound|tunog)/i.test(t) && dark) return 'backlight';

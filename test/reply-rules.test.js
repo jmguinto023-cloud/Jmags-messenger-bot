@@ -132,7 +132,7 @@ test('complaints, disputes, uncertainty, payment, and a human request are flagge
   try {
     await s.say('esc', 'May reklamo ako, ang bagal');
     assert.equal(s.mock.calls.messages.length, 1);
-    assert.equal(s.mock.calls.messages[0].message.text, STAFF_HANDOFF_LINE);
+    assert.equal(s.mock.calls.messages[0].message.text, 'I-che-check lang po ng staff namin ito at mag-me-message po sila sa inyo shortly.');
     assert.equal(s.mock.calls.pass.length, 1);
     assert.equal(s.mock.calls.llm.length, 0);
     const thread = s.app.store.thread('esc');
@@ -141,10 +141,9 @@ test('complaints, disputes, uncertainty, payment, and a human request are flagge
     assert.equal(thread.handoffReason, 'complaint');
     assert.ok(s.mock.calls.labels.some((row) => row.user === 'esc'));
     await s.say('war', 'may warranty po ba');
-    assert.equal(s.app.store.thread('war').handedOff, false);
-    assert.match(s.mock.calls.messages.at(-1).message.text, /6 months/);
-    assert.match(s.mock.calls.messages.at(-1).message.text, /5 months/);
-    assert.equal(s.app.store.thread('war').handedOff, false);
+    assert.equal(s.app.store.thread('war').handedOff, true);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /May warranty po ang repair namin/);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /\d+\s*months/);
   } finally { await s.close(); }
 });
 
@@ -195,10 +194,9 @@ test('a stale video review does not stall a new price question, and a repeat is 
       assert.doesNotMatch(line, /09386369374|09267229506/);
       assert.doesNotMatch(line, /nagre-review|all-in price soon/i);
     }
-    assert.match(schedule, /ilang inches po/i);
-    assert.equal(first, PRICE_ASK);
-    assert.equal(second, PRICE_ASK_AGAIN);
-    assert.notEqual(first, second);
+    assert.match(schedule, /ilang inches po|video ng TV/i);
+    assert.equal(first, 'Para po masiguro namin ang tamang presyo, kailangan po muna namin makita ang video at model number. Hindi po kami nagbibigay ng presyo na hindi pa nakikita ang unit.');
+    assert.equal(second, first);
     assert.match(fresh, /ilang inches|anong brand/i);
     assert.equal(s.app.store.thread('live').problemViaVideo, false);
     const numbers = await s.say('call', 'anong number niyo po');

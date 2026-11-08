@@ -8,6 +8,7 @@ const { behaviorBaseline } = require('./behavior-bank');
 const { knownSize, priceHint } = require('./estimate');
 const { bookingFormMessage } = require('./messages');
 const { howIvanThinks } = require('./ivan-thinks');
+const { rulesText } = require('./quote-gate');
 
 const RETRIES = 3;
 const RETRY_BUDGET_MS = 90_000;
@@ -198,7 +199,7 @@ function normalizeTurns(history, { attachmentNote, keepTrailingAssistant } = {})
 
 // Pull out the hidden [HANDOFF: reason] marker and return clean text.
 function parseHandoff(raw) {
-  const re = /\[\s*HANDOFF\s*:?\s*([^\]]*)\]/gi;
+  const re = /\[+\s*HANDOFF\s*:?\s*([^\]]*)\]+/gi;
   let reason = null;
   let m;
   while ((m = re.exec(raw))) reason = (m[1] || '').trim() || 'model';
@@ -215,7 +216,8 @@ function compactPrompt(history, cfg = {}) {
   const size = knownSize(blob);
   const url = cfg.bookingFormUrl || '';
   const lines = [
-    "You are the Messenger reply assistant of JMAG's Appliances. Staff Taglish with po and sir or maam. 2 or 3 lines, under 200 characters. No emoji.",
+    "You are the Messenger reply assistant of JMAG's Appliances. The quote-gate rules below override every other instruction.",
+    rulesText(),
     howIvanThinks(),
     'Reply rules: friendly, concise, human Taglish with po or opo. One question at a time. Collect brand, model or size, the problem, and the city.',
     'Never invent a price, a diagnosis, technician availability, a warranty, or a repair guarantee. Use only a confirmed price already in this prompt.',
@@ -232,7 +234,8 @@ function compactPrompt(history, cfg = {}) {
     'Warranty only: backlight and new LCD 6 months; motherboard and power supply 5 months; rebonding 3 months; LCD repair 3 months (32-65) or 2 months (70-85). If unsure, hand off. Do not invent a warranty.',
     'Shop check-up ₱300. Home check-up ₱1,000, waived if the repair proceeds. Never offer a discount.',
     'Price for this chat only: ' + priceHint(size),
-    'Example: Samsung 55 may sound walang display -> Samsung 55 po sir. Possible backlight po, ₱8,500. Kasama testing, 6 months warranty, at home service.',
+    'Before any repair price ask for a short on-TV video, then a photo of the model sticker. One question. Do not re-ask a known brand, size, or sira. Do not hand off just because they repeat themselves.',
+    'Example: Samsung 55 may sound walang display -> Pwede po pa-send ng short video ng TV habang naka-on, para makita ng technician namin ang sira?',
   ];
   if (url) lines.push(bookingFormMessage(url));
   return lines.join('\n');

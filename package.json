@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/bot.test.js test/ops.test.js test/behavior-bank.test.js test/sms.test.js test/booking.test.js test/pages.test.js test/ai-router.test.js test/page-switches.test.js test/intake-echo.test.js test/reply-rules.test.js",
+    "test": "node --test test/bot.test.js test/ops.test.js test/behavior-bank.test.js test/sms.test.js test/booking.test.js test/pages.test.js test/ai-router.test.js test/page-switches.test.js test/intake-echo.test.js test/reply-rules.test.js test/quote-gate.test.js",
     "simulate": "node scripts/simulate.js",
     "sync-prompt": "node scripts/sync-prompt.js"
   },

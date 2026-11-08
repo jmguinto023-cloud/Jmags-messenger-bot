@@ -478,7 +478,7 @@ test('status answers come from the matching job and never from another customer'
 
     s.app.store.thread('linked-liza').problemViaVideo = true;
     await s.post(msg('linked-liza', 'ano na yung video', NOON + 3000));
-    assert.equal(s.mock.calls.messages.at(-1).message.text, PENDING_REVIEW_STATUS);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /staff po namin ang nagre-review/);
 
     await s.post(msg('ask-1', 'ano na status', NOON + 4000));
     assert.equal(s.mock.calls.messages.at(-1).message.text, 'Para macheck ko po ang status, pakisabi ang pangalan at phone number na ginamit sa booking.');

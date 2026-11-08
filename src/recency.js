@@ -2,11 +2,12 @@
 // Keep replies on the current topic. Old bookings, cancellations, and intake
 // slots must not be repeated unless the customer brings that topic up.
 
+const { remindsMissingProof } = require('./evidence');
 const STALE_MS = 12 * 60 * 60 * 1000;
 
 const REVIEW_MS = 24 * 60 * 60 * 1000;
 const PENDING_REVIEW_STATUS = 'Ang technician po namin ang nagre-review pa ng video. Ipapadala po namin ang all-in price soon.';
-const REVIEW_CLARIFY = 'Pakilinaw lang po. Tungkol po ba ito sa video na nire-review ng technician namin para sa all-in price?';
+const REVIEW_CLARIFY = 'Pakilinaw lang po. Tungkol po ba ito sa video na nire-review ng staff po namin para sa all-in price?';
 const PRICE_ASK = "Depende po sa size at sira, ma'am/sir. Ilang inches po?";
 const PRICE_ASK_AGAIN = "Depende po sa size at sira, ma'am/sir. Ilang inches po at anong brand?";
 const CALL_LINE = 'Pwede po kayong tumawag sa 09386369374 (Smart) o 09267229506 (Globe).';
@@ -51,9 +52,12 @@ function reviewIsCurrent(thread, now = Date.now()) {
 
 function releaseOldReview(thread, latestText, now = Date.now()) {
   if (!thread) return false;
+  // A correction that the video or model was never seen is the same job.
+  if (remindsMissingProof(latestText)) return false;
   const pending = reviewPending(thread) || thread.intakeClosed;
   if (!pending) return false;
-  if (reviewIsCurrent(thread, now) && !explicitNewUnit(latestText)) return false;
+  const newJob = explicitNewUnit(latestText);
+  if (reviewIsCurrent(thread, now) && !newJob) return false;
   thread.problemViaVideo = false;
   thread.intakeClosed = false;
   thread.intakeCloseSent = false;
@@ -61,7 +65,7 @@ function releaseOldReview(thread, latestText, now = Date.now()) {
   thread.awaitingVideo = false;
   thread.videoReplyAt = 0;
   thread.intakeEpoch = now;
-  if (thread.slots) {
+  if (newJob && thread.slots) {
     thread.slots.brand = '';
     thread.slots.size = '';
     thread.slots.symptom = '';
