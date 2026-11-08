@@ -15,7 +15,7 @@ const {
   linkCustomer, extractPhone, nameGuess, ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE,
   manilaStamp,
 } = require('./ops');
-const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk } = require('./intake');
+const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk, questionTopic } = require('./intake');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
@@ -637,6 +637,7 @@ class Bot {
     if (!isEchoOnly(text, thread)) return text;
     const ask = nextAsk(thread) || quoteKnownTv(thread);
     if (ask) {
+      thread.lastAskedTopic = questionTopic(ask);
       this.log.info(`echo reply dropped for ${short(psid)}`);
       return ask;
     }

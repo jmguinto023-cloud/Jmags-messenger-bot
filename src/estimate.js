@@ -130,6 +130,18 @@ const LCD_MOD = numKeys(PRICES.lcdMod);
 const BACKLIGHT = numKeys(PRICES.backlight);
 const BL85 = PRICES.backlight85;
 const PREMIUM_85 = new RegExp(`\\b(?:${BL85.premiumBrands.join('|')})\\b`, 'i');
+const PSU_BASIC = numKeys(PRICES.xlsx && PRICES.xlsx.powerSupplyBasic);
+const PSU_SMART = numKeys(PRICES.xlsx && PRICES.xlsx.powerSupplySmart);
+const MOBO_BASIC = numKeys(PRICES.xlsx && PRICES.xlsx.motherboardBasic);
+const MOBO_SMART = numKeys(PRICES.xlsx && PRICES.xlsx.motherboardSmart);
+
+// Won't-turn-on can be a power supply or a motherboard, basic or smart. Quote that size's range.
+function powerPriceRange(size) {
+  const n = parseInt(size, 10);
+  const nums = [PSU_BASIC[n], PSU_SMART[n], MOBO_BASIC[n], MOBO_SMART[n]].filter((v) => Number(v) > 0);
+  if (!nums.length) return null;
+  return { low: Math.min(...nums), high: Math.max(...nums) };
+}
 
 function phpAmount(n) {
   return `₱${Number(n).toLocaleString('en-US')}`;
@@ -308,7 +320,12 @@ function quoteKnownTv(thread = {}) {
     if (!price) return '';
     return `${label} po sir. Possible backlight po, ${phpAmount(price)}. Kasama testing, 6 months warranty, at home service. ${when}`;
   }
-  if (s.symptom === 'power') return `${label} po sir. Possible power supply o motherboard po. ${when}`;
+  if (s.symptom === 'power') {
+    const range = powerPriceRange(n);
+    if (!range) return `${label} po sir. Possible power supply o motherboard po. Wala pang listed price para sa ${n}". Check-up po para mas eksakto. ${when}`;
+    const money = range.low === range.high ? phpAmount(range.low) : `${phpAmount(range.low)}–${phpAmount(range.high)}`;
+    return `${label} po sir. Possible power supply o motherboard po, ${money} all-in. Check-up po para mas eksakto. ${when}`;
+  }
   return '';
 }
 
@@ -337,6 +354,7 @@ module.exports = {
   BACKLIGHT,
   confirmedPriceReply,
   quoteKnownTv,
+  powerPriceRange,
   scriptedReply,
   priceHint,
   knownSize,

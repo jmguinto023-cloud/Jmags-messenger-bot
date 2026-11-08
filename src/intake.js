@@ -21,8 +21,25 @@ function specificSymptom(text) {
   if (/\bbacklight\b|walang (?:display|picture|ilaw)|no (?:display|picture|visual)|black screen|flicker|blink(?:ing)?|kislap|kumikislap/i.test(t)) return 'backlight';
   if (/may (?:sound|tunog).{0,40}walang|walang.{0,30}(?:sound|tunog)/i.test(t)) return 'backlight';
   if (/may linya|\blinya\b|may lines|\blines\b|gumuguhit|bar line/i.test(t)) return 'lines';
-  if (/ayaw mag-?on|hindi (?:nag-?o?on|bumubukas)|di umaandar|walang power/i.test(t)) return 'power';
+  if (/ayaw mag-?on|hindi (?:nag-?o?on|bumubukas)|di umaandar|walang power|no power|won'?t turn on|will not turn on/i.test(t)) return 'power';
   return '';
+}
+
+// "Wala pa" is not "walang display". It answers the other-shop question.
+function priorShopAnswer(text) {
+  return /\bwala pa\b|wala pang ibang|ibang shop|another shop|hindi pa na(?:ayos|repair)|di pa naayos/i.test(String(text || ''));
+}
+
+function latestCustomerText(thread, latestText) {
+  const given = String(latestText || '').trim();
+  if (given) return given;
+  const users = (thread && thread.history || []).filter((h) => h && h.role === 'user' && h.content);
+  return users.length ? users[users.length - 1].content : '';
+}
+
+function symptomAlreadyAsked(thread) {
+  if (thread && thread.lastAskedTopic === 'symptom') return true;
+  return (thread && thread.history || []).some((h) => h && h.role === 'assistant' && questionTopic(h.content) === 'symptom');
 }
 
 function problemClaim(text) {
@@ -68,6 +85,10 @@ function updateIntake(thread, latestText, hasMedia) {
   if (slots.brand || slots.size) slots.brandSize = [slots.brand, slots.size].filter(Boolean).join(' ');
   const symptom = specificSymptom(blob);
   if (symptom) slots.symptom = symptom;
+  else if (!slots.symptom && /\bsira\b/i.test(blob) && priorShopAnswer(latestCustomerText(thread, latestText)) && symptomAlreadyAsked(thread)) {
+    // "Sira" was already said. "Wala pa sa ibang shop" is not a new symptom, so do not ask again.
+    slots.symptom = 'sira';
+  }
   if (summary.problem) {
     slots.problemOrVideo = true;
     slots.problemText = summary.problem;

@@ -8,7 +8,9 @@ const path = require('node:path');
 const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { detectLocation } = require('../src/branch');
-const { isEchoOnly, QUESTIONS } = require('../src/intake');
+const { isEchoOnly, QUESTIONS, updateIntake, missingSlot } = require('../src/intake');
+const { quoteKnownTv } = require('../src/estimate');
+const { quotedPrice } = require('../src/booking');
 const { estimateTokens, compactPrompt } = require('../src/llm');
 
 const SECRET = 's';
@@ -73,13 +75,14 @@ test('Devant, sira, 1yr, Lipa, wala pa asks the symptom, then the size, then a p
   try {
     const first = await s.say('dv', 'Devant po, sira, 1 year, Lipa Batangas');
     const second = await s.say('dv', 'wala pa sa ibang shop');
+    assert.equal(s.app.store.thread('dv').slots.symptom, 'sira');
     const third = await s.say('dv', 'may sound pero walang picture');
     const quote = await s.say('dv', '55 inches po');
     for (const line of [first, second, third]) {
       assert.doesNotMatch(line, /Devant|Lipa|Batangas|1 yr|1 year|Laguna|wala pa/i);
     }
     assert.equal(first, QUESTIONS.symptom);
-    assert.equal(second, QUESTIONS.symptom);
+    assert.equal(second, QUESTIONS.size);
     assert.equal(third, QUESTIONS.size);
     assert.match(quote, /Devant 55/);
     assert.match(quote, /Possible backlight/);
@@ -89,6 +92,45 @@ test('Devant, sira, 1yr, Lipa, wala pa asks the symptom, then the size, then a p
     assert.equal(s.app.store.thread('dv').slots.location.toLowerCase().includes('lipa'), true);
     assert.equal(detectLocation(s.app.store.thread('dv').slots.location).branch, 'San Pablo');
   } finally { await s.close(); }
+});
+
+test('wala pa keeps the symptom already given and asks the next missing item', () => {
+  const asked = {
+    history: [
+      { role: 'user', content: 'Devant po, sira, 1 year, Lipa Batangas' },
+      { role: 'assistant', content: QUESTIONS.symptom },
+    ],
+    lastAskedTopic: 'symptom',
+  };
+  updateIntake(asked, 'wala pa sa ibang shop', false);
+  assert.equal(asked.slots.symptom, 'sira');
+  assert.equal(missingSlot(asked), 'size');
+  assert.notEqual(QUESTIONS[missingSlot(asked)], QUESTIONS.symptom);
+
+  const lines = { history: [{ role: 'user', content: 'Samsung po, may lines' }] };
+  updateIntake(lines, '', false);
+  assert.equal(lines.slots.symptom, 'lines');
+  updateIntake(lines, 'wala pa sa ibang shop', false);
+  assert.equal(lines.slots.symptom, 'lines');
+  assert.equal(missingSlot(lines), 'size');
+
+  const powered = { history: [{ role: 'user', content: 'LG po, ayaw mag-on' }] };
+  updateIntake(powered, 'wala pa', false);
+  assert.equal(powered.slots.symptom, 'power');
+  assert.equal(missingSlot(powered), 'size');
+});
+
+test('a set that will not turn on gets the size range and a check-up', () => {
+  const text = quoteKnownTv({ slots: { brand: 'LG', size: '32"', symptom: 'power' } });
+  assert.match(text, /LG 32/);
+  assert.match(text, /₱2,000–₱3,500/);
+  assert.match(text, /Possible power supply o motherboard/);
+  assert.match(text, /[Cc]heck-up/);
+  assert.match(text, /Kailan po sila free/);
+  assert.equal(quotedPrice({ appliance: 'TV', brand: 'LG', size: '32', problem: 'ayaw mag-on' }), 2000);
+  assert.equal(quotedPrice({ appliance: 'Washing machine', brand: 'LG', problem: 'ayaw umikot' }), 0);
+  const fiftyFive = quoteKnownTv({ slots: { brand: 'Samsung', size: '55', symptom: 'power' } });
+  assert.match(fiftyFive, /₱5,000–₱8,000/);
 });
 
 test('lines without a size ask inches, then quote; a dead set names the cause', async () => {
@@ -105,6 +147,10 @@ test('lines without a size ask inches, then quote; a dead set names the cause', 
     const dead = await s.say('lg', 'LG 32 inch po, ayaw mag-on, taga Imus Cavite');
     assert.match(dead, /LG 32/);
     assert.match(dead, /Possible power supply o motherboard/);
+    assert.match(dead, /₱2,000/);
+    assert.match(dead, /₱3,500/);
+    assert.match(dead, /all-in/);
+    assert.match(dead, /[Cc]heck-up/);
     assert.match(dead, /Kailan po sila free/);
     assert.doesNotMatch(dead, /Imus/);
     assert.equal(detectLocation('Imus Cavite').branch, 'Cavite');

@@ -3,7 +3,7 @@
 // create the booking through the Supabase edge function ops-booking-intake (same payload as the
 // jmagscutomerform.netlify.app form). BOOKING_INTAKE_URL unset = dry run (logged, nothing sent).
 // Any failure falls back to the booking form link, prefilled with what we collected.
-const { knownSize, LCD_MOD, BACKLIGHT, PRICES } = require('./estimate');
+const { knownSize, LCD_MOD, BACKLIGHT, PRICES, powerPriceRange } = require('./estimate');
 const { detectLocation } = require('./branch');
 const hours = require('./hours');
 
@@ -151,6 +151,10 @@ function quotedPrice(f) {
     return BACKLIGHT[n] || 0;
   }
   if (/linya|lines|guhit|modif/i.test(p)) return LCD_MOD[n] || 0;
+  if (/ayaw mag-?on|hindi (?:nag-?o?on|bumubukas)|di umaandar|walang power|\bno power\b|won'?t turn on|power supply|motherboard/i.test(p)) {
+    const range = powerPriceRange(n);
+    return range ? range.low : 0;
+  }
   return 0;
 }
 
