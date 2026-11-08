@@ -12,6 +12,7 @@ const { howIvanThinks } = require('../src/ivan-thinks');
 const {
   optOutReason, staffEscalation, publicCommentReply, PUBLIC_COMMENT_REPLY, STAFF_HANDOFF_LINE,
 } = require('../src/reply-rules');
+const { PRICE_ASK, PRICE_ASK_AGAIN, CALL_LINE } = require('../src/recency');
 
 const SECRET = 's';
 const MAIN = '102622881557025';
@@ -51,7 +52,11 @@ async function setup(extra = {}) {
       object: 'page',
       entry: [{ id: MAIN, time: ts, messaging: [{ sender: { id: psid }, recipient: { id: MAIN }, timestamp: ts, message: { mid: `r.${n}`, text } }] }],
     });
+    return sWait(app, psid);
   };
+  function sWait(app, psid) {
+    return app.store.thread(psid).history.filter((h) => h.role === 'assistant').map((h) => h.content).at(-1) || '';
+  }
   const comment = async (id, text, fromId) => {
     await post({
       object: 'page',
@@ -166,5 +171,37 @@ test('a public comment never asks for a phone number or a full address', async (
     assert.equal(s.app.store.thread('fan3').needsStaff, true);
     assert.equal(s.app.store.thread('fan3').handoffReason, 'complaint');
     assert.ok(s.mock.calls.labels.some((row) => row.user === 'fan3'));
+  } finally { await s.close(); }
+});
+
+test('a stale video review does not stall a new price question, and a repeat is rephrased', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Si Ivan na po ang nagre-review ng video. Ipapadala po namin ang all-in price soon. Kung urgent po, tumawag sa 09386369374.';
+  const old = Date.now() - 30 * 3600 * 1000;
+  const thread = s.app.store.thread('live');
+  thread.problemViaVideo = true;
+  thread.mediaNotes = ['[Customer sent a video at 10:00 - RECEIVED, forwarded to the technician for review. You cannot view it, but it WAS received.]'];
+  thread.lastMediaAckAt = old;
+  s.app.store.addTurn('live', 'user', 'Samsung 55 inch\n[Customer sent a video at 10:00 - RECEIVED]', old);
+  s.app.store.addTurn('live', 'assistant', 'We are still awaiting Ivan\'s review ng video. Pakisabi kung kailan po kayo free para ma-assign ang schedule.', old + 1000);
+  try {
+    const schedule = await s.say('live', 'Pwde kayo bukas?');
+    const first = await s.say('live', 'Magkano pagawa');
+    const second = await s.say('live', 'Magkano pagawa tv?');
+    const fresh = await s.say('live', 'May panibago ako ipapagawa');
+    const sent = [schedule, first, second, fresh];
+    for (const line of sent) {
+      assert.doesNotMatch(line, /Ivan/);
+      assert.doesNotMatch(line, /09386369374|09267229506/);
+      assert.doesNotMatch(line, /nagre-review|all-in price soon/i);
+    }
+    assert.match(schedule, /ilang inches po/i);
+    assert.equal(first, PRICE_ASK);
+    assert.equal(second, PRICE_ASK_AGAIN);
+    assert.notEqual(first, second);
+    assert.match(fresh, /ilang inches|anong brand/i);
+    assert.equal(s.app.store.thread('live').problemViaVideo, false);
+    const numbers = await s.say('call', 'anong number niyo po');
+    assert.equal(numbers, CALL_LINE);
   } finally { await s.close(); }
 });

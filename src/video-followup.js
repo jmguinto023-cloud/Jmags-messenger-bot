@@ -70,12 +70,12 @@ function videoFollowupText(thread, { second = false } = {}) {
   if (!missing.length) {
     return second
       ? 'Hello po ulit 😊 Kung gusto niyo na pong ipa-check, pwede po nating i-book ang home service check-up. Sabihin lang po kung kailan kayo available.'
-      : 'Hello po 😊 Na-review na po ba ni Ivan yung video? Kung okay lang po, pwede na po nating i-book ang home service check-up. Sabihin lang po kung kailan kayo available.';
+      : 'Hello po 😊 Na-review na po ba ng technician namin yung video? Kung okay lang po, pwede na po nating i-book ang home service check-up. Sabihin lang po kung kailan kayo available.';
   }
   const list = taglishList(missing);
   return second
     ? `Hello po ulit 😊 Pasensya na po sa abala. Pag may oras lang po, pwede po bang malaman ang ${list} ng TV? Para lang po ma-check namin agad ang schedule.`
-    : `Hello po 😊 Na-review na po ba ni Ivan yung video? Habang hinihintay po, pwede po bang malaman ang ${list} ng TV para ma-check namin agad ang schedule?`;
+    : `Hello po 😊 Na-review na po ba ng technician namin yung video? Habang hinihintay po, pwede po bang malaman ang ${list} ng TV para ma-check namin agad ang schedule?`;
 }
 
 module.exports = { quietDeferUntil, videoFacts, videoFollowupText };

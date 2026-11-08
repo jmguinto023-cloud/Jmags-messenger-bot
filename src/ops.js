@@ -21,9 +21,9 @@ const MONTHS = ['Enero', 'Pebrero', 'Marso', 'Abril', 'Mayo', 'Hunyo', 'Hulyo', 
 const ASK_BOTH = 'Para macheck ko po ang status, pakisabi ang pangalan at phone number na ginamit sa booking.';
 const ASK_NAME = 'Salamat po. Paki-confirm lang ang buong pangalan na naka-book.';
 const ASK_PHONE = 'Salamat po. Paki-send lang ang phone number na ginamit sa booking.';
-const UNSURE = 'Pasensya na po, hindi ko mahanap ang eksaktong record. Ipapaabot ko na po kay Ivan.';
+const UNSURE = 'Pasensya na po, hindi ko mahanap ang eksaktong record. Ipapaabot ko na po sa technician namin.';
 const DELIVERY_NOTICE = 'Hello po 😊 Good news po! Okay na po ang TV niyo at ready na for delivery. Ichecheck lang po namin ang schedule at babalikan po namin kayo para sa delivery.';
-const DELIVERY_STATUS = 'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Si Ivan po ang magko-confirm ng schedule.';
+const DELIVERY_STATUS = 'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Ang technician po namin ang magko-confirm ng schedule.';
 
 function emptyOps() {
   return {
@@ -696,7 +696,7 @@ function noteSentence(note) {
 function jobStatusText(job) {
   const note = noteSentence(job.statusNote);
   if (job.status === 'For Delivery') {
-    if (note) return `Hello po 😊 Okay na po ang TV niyo at ready na for delivery. ${note} Si Ivan po ang magko-confirm ng schedule.`;
+    if (note) return `Hello po 😊 Okay na po ang TV niyo at ready na for delivery. ${note} Ang technician po namin ang magko-confirm ng schedule.`;
     return DELIVERY_STATUS;
   }
   const status = friendlyStatus(job.status);
@@ -715,7 +715,7 @@ function warrantyEndOf(job) {
 }
 
 function warrantyText(job) {
-  return `Hello po 😊 Nasa warranty pa po ang unit hanggang ${longDate(warrantyEndOf(job))}. Pakisend lang po ng issue at video para ma-check ni Ivan. Hindi pa po ako makakapangako kung covered.`;
+  return `Hello po 😊 Nasa warranty pa po ang unit hanggang ${longDate(warrantyEndOf(job))}. Pakisend lang po ng issue at video para ma-check ng technician. Hindi pa po ako makakapangako kung covered.`;
 }
 
 function inWarranty(job, now, tz) {

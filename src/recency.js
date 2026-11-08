@@ -4,12 +4,88 @@
 
 const STALE_MS = 12 * 60 * 60 * 1000;
 
-const PENDING_REVIEW_STATUS = 'Si Ivan na po ang nagre-review pa ng video. Ipapadala po namin ang all-in price soon. Kung urgent po, pwede kayong tumawag sa 09386369374 (Smart) o 09267229506 (Globe).';
-
-const REVIEW_CLARIFY = 'Pakilinaw lang po. Tungkol po ba ito sa video na nire-review ni Ivan para sa all-in price?';
+const REVIEW_MS = 24 * 60 * 60 * 1000;
+const PENDING_REVIEW_STATUS = 'Ang technician po namin ang nagre-review pa ng video. Ipapadala po namin ang all-in price soon.';
+const REVIEW_CLARIFY = 'Pakilinaw lang po. Tungkol po ba ito sa video na nire-review ng technician namin para sa all-in price?';
+const PRICE_ASK = "Depende po sa size at sira, ma'am/sir. Ilang inches po?";
+const PRICE_ASK_AGAIN = "Depende po sa size at sira, ma'am/sir. Ilang inches po at anong brand?";
+const CALL_LINE = 'Pwede po kayong tumawag sa 09386369374 (Smart) o 09267229506 (Globe).';
 
 function reviewPending(thread) {
   return Boolean(thread && (thread.problemViaVideo || (thread.mediaNotes || []).length));
+}
+
+function explicitNewUnit(text) {
+  return /\bpanibago\b|\bibang tv\b|\banother tv\b|\bbagong (?:tv|unit)\b|\bnew tv\b/i.test(String(text || ''));
+}
+
+function asksBarePrice(text) {
+  const t = String(text || '');
+  if (/check-?\s*up|checkup|tsek-?\s*ap|tsekap/i.test(t)) return false;
+  if (/\b(inch|pulgada|samsung|lg|tcl|sony|devant|astron|backlight|linya|lines|display)\b/i.test(t)) return false;
+  return /\bpagawa\b|\bipapagawa\b/i.test(t);
+}
+
+function asksForACall(text) {
+  return /\btumawag\b|\btawagan\b|\bnumero\b|\bphone\b|\bcontact number\b|anong number|paano (?:po )?(?:kami )?(?:tatawag|tumawag)/i.test(String(text || ''));
+}
+
+function mediaClock(thread) {
+  let ts = Number(thread && thread.lastMediaAckAt) || 0;
+  for (const h of (thread && thread.history) || []) {
+    const content = String((h && h.content) || '');
+    if (/\[Customer sent a (?:video|photo)/i.test(content) || /nasend ko na ang vide/i.test(content)) {
+      ts = Math.max(ts, Number(h.ts) || 0);
+    }
+  }
+  return ts;
+}
+
+// A video from yesterday is not the job they are asking about now.
+function reviewIsCurrent(thread, now = Date.now()) {
+  if (!reviewPending(thread)) return false;
+  const at = mediaClock(thread) || Number(thread.lastUserTs) || 0;
+  if (!at) return false;
+  return now - at < REVIEW_MS;
+}
+
+function releaseOldReview(thread, latestText, now = Date.now()) {
+  if (!thread) return false;
+  const pending = reviewPending(thread) || thread.intakeClosed;
+  if (!pending) return false;
+  if (reviewIsCurrent(thread, now) && !explicitNewUnit(latestText)) return false;
+  thread.problemViaVideo = false;
+  thread.intakeClosed = false;
+  thread.intakeCloseSent = false;
+  thread.mediaNotes = [];
+  thread.awaitingVideo = false;
+  thread.videoReplyAt = 0;
+  thread.intakeEpoch = now;
+  if (thread.slots) {
+    thread.slots.brand = '';
+    thread.slots.size = '';
+    thread.slots.symptom = '';
+    thread.slots.brandSize = '';
+    thread.slots.problemOrVideo = false;
+    thread.slots.problemText = '';
+    thread.slots.age = '';
+    thread.slots.location = '';
+    thread.slots.repairedElsewhere = '';
+  }
+  return true;
+}
+
+function sameText(a, b) {
+  return String(a || '').replace(/\s+/g, ' ').trim().toLowerCase() === String(b || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// A second identical price question gets the explanation, not a copy of the first bubble.
+function varyRepeated(thread, text) {
+  const last = [...((thread && thread.history) || [])].reverse().find((h) => h && h.role === 'assistant' && h.content);
+  if (!last || !sameText(last.content, text)) return text;
+  if (sameText(text, PRICE_ASK) || /para mabigyan po kayo ng range/i.test(text)) return PRICE_ASK_AGAIN;
+  if (sameText(text, PRICE_ASK_AGAIN)) return 'Anong brand po ng TV?';
+  return text;
 }
 
 function mentionsOldBooking(text) {
@@ -104,9 +180,19 @@ function guardStaleReply(thread, text, latestUser) {
 
 module.exports = {
   STALE_MS,
+  REVIEW_MS,
   PENDING_REVIEW_STATUS,
   REVIEW_CLARIFY,
+  PRICE_ASK,
+  PRICE_ASK_AGAIN,
+  CALL_LINE,
   reviewPending,
+  reviewIsCurrent,
+  releaseOldReview,
+  explicitNewUnit,
+  asksBarePrice,
+  asksForACall,
+  varyRepeated,
   mentionsOldBooking,
   blamesCustomer,
   asksReviewStatus,

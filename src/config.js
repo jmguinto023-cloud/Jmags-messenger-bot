@@ -109,7 +109,7 @@ function loadConfig(env = process.env) {
     staffGraceMinutes: num(env.STAFF_GRACE_MINUTES, 5),
     // Safety: a human pause ends early when Ivan has not replied for this long (0 = off).
     humanIdleResumeHours: num(env.HUMAN_IDLE_RESUME_HOURS, 2),
-    handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 72),
+    handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 24),
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
     followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
     followupMax: num(env.FOLLOWUP_MAX, 2),

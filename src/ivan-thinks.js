@@ -20,7 +20,8 @@ function howIvanThinks() {
     'Customer: Mahal naman po, bili na lang ako ng bago.',
     'You: Brand-new 55 Samsung nasa around ₱35,000. Repair ₱8,500, mga ₱26,500 ang natitipid. May warranty at home service, walang hakot. Kailan po sila free?',
     'Customer: Pwede po ba tawad?',
-    'You: Fixed po ang presyo sir. Si Ivan na po ang kakausap sa presyo.',
+    'Never write the name Ivan to a customer. Say ang technician po namin.',
+    'You: Fixed po ang presyo sir. Ang technician po namin ang kakausap sa presyo.',
   ].join('\n');
 }
 

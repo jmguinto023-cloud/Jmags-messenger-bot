@@ -142,12 +142,12 @@ test('money totals, job ids, warranty date, and sample replies', () => {
   assert.equal(jobStatusText({ status: 'For Delivery', statusNote: '' }), DELIVERY_STATUS);
   assert.equal(
     jobStatusText({ status: 'For Delivery', statusNote: 'hinihintay po ang schedule' }),
-    'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Note: hinihintay po ang schedule. Si Ivan po ang magko-confirm ng schedule.',
+    'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Note: hinihintay po ang schedule. Ang technician po namin ang magko-confirm ng schedule.',
   );
   assert.equal(DELIVERY_NOTICE, 'Hello po 😊 Good news po! Okay na po ang TV niyo at ready na for delivery. Ichecheck lang po namin ang schedule at babalikan po namin kayo para sa delivery.');
-  assert.equal(DELIVERY_STATUS, 'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Si Ivan po ang magko-confirm ng schedule.');
+  assert.equal(DELIVERY_STATUS, 'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Ang technician po namin ang magko-confirm ng schedule.');
   const warranty = warrantyText({ date: '2026-10-18', warrantyEnd: '2027-01-18' });
-  assert.equal(warranty, 'Hello po 😊 Nasa warranty pa po ang unit hanggang 18 Enero 2027. Pakisend lang po ng issue at video para ma-check ni Ivan. Hindi pa po ako makakapangako kung covered.');
+  assert.equal(warranty, 'Hello po 😊 Nasa warranty pa po ang unit hanggang 18 Enero 2027. Pakisend lang po ng issue at video para ma-check ng technician. Hindi pa po ako makakapangako kung covered.');
   assert.doesNotMatch(warranty, /\blibre\b|siguradong covered|covered po ito/i);
 
   assert.equal(asksJobStatus('ano na status'), true);
@@ -491,7 +491,7 @@ test('status answers come from the matching job and never from another customer'
     await s.post(msg('ask-2', 'ano na status', NOON + 6000));
     await s.post(msg('ask-2', 'ako si Liza Mercado', NOON + 6500));
     await s.post(msg('ask-2', '09180002233', NOON + 7000));
-    assert.match(s.mock.calls.messages.at(-1).message.text, /Ipapaabot ko na po kay Ivan/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Ipapaabot ko na po sa technician namin/);
     assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /Nico|secret note|9 Sample Road|Liza Mercado/);
     assert.ok(s.mock.calls.pass.length >= 1);
     assert.equal(s.app.store.thread('ask-2').handedOff, true);
@@ -717,7 +717,7 @@ test('For Delivery notifies once inside the reply window and lists a text otherw
     await s.post(msg(psid, 'kumusta na TV ko', NOON + 1000));
     assert.equal(
       s.mock.calls.messages.at(-1).message.text,
-      'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Note: hinihintay po ang schedule. Si Ivan po ang magko-confirm ng schedule.',
+      'Hello po 😊 Okay na po ang TV niyo at ready na for delivery. Note: hinihintay po ang schedule. Ang technician po namin ang magko-confirm ng schedule.',
     );
 
     await postAction({

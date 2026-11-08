@@ -2,7 +2,7 @@
 // What we already know about a TV job, so the bot does not ask for it again.
 const { summarizeConversation } = require('./summary');
 
-const CLOSE_LINE = 'Salamat po. Si Ivan na po ang nagre-review ng video at ipapadala po namin ang all-in price shortly 😊';
+const CLOSE_LINE = 'Salamat po. Ang technician po namin ang nagre-review ng video at ipapadala po namin ang all-in price shortly.';
 
 const QUESTIONS = {
   symptom: 'Ano po ang sira? May sound pero walang picture, may lines, o ayaw mag-on?',
@@ -68,8 +68,9 @@ const FACT_MS = 7 * 24 * 3600 * 1000;
 function factsBlob(thread, now = Date.now()) {
   const cutoff = now - FACT_MS;
   // Customer lines only. The bot's own questions name symptoms ("may lines") and must not fill slots.
+  const epoch = Number(thread && thread.intakeEpoch) || 0;
   return (thread && thread.history || [])
-    .filter((h) => h && h.role === 'user' && h.content && (!h.ts || h.ts >= cutoff))
+    .filter((h) => h && h.role === 'user' && h.content && (!h.ts || h.ts >= cutoff) && (!h.ts || h.ts >= epoch))
     .map((h) => h.content)
     .join('\n');
 }
@@ -94,7 +95,16 @@ function updateIntake(thread, latestText, hasMedia) {
     slots.problemText = summary.problem;
   }
   if (summary.location) slots.location = summary.location;
-  if (hasMedia || /\[Customer sent a (?:video|photo)\]/i.test(blob) || problemClaim(blob) || problemClaim(latestText)) {
+  const epoch = Number(thread.intakeEpoch) || 0;
+  const recentMedia = (thread.history || []).some((h) => {
+    if (!h || !/\[Customer sent a (?:video|photo)/i.test(h.content || '')) return false;
+    const ts = Number(h.ts) || 0;
+    if (epoch && ts && ts < epoch) return false;
+    if (!ts) return false;
+    return Date.now() - ts < 24 * 60 * 60 * 1000;
+  });
+  const spoken = latestCustomerText(thread, latestText);
+  if (hasMedia || problemClaim(spoken) || (recentMedia && !/\bpanibago\b|\bibang tv\b/i.test(spoken))) {
     thread.problemViaVideo = true;
     slots.problemOrVideo = true;
   }
@@ -135,7 +145,7 @@ function intakeContext(thread) {
   ];
   const ask = nextAsk(thread);
   if (thread.intakeClosed) {
-    lines.push('Intake is complete: a video was sent and they gave location and TV age. Do not ask any intake question. Only answer what they just asked. The price will come from Ivan after he reviews the video. Do not mention an older booking or cancellation. Never blame the customer or say they themselves asked to cancel.');
+    lines.push('Intake is complete: a video was sent and they gave location and TV age. Do not ask any intake question. Only answer what they just asked. The price will come from the technician after the video is reviewed. Do not mention an older booking or cancellation. Never blame the customer or say they themselves asked to cancel. Never write the name Ivan.');
   } else if (ask) {
     lines.push(`Ask only ONE still-missing item, and do not repeat their brand, age, or city. Ask only: ${ask}`);
   } else {
@@ -244,7 +254,7 @@ function applyReplyGuard(thread, text) {
   if (thread.intakeClosed && topic) {
     const kept = body.split(/(?<=[.!?])\s+/).filter((part) => !questionTopic(part)).join(' ').trim();
     thread.lastAskedTopic = '';
-    return kept || 'Noted po. Si Ivan na po ang titingin sa video at magpapadala ng all-in price shortly.';
+    return kept || 'Noted po. Ang technician po namin ang titingin sa video at magpapadala ng all-in price shortly.';
   }
   thread.lastAskedTopic = topic;
   return body;

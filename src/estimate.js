@@ -43,7 +43,7 @@ function manilaClock(ts, tz = 'Asia/Manila') {
 
 function mediaReceivedNote(kind, ts, tz) {
   const when = manilaClock(ts, tz);
-  return `[Customer sent a ${kind} at ${when} - RECEIVED, forwarded to technician Ivan for review. You cannot view it, but it WAS received.]`;
+  return `[Customer sent a ${kind} at ${when} - RECEIVED, forwarded to the technician for review. You cannot view it, but it WAS received.]`;
 }
 
 function asksCheckupFee(text) {
@@ -100,13 +100,13 @@ function appendCheckupNudge(text, thread) {
 
 function reviewStatus(thread) {
   const range = rangeSentence(thread);
-  const base = 'Si Ivan na po ang nagre-review ng video at magme-message po kami ng all-in price soon.';
+  const base = 'Ang technician po namin ang nagre-review ng video at magme-message po kami ng all-in price soon.';
   return range ? `${base} ${range}` : base;
 }
 
 function estimateReply(thread) {
   return rangeSentence(thread)
-    || 'Para mabigyan po kayo ng range, anong brand at size po ng TV? Si Ivan na po ang nagre-review ng video.';
+    || "Depende po sa size at sira, ma'am/sir. Ilang inches po?";
 }
 
 function mediaWasReceived(thread) {
@@ -233,12 +233,12 @@ function confirmedPriceReply(latest, thread = {}) {
     return backlightQuote(label, price, possible);
   }
   if (fault === 'lcd-mod') {
-    if (!LCD_MOD[size]) return '85" LCD modification po, wala pang confirmed price. Si Ivan na po ang magko-confirm.\n[HANDOFF: 85 inch LCD modification has no confirmed price]';
+    if (!LCD_MOD[size]) return '85" LCD modification po, wala pang confirmed price. Ang technician po namin ang magko-confirm.\n[HANDOFF: 85 inch LCD modification has no confirmed price]';
     return lcdQuote(label, LCD_MOD[size]);
   }
   if (!asksPrice(ask)) return '';
   if (size === 85) {
-    return `85" po sir. Backlight ${phpAmount(BL85.other)} other brands, ${phpAmount(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant. LCD modification, si Ivan na po.\nAno po ang sira?`;
+    return `85" po sir. Backlight ${phpAmount(BL85.other)} other brands, ${phpAmount(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant. LCD modification, ang technician po namin ang magko-confirm.\nAno po ang sira?`;
   }
   const back = BACKLIGHT[size];
   const mod = LCD_MOD[size];
@@ -252,7 +252,7 @@ const WARRANTY_LINE = 'May warranty po sir. Backlight at new LCD 6 months. Mothe
 
 function discountReply(text) {
   if (!/discount|tawad|\bpromo\b|less pa|pa[\s-]*less|ibababa|lower (?:the )?price/i.test(text || '')) return '';
-  return 'Fixed po ang presyo sir. Kasama ang warranty at home service, walang hakot. Si Ivan na po ang kakausap.\n[HANDOFF: asked for a discount]';
+  return 'Fixed po ang presyo sir. Kasama ang warranty at home service, walang hakot. Ang technician po namin ang kakausap.\n[HANDOFF: asked for a discount]';
 }
 
 function locationReply(text) {
@@ -264,7 +264,7 @@ function warrantyReply(text) {
   const t = String(text || '');
   if (!/warranty|garantiya|garanty/i.test(t)) return '';
   if (/sira ulit|nasira|backjob|walang resibo|no receipt/i.test(t)) {
-    return 'Warranty po nito, si Ivan na ang titingin sir.\n[HANDOFF: warranty question]';
+    return 'Warranty po nito, ang technician po namin ang titingin sir.\n[HANDOFF: warranty question]';
   }
   if (/backlight/i.test(t)) return 'Backlight po sir, 6 months warranty.';
   if (/new lcd|lcd panel/i.test(t)) return 'New LCD panel po sir, 6 months warranty.';
@@ -273,7 +273,7 @@ function warrantyReply(text) {
   if (/rebond/i.test(t)) return 'Rebonding po sir, 3 months warranty.';
   if (/lcd repair|lcd modification|\bmodif/i.test(t)) return 'LCD repair po sir, 3 months (32-65) o 2 months (70-85).';
   if (/warranty (?:ng|sa|for)\b/i.test(t)) {
-    return 'Warranty po nito, si Ivan na ang magko-confirm sir.\n[HANDOFF: warranty question]';
+    return 'Warranty po nito, ang technician po namin ang magko-confirm sir.\n[HANDOFF: warranty question]';
   }
   return WARRANTY_LINE;
 }
@@ -312,7 +312,7 @@ function quoteKnownTv(thread = {}) {
   const when = 'Kailan po sila free?';
   if (s.symptom === 'lines') {
     const price = LCD_MOD[n];
-    if (!price) return `${label} po sir. LCD modification, si Ivan na po ang magko-confirm. ${when}`;
+    if (!price) return `${label} po sir. LCD modification, ang technician po namin ang magko-confirm. ${when}`;
     return `${label} po sir. LCD modification ${phpAmount(price)}. Kasama repair, warranty, at home service. ${when}`;
   }
   if (s.symptom === 'backlight') {

@@ -2,7 +2,7 @@
 // Reply rules from Jm's handover. Check-up fees in the doc are not repeated here.
 
 const PUBLIC_COMMENT_REPLY = 'Salamat po. I-message niyo po kami sa Messenger para sa booking: brand, size, sira, at city.';
-const STAFF_HANDOFF_LINE = 'Sige po. Si Jm o Ivan na po ang sasagot dito.';
+const STAFF_HANDOFF_LINE = 'Sige po. Ang technician po namin ang sasagot dito.';
 
 function optOutReason(text) {
   const t = String(text || '').trim();

@@ -36,17 +36,28 @@ function nonFlatscreenLine(text) {
   const t = String(text || '');
   if (!NON_FLATSCREEN.test(t)) return '';
   if (/\bcrt\b|cathode|picture tube|\btube tv\b|makapal na tv/i.test(t)) {
-    return 'CRT po ba sir? Si Ivan na po ang sasagot dito.';
+    return 'CRT po ba sir? Ang technician po namin ang sasagot dito.';
   }
-  return 'Hindi po flatscreen ito sir? Si Ivan na po ang sasagot dito.';
+  return 'Hindi po flatscreen ito sir? Ang technician po namin ang sasagot dito.';
+}
+
+// Customers never hear a staff name. "Ivan" in a model draft becomes the technician.
+function hideStaffName(text) {
+  return String(text ?? '')
+    .replace(/\bSi Ivan na po\b/gi, 'Ang technician po namin')
+    .replace(/\bsi Ivan po\b/gi, 'ang technician po namin')
+    .replace(/\bsi Ivan\b/gi, 'ang technician po namin')
+    .replace(/\bni Ivan\b/gi, 'ng technician')
+    .replace(/\bkay Ivan\b/gi, 'sa technician')
+    .replace(/\bIvan\b/g, 'technician');
 }
 
 function sanitizeOutgoing(text) {
-  return String(text ?? '')
+  return hideStaffName(String(text ?? '')
     .replace(/\*\*/g, '')
     .replace(/__/g, '')
     .replace(/`+/g, '')
-    .replace(/^[ \t]*#{1,6}[ \t]*/gm, '')
+    .replace(/^[ \t]*#{1,6}[ \t]*/gm, ''))
     .trim();
 }
 
@@ -66,14 +77,14 @@ const lines = {
   fallback:
     "Hi po maam/sir, salamat po sa message sa JMAG's Appliances! 😊 Para mabigyan po namin kayo agad ng presyo, paki-send lang po: brand at size ng TV, issue, at taga saan po sila 🙏",
   holding:
-    'Noted po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito. Saglit lang po.',
+    'Noted po maam/sir. Ang technician po namin ang tutuloy dito. Saglit lang po.',
   holdingMedia:
-    'Noted po maam/sir 🙏 Natanggap po namin, si Ivan na po ang titingin at tutuloy sa inyo dito. Saglit lang po.',
+    'Noted po maam/sir. Natanggap po namin. Ang technician po namin ang titingin dito. Saglit lang po.',
   // Photo/video stay in this chat. No "video" in the text (a later follow-up treats that word as a request).
   mediaAck:
     'Salamat po! Ipapacheck ko po sa technician.',
   holdingPerson:
-    'Sige po maam/sir 🙏 Si Ivan na po ang tutuloy sa inyo dito. Saglit lang po.',
+    'Sige po maam/sir. Ang technician po namin ang tutuloy dito. Saglit lang po.',
   sanitizeOutgoing,
   capCustomerReply,
   replyRejected,
