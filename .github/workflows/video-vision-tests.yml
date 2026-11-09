@@ -23,4 +23,4 @@ jobs:
       - name: Install isolated FFmpeg dependency
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Run unit, security, and end-to-end simulated video analysis tests
-        run: node --test test/video-diagnosis.test.js test/video-frame-extractor.test.js test/video-review.test.js test/video-end-to-end.test.js
+        run: node --test test/video-diagnosis.test.js test/video-frame-extractor.test.js test/video-review.test.js test/video-end-to-end.test.js test/video-staging-server.test.js
