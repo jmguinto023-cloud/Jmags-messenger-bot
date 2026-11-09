@@ -35,18 +35,37 @@ function createStagingServer({ token = process.env.VIDEO_STAGING_ADMIN_TOKEN || 
   let inProgress = false;
   let lastStarted = -Infinity;
   return http.createServer(async (req, res) => {
-    // No CORS, cookies, video URLs, or customer uploads are accepted.
-    if (req.method === 'GET' && req.url === '/health') {
+    // Route by pathname, so share-link tracking parameters cannot break the home page.
+    // Still do not accept arbitrary URLs, media uploads, cookies or customer files.
+    let route;
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      route = url.pathname.length > 1 ? url.pathname.replace(/\\/+$/g, '') : url.pathname;
+    } catch {
+      return json(res, 400, { error: 'invalid address' });
+    }
+    if (req.method === 'GET' && route === '/health') {
       return json(res, 200, { service: 'jmags-video-ai-staging',
         syntheticOnly: true, messengerMessagingEnabled: false, enabled: token.length >= 32 });
     }
-    if (req.method === 'GET' && req.url === '/') {
+    if (req.method === 'GET' && (route === '/' || route === '/test')) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8',
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
         'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff' });
       return res.end(INDEX);
     }
-    if (req.method !== 'POST' || req.url !== '/api/self-test') return json(res, 404, { error: 'not found' });
+    if (route === '/api/self-test' && req.method === 'GET') {
+      return json(res, 405, {
+        error: 'Open the JMAGS Video AI home page and use the test button. This endpoint accepts authenticated POST only.',
+        home: 'https://jmags-video-ai-staging.onrender.com/'
+      });
+    }
+    if (req.method !== 'POST' || route !== '/api/self-test') {
+      return json(res, 404, {
+        error: 'Page not found. Open the JMAGS Video AI home page.',
+        home: 'https://jmags-video-ai-staging.onrender.com/'
+      });
+    }
     if (token.length < 32) return json(res, 503, { error: 'staging token not configured' });
     if (!safeEqual(req.headers.authorization, 'Bearer ' + token)) return json(res, 401, { error: 'unauthorized' });
     if (inProgress || clock() - lastStarted < cooldownMs) return json(res, 429, { error: 'test busy; rate limited' });
