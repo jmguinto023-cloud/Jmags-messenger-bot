@@ -60,6 +60,16 @@ function startMock({ llmResponder } = {}) {
         const parts = url.pathname.split('/').filter(Boolean);
         const convoId = decodeURIComponent(parts[parts.length - 2] || '');
         calls.threadMessages.push({ id: convoId, limit: url.searchParams.get('limit') });
+        const pages = state.messagePages && state.messagePages[convoId];
+        if (pages) {
+          const index = Math.max(0, Number(url.searchParams.get('page') || '1') - 1);
+          const data = pages[index] || [];
+          const token = url.searchParams.get('access_token') || '';
+          const next = index + 1 < pages.length
+            ? `http://${req.headers.host}${url.pathname}?page=${index + 2}&access_token=${encodeURIComponent(token)}`
+            : '';
+          return json(200, next ? { data, paging: { next } } : { data });
+        }
         const rows = (state.threadMessages && state.threadMessages[convoId]) || [];
         return json(200, { data: rows });
       }

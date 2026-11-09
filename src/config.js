@@ -78,6 +78,9 @@ function loadConfig(env = process.env) {
     llmMaxRpm: num(env.LLM_MAX_RPM, 15),
     // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
+    // Optional. Used only to read Netlify form submissions after the booking link is sent.
+    netlifyApiToken: (env.NETLIFY_API_TOKEN || '').trim(),
+    netlifyFormId: (env.NETLIFY_FORM_ID || '').trim(),
     // Messenger booking agent (off by default). BOOKING_INTAKE_URL unset = dry run, nothing is sent.
     bookingAgentEnabled: bool(env.BOOKING_AGENT_ENABLED, false),
     bookingIntakeUrl: (env.BOOKING_INTAKE_URL || '').trim(),

@@ -17,7 +17,11 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk, questionTopic, QUESTIONS } = require('./intake');
 const { noteEvidence, nextEvidenceAsk, nextStep, coreReady, remindsMissingProof, declinesEvidence, steerTurn, ASK_VIDEO } = require('./evidence');
-const { rememberJob, shapeReply, isWait, WAIT_LINE, staffVoice } = require('./quote-gate');
+const { rememberJob, shapeReply, isWait, WAIT_LINE, staffVoice, gatePassed } = require('./quote-gate');
+const {
+  customerBrief, withWelcome, wantsBooking, saysFormDone, formUrlFor, formMessage,
+  FORM_OK, FORM_MISSING, localJobs, submissionMatches, netlifySubmissions, phoneInThread,
+} = require('./customer-context');
 const { optOutReason, staffEscalation, publicCommentReply, STAFF_HANDOFF_LINE } = require('./reply-rules');
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
@@ -685,7 +689,7 @@ class Bot {
   // Pull Ivan's Page Inbox lines from the last 7 days so we do not ask again.
   async loadInboxHistory(psid) {
     let rows = [];
-    try { rows = await this.graph.recentMessages(psid); } catch (e) {
+    try { rows = await this.graph.recentMessages(psid, { limit: 100, withinMs: 90 * 86400e3 }); } catch (e) {
       this.log.warn('inbox history failed', e.message);
       return;
     }
@@ -704,8 +708,15 @@ class Bot {
     }
     if (!added) return;
     t.history.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    const max = (this.cfg.historyTurns || 20) * 2;
+    const max = Math.max((this.cfg.historyTurns || 20) * 2, 100);
     if (t.history.length > max) t.history.splice(0, t.history.length - max);
+    const newestStaff = [...t.history].reverse().find((h) => h && h.via === 'ivan' && h.ts);
+    const quietMs = (Number(this.cfg.humanPauseHours) || 12) * HOUR;
+    if (newestStaff && this.now() - newestStaff.ts < quietMs && t.pauseSource !== 'dashboard reply') {
+      t.lastHumanEchoAt = Math.max(t.lastHumanEchoAt || 0, newestStaff.ts);
+      t.pausedUntil = Math.max(t.pausedUntil || 0, newestStaff.ts + quietMs);
+      t.pauseSource = 'staff inbox history';
+    }
     this.store.save();
   }
 
@@ -793,6 +804,13 @@ class Bot {
         text: latestSoFar,
       });
       rememberJob(t);
+      const brief = await customerBrief(this.store, t, psid, {
+        url: this.cfg.supabaseUrl,
+        key: this.cfg.supabaseServiceRoleKey,
+        fetchImpl: this.fetchImpl,
+      });
+      t.customerContext = brief.text;
+      t.returning = brief.returning;
       if (t.waiting && isWait(latestSoFar)) {
         this.repliedRev.set(this.slot(psid), rev);
         return;
@@ -805,6 +823,21 @@ class Bot {
         return;
       }
       t.waiting = false;
+      if (t.bookingFormSent && saysFormDone(latestSoFar)) {
+        t.formDoneAt = t.formDoneAt || this.now();
+        const reported = await this.reportFormStatus(psid, t);
+        this.repliedRev.set(this.slot(psid), rev);
+        if (reported) return;
+      }
+      if (gatePassed(t) && wantsBooking(latestSoFar) && !t.bookingFormSent) {
+        const link = formUrlFor(this.cfg.bookingFormUrl, t, psid);
+        t.bookingFormSent = true;
+        t.formSentAt = this.now();
+        this.repliedRev.set(this.slot(psid), rev);
+        await this.send(psid, formMessage(link), { provider: 'rules' });
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
+        return;
+      }
 
       const hadMedia = Boolean((t.pendingMedia || []).length);
       const hadVideo = (t.pendingMedia || []).some((m) => m.type === 'video');
@@ -934,7 +967,7 @@ class Bot {
         raw = await this.llm.reply(modelHistory, {
           nowText: this.nowText(),
           attachmentNote,
-          intakeNote: intakeContext(t),
+          intakeNote: [intakeContext(t), t.customerContext].filter(Boolean).join(' '),
           mediaStatus: mediaStatus(t),
         });
         raw = await this.fitModelReply(psid, raw);
@@ -1063,6 +1096,7 @@ class Bot {
         clean = shaped.text;
       } else clean = shaped.text;
     }
+    if (thread.returning && !opts.ops && !opts.tips && !opts.videoFollowup) clean = withWelcome(thread, clean);
     if (!clean) { this.log.warn(`empty reply to ${short(psid)} after sanitize`); return; }
     const existing = this.store.thread(psid);
     if (clean === sanitizeOutgoing(lines.fallback)) {
@@ -1174,6 +1208,7 @@ class Bot {
     const t = this.store.thread(psid);
     if (t.handedOff) return;
     t.handedOff = true; t.handoffAt = this.now(); t.handoffReason = reason; t.passedByBot = true;
+    if (/warranty|backjob/i.test(String(reason || ''))) t.gateClosed = true;
     this.stopVideoFollowup(psid, 'handed to Ivan');
     this.store.save();
     this.log.info(`HANDOFF ${short(psid)}: ${reason}`);
@@ -1240,6 +1275,8 @@ class Bot {
   // Human pause still in force? Ends early when Ivan has gone quiet (HUMAN_IDLE_RESUME_HOURS).
   humanPaused(t, now = this.now()) {
     if (!t || !t.pausedUntil || now >= t.pausedUntil) return false;
+    // A staff inbox line keeps the thread quiet for the full 12h window.
+    if (t.pauseSource === 'staff inbox history') return true;
     const last = this.lastHumanAt(t);
     const idle = Number(this.cfg.humanIdleResumeHours) || 0;
     if (idle > 0 && last && now - last > idle * HOUR) {
@@ -1646,6 +1683,46 @@ class Bot {
     return sent;
   }
 
+  async formLanded(psid, thread) {
+    const phone = phoneInThread(thread);
+    const name = (thread.slots && thread.slots.customerName) || '';
+    const query = { psid, phone, name };
+    if (localJobs(this.store, query).length) return true;
+    const remote = await netlifySubmissions({
+      token: this.cfg.netlifyApiToken,
+      formId: this.cfg.netlifyFormId,
+      fetchImpl: this.fetchImpl,
+    });
+    return remote.some((row) => submissionMatches(row, query));
+  }
+
+  // One confirmation if the form arrived, or one nudge if it did not. Never a second nudge.
+  async reportFormStatus(psid, thread) {
+    if (!thread.bookingFormSent || thread.formConfirmed || thread.formMissNotified) return false;
+    const found = await this.formLanded(psid, thread);
+    if (found) {
+      thread.formConfirmed = true;
+      this.store.save();
+      await this.send(psid, FORM_OK, { provider: 'rules', skipGate: true });
+      return true;
+    }
+    thread.formMissNotified = true;
+    thread.needsStaff = true;
+    this.store.save();
+    await this.send(psid, FORM_MISSING, { provider: 'rules', skipGate: true });
+    return true;
+  }
+
+  async maybeFormChecks(now) {
+    const wait = 45 * 60 * 1000;
+    for (const [key, thread] of Object.entries(this.store.data.threads || {})) {
+      if (!thread || !thread.formDoneAt || thread.formConfirmed || thread.formMissNotified) continue;
+      if (now - thread.formDoneAt < wait) continue;
+      const psid = thread.psid || key;
+      try { await this.reportFormStatus(psid, thread); } catch (e) { this.log.warn('form check failed', e.message); }
+    }
+  }
+
   async checkFollowups() {
     if (this._followRunning) return;
     this._followRunning = true;
@@ -1658,6 +1735,7 @@ class Bot {
       // A job-status line answers the customer. Send it before a sales catch-up
       // so the same chat does not get two bubbles in one pass.
       await this.maybeDailyStatus(now);
+      await this.maybeFormChecks(now);
       let slots = 1;
       for (const [key, t] of Object.entries(this.store.data.threads)) {
         const page = this.pageForThread(t, key);

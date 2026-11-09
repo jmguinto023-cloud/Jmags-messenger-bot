@@ -174,9 +174,10 @@ class Graph {
       return '';
     }
   }
-  // Page Inbox history, including messages Ivan sent. Last 30, within 7 days.
+  // Page Inbox history, including messages human staff sent. Up to 100, paging
+  // through /{conversation-id}/messages, across the last 90 days.
   // Cached for a minute. A miss or a Graph error returns [] and does not throw.
-  async recentMessages(psid, { limit = 30, withinMs = 7 * 86400e3 } = {}) {
+  async recentMessages(psid, { limit = 100, withinMs = 90 * 86400e3 } = {}) {
     const id = String(psid || '');
     if (!id) return [];
     const key = `${this.pageNode()}:${id}`;
@@ -186,12 +187,28 @@ class Graph {
     let value = [];
     if (convo && convo.id) {
       try {
-        const json = await this.call('GET', `${encodeURIComponent(convo.id)}/messages`, {
-          params: { fields: 'message,from,created_time', limit: String(limit) },
-        });
+        const rawRows = [];
+        let nextUrl = '';
+        let first = true;
+        while (rawRows.length < limit && (first || nextUrl)) {
+          let json = null;
+          if (first) {
+            json = await this.call('GET', `${encodeURIComponent(convo.id)}/messages`, {
+              params: { fields: 'message,from,created_time', limit: String(Math.min(50, limit)) },
+            });
+          } else {
+            const res = await fetch(nextUrl);
+            if (!res.ok) break;
+            json = await res.json();
+          }
+          first = false;
+          rawRows.push(...((json && json.data) || []));
+          nextUrl = (json && json.paging && json.paging.next) || '';
+          if (!nextUrl) break;
+        }
         const pageId = String(this.pageNode() || '');
         const cutoff = Date.now() - withinMs;
-        for (const row of (json && json.data) || []) {
+        for (const row of rawRows) {
           const raw = row && row.message;
           const text = String(raw && typeof raw === 'object' ? raw.text || raw.message || '' : raw || '').trim();
           const ts = Date.parse(row && row.created_time) || 0;
