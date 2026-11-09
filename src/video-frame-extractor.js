@@ -61,7 +61,7 @@ async function downloadMetaVideo(url, outputFile, { request = https.request, max
     function fail(err) { if (!finished) { finished = true; reject(err); } }
     const req = request(u, {
       method: 'GET', redirect: 'manual', lookup: publicOnlyLookup,
-      timeout: FETCH_TIMEOUT_MS, maxHeaderSize: 8192,
+      timeout: FETCH_TIMEOUT_MS, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), maxHeaderSize: 8192,
       headers: { Accept: 'video/mp4,video/quicktime,video/webm,application/octet-stream' },
     }, async (res) => {
       try {
