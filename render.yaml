@@ -68,6 +68,17 @@ services:
         sync: false
       - key: BOOKING_FORM_URL
         sync: false
+      # Form YES/NO → Messenger confirmation. Empty keeps it on.
+      - key: BOOKING_CONFIRM_ENABLED
+        sync: false
+      - key: BOOKING_REF_SECRET
+        sync: false
+      - key: BOOKING_BOT_KEY
+        sync: false
+      - key: BOOKING_FORM_ORIGINS
+        sync: false
+      - key: PAGE_USERNAME
+        sync: false
       - key: HANDOFF_KEYWORDS
         sync: false
       - key: IGNORE_ECHO_APP_IDS
