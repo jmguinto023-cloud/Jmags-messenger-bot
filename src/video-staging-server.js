@@ -40,7 +40,7 @@ function createStagingServer({ token = process.env.VIDEO_STAGING_ADMIN_TOKEN || 
     let route;
     try {
       const url = new URL(req.url, 'http://localhost');
-      route = url.pathname.length > 1 ? url.pathname.replace(/\\/+$/g, '') : url.pathname;
+      route = url.pathname.length > 1 && url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname;
     } catch {
       return json(res, 400, { error: 'invalid address' });
     }
