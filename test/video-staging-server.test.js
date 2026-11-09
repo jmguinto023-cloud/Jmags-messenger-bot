@@ -44,3 +44,26 @@ test('synthetic self-test runs FFmpeg and mock AI without accessing customer vid
   assert.equal(result.customerRepliesSent,0);
   assert.ok(result.frames>=1);
 });
+
+test('shared staging links with tracking parameters do not return 404', async () => {
+  let calls = 0;
+  const token = 'shared-link-token-long-enough-for-internal-tests';
+  await withServer({token, selfTest: async () => {calls++; return {status:'passed'};}}, async base => {
+    const home = await fetch(base + '/?utm_source=chatgpt.com');
+    assert.equal(home.status, 200);
+    assert.match(await home.text(), /JMAGS Video AI/);
+    const testHome = await fetch(base + '/test?source=pwa');
+    assert.equal(testHome.status, 200);
+    const health = await fetch(base + '/health?utm_source=chatgpt.com');
+    assert.equal(health.status, 200);
+    const apiHelp = await fetch(base + '/api/self-test?utm_source=chatgpt.com');
+    assert.equal(apiHelp.status, 405);
+    assert.match((await apiHelp.json()).home, /jmags-video-ai-staging/);
+    const api = await fetch(base + '/api/self-test?source=chatgpt', {
+      method:'POST', headers:{Authorization:'Bearer '+token}
+    });
+    assert.equal(api.status, 200);
+    assert.equal((await api.json()).status, 'passed');
+    assert.equal(calls, 1);
+  });
+});
