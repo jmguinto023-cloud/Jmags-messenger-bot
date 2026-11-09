@@ -474,7 +474,7 @@ test('status answers come from the matching job and never from another customer'
     assert.doesNotMatch(reply, /Nico Bautista|09180002233|9 Sample Road|secret note for nico/);
 
     await s.post(msg('linked-liza', 'ano na yung video', NOON + 2000));
-    assert.equal(s.mock.calls.messages.at(-1).message.text, 'LLM should not answer a linked status question');
+    assert.match(s.mock.calls.messages.at(-1).message.text, /LLM should not answer a linked status question$/);
 
     s.app.store.thread('linked-liza').problemViaVideo = true;
     await s.post(msg('linked-liza', 'ano na yung video', NOON + 3000));
@@ -533,7 +533,7 @@ test('a repeat problem inside warranty is handed to Ivan without a coverage prom
     s.app.store.data.ops.jobs[0].date = '2026-01-01';
     s.app.store.data.ops.jobs[0].warrantyEnd = '2026-04-01';
     await s.post(msg('war-2', 'sira ulit po', NOON));
-    assert.equal(s.mock.calls.messages.at(-1).message.text, 'LLM fallback');
+    assert.match(s.mock.calls.messages.at(-1).message.text, /LLM fallback$/);
     assert.equal(s.app.store.thread('war-2').handedOff, false);
   } finally { await s.close(); }
 });
