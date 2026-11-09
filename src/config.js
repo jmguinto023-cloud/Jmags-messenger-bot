@@ -81,6 +81,16 @@ function loadConfig(env = process.env) {
     // Optional. Used only to read Netlify form submissions after the booking link is sent.
     netlifyApiToken: (env.NETLIFY_API_TOKEN || '').trim(),
     netlifyFormId: (env.NETLIFY_FORM_ID || '').trim(),
+    // Form → Messenger "Willing to wait?" confirmation. On by default; independent of BOT_SCHEDULE.
+    bookingConfirmEnabled: bool(env.BOOKING_CONFIRM_ENABLED, true),
+    // Signs the ?ref= on booking-form links. Empty falls back to APP_SECRET.
+    bookingRefSecret: env.BOOKING_REF_SECRET || '',
+    // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
+    bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),
+    // Sites allowed to call POST /booking/submitted. Empty = the BOOKING_FORM_URL origin only.
+    bookingFormOrigins: list(env.BOOKING_FORM_ORIGINS),
+    // Optional Page username for m.me links. Empty uses PAGE_ID.
+    pageUsername: String(env.PAGE_USERNAME || '').trim(),
     // Messenger booking agent (off by default). BOOKING_INTAKE_URL unset = dry run, nothing is sent.
     bookingAgentEnabled: bool(env.BOOKING_AGENT_ENABLED, false),
     bookingIntakeUrl: (env.BOOKING_INTAKE_URL || '').trim(),

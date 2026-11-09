@@ -9,6 +9,7 @@ const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { ensureOps } = require('../src/ops');
 const { saysFormDone, FORM_OK, FORM_MISSING } = require('../src/customer-context');
+const { readRef } = require('../src/booking-confirm');
 
 const SECRET = 's';
 const MAIN = '102622881557025';
@@ -116,23 +117,25 @@ test('a human staff reply in the last 12 hours keeps the bot quiet', async () =>
 test('an agreed deal gets the booking form once, then one confirmation', async () => {
   const ctx = await setup();
   try {
-    openGate(ctx.app.store.thread('book'));
-    await ctx.say('book', 'sige po pa-book');
-    const first = ctx.texts('book');
+    const psid = '5550001111';
+    openGate(ctx.app.store.thread(psid));
+    await ctx.say(psid, 'sige po pa-book');
+    const first = ctx.texts(psid);
     assert.equal(first.length, 1);
     assert.match(first[0], /jmagscutomerform\.netlify\.app/);
-    assert.match(first[0], /psid=book/);
-    assert.match(first[0], /ref=book/);
+    assert.match(first[0], /psid=5550001111/);
     assert.match(first[0], /brand=Samsung/);
+    const link = first[0].match(/https:\/\/\S+/)[0];
+    assert.equal(readRef(ctx.app.cfg, new URL(link).searchParams.get('ref')), psid);
     ensureOps(ctx.app.store).jobs.push({
-      id: 'BK-1', psid: 'book', customerName: 'Ana Cruz', phone: '', status: 'For Schedule', price: 8500,
+      id: 'BK-1', psid, customerName: 'Ana Cruz', phone: '', status: 'For Schedule', price: 8500,
     });
-    await ctx.say('book', 'nag-fill up na ako');
-    const after = ctx.texts('book');
+    await ctx.say(psid, 'nag-fill up na ako');
+    const after = ctx.texts(psid);
     assert.equal(after.filter((t) => t.includes('Natanggap na po')).length, 1);
     assert.match(after.at(-1), /Natanggap na po namin ang booking form/);
-    await ctx.say('book', 'done na po');
-    assert.equal(ctx.texts('book').filter((t) => t.includes(FORM_OK)).length, 1);
+    await ctx.say(psid, 'done na po');
+    assert.equal(ctx.texts(psid).filter((t) => t.includes(FORM_OK)).length, 1);
   } finally { await ctx.close(); }
 });
 
