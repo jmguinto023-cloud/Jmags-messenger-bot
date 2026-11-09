@@ -21,8 +21,10 @@ No customer video was downloaded or analyzed to prepare this branch.
 
 ## Local test results
 
-2026-11-10: 8/8 passing using Node.js 22 and FFmpeg 7:
-node --test test/video-frame-extractor.test.js test/video-review.test.js
+2026-11-10: 12/12 passing using Node.js 22 and FFmpeg 7:
+node --test test/video-frame-extractor.test.js test/video-review.test.js test/video-end-to-end.test.js test/video-staging-server.test.js
+
+This includes a complete local synthetic-video test (MP4 -> FFmpeg JPEG -> mock vision -> internal review draft), and local authenticated HTTP endpoint checks. GitHub Actions executes these on pull requests.
 
 These are unit tests and one synthetic local video FFmpeg smoke test. They do not prove remote signed Meta attachments are currently downloadable or that live Gemini/Groq image input works.
 
@@ -30,11 +32,12 @@ These are unit tests and one synthetic local video FFmpeg smoke test. They do no
 
 1. Current render.yaml and existing Dockerfile are untouched. The new separate Dockerfile.video-vision adds FFmpeg for a future, isolated staging service only; it defaults JMAGS_VIDEO_VISION_ENABLED=false.
 2. Do not change the existing production jmags-messenger-bot service, environment variables, deployments, or routing while testing.
-3. After Render workspace confirmation, create a staging environment using the draft branch and Dockerfile.video-vision, with no Meta webhook subscription and no Page Send API permission. Staging can run unit tests and simulate frame extraction independently.
-4. A future authenticated staff-only handler must explicitly map process.env.JMAGS_VIDEO_VISION_ENABLED === 'true' into the featureEnabled argument. The current branch has no such handler so environment toggles alone do nothing.
-5. Store third-party AI credentials only in Render secrets. The chosen provider must explicitly support image inputs. Keep externalAiAllowed false until privacy notice, consent storage, data-retention policy, daily AI caps and cost ceiling are approved.
-6. Only after authorized testing, add an Operations staff control to request an internal draft. Human approval remains required before any customer-facing reply.
-7. Confirm Meta native Business Agent and Render bot won't send duplicate replies. Test with a consented test account within Meta's messaging-window requirements.
+3. After the user confirms their Render workspace, create a distinct free-plan staging web service from this branch and Dockerfile.video-vision, with auto-deploy disabled. The Docker CMD runs ONLY src/video-staging-server.js, not the existing Messenger bot. Do not supply a Page token or webhook credentials.
+4. Configure VIDEO_STAGING_ADMIN_TOKEN as a secret random value with at least 32 characters. Without it, the self-test endpoint returns HTTP 503. Open the staging URL, enter the token, then click "Run synthetic video test." /health is public and reports syntheticOnly: true and messengerMessagingEnabled: false. Invalid tokens return 401 and repeated requests are rate-limited. The staged server does not accept customer videos or Meta URLs and does not make real LLM calls.
+5. The production-intended frame extractor and vision adapter remain library modules, NOT web endpoints. Before production wiring, implement employee authentication and durable customer consent at the actual JMAGS Operations workflow; never trust a client-provided boolean alone.
+6. Store third-party AI credentials only in Render secrets. The chosen provider must explicitly support image inputs. Keep externalAiAllowed false until privacy notice, consent storage, data-retention policy, daily AI caps and cost ceiling are approved.
+7. Only after authorized testing, add an Operations staff control to request an internal draft. Human approval remains required before any customer-facing reply.
+8. Confirm Meta native Business Agent and Render bot won't send duplicate replies. Test with a consented test account within Meta's messaging-window requirements.
 
 ## Validation gates before go-live
 
