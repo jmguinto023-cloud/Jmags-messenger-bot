@@ -67,3 +67,71 @@ test('shared staging links with tracking parameters do not return 404', async ()
     assert.equal(calls, 1);
   });
 });
+
+
+test('public demo works without a token and caches safe synthetic output', async () => {
+  let calls = 0;
+  let now = 1000;
+  const mockResult = {
+    test:'synthetic_frame_extraction_and_mock_vision',
+    status:'passed', frames:1, realAiCall:false,
+    realMessengerDownload:false, customerRepliesSent:0
+  };
+  await withServer({token:'', clock:()=>now, selfTest:async()=>{calls++;return mockResult;}},async base=>{
+    const html = await (await fetch(base+'/')).text();
+    assert.match(html, /Run free demo test/);
+    assert.doesNotMatch(html, /Staging admin token/);
+    const health=await (await fetch(base+'/health')).json();
+    assert.equal(health.publicDemoAvailable,true);
+    assert.equal(health.messengerMessagingEnabled,false);
+    const first=await fetch(base+'/api/demo',{method:'POST'});
+    assert.equal(first.status,200);
+    const data=await first.json();
+    assert.equal(data.status,'passed');
+    assert.equal(data.syntheticOnly,true);
+    assert.equal(data.cached,false);
+    assert.equal(data.customerRepliesSent,0);
+    assert.equal(calls,1);
+    const second=await fetch(base+'/api/demo',{method:'POST'});
+    assert.equal(second.status,200);
+    assert.equal((await second.json()).cached,true);
+    assert.equal(calls,1,'cached demo must not run FFmpeg again');
+    now+=5*60*1000+1;
+    const third=await fetch(base+'/api/demo',{method:'POST'});
+    assert.equal(third.status,200);
+    assert.equal(calls,2);
+    const get=await fetch(base+'/api/demo');
+    assert.equal(get.status,405);
+    assert.match((await get.json()).error,/Run free demo/);
+    // The original admin path is intentionally still protected.
+    assert.equal((await fetch(base+'/api/self-test',{method:'POST'})).status,503);
+  });
+});
+
+test('public demo fails closed for unsafe or failed simulated results', async () => {
+  let now=1000;
+  await withServer({
+    token:'',
+    clock:()=>now,
+    selfTest:async()=>({status:'passed',realAiCall:true,realMessengerDownload:false,customerRepliesSent:0})
+  },async base=>{
+    const response=await fetch(base+'/api/demo',{method:'POST'});
+    assert.equal(response.status,500);
+    assert.match((await response.json()).error,/no customer data/);
+    const retry=await fetch(base+'/api/demo',{method:'POST'});
+    assert.equal(retry.status,429,'abuse or failure must be throttled');
+  });
+});
+
+test('parallel public demo requests share one synthetic run', async () => {
+  let calls=0;
+  await withServer({token:'',selfTest:async()=>{
+    calls++;
+    await new Promise(resolve=>setTimeout(resolve,25));
+    return {status:'passed',realAiCall:false,realMessengerDownload:false,customerRepliesSent:0};
+  }},async base=>{
+    const responses=await Promise.all(Array.from({length:4},()=>fetch(base+'/api/demo',{method:'POST'})));
+    assert.ok(responses.every(r=>r.status===200));
+    assert.equal(calls,1);
+  });
+});
