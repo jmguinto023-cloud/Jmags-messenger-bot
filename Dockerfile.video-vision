@@ -1,0 +1,18 @@
+# ISOLATED REVIEW IMAGE ONLY; not referenced by production render.yaml.
+# Build only in an approved staging service after explicit workspace selection.
+FROM node:20-alpine
+ENV NODE_ENV=production DATA_DIR=/data PORT=3000 JMAGS_VIDEO_VISION_ENABLED=false
+WORKDIR /app
+RUN apk add --no-cache ffmpeg
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY src ./src
+COPY prompts ./prompts
+COPY knowledge ./knowledge
+COPY public ./public
+RUN node -e "require('./src/video-frame-extractor');require('./src/video-review')"
+RUN mkdir -p /data && chown -R node:node /app /data
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:$PORT/health || exit 1
+CMD ["node", "src/index.js"]
