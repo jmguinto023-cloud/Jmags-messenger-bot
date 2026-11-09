@@ -70,6 +70,16 @@ function loadConfig(env = process.env) {
     llmMaxRpm: num(env.LLM_MAX_RPM, 15),
     // Spelling "cutomer" is the live Netlify site. Override with BOOKING_FORM_URL.
     bookingFormUrl: ((env.BOOKING_FORM_URL || '').trim()) || 'https://jmagscutomerform.netlify.app/',
+    // Form → Messenger "Willing to wait?" confirmation. On by default; independent of BOT_SCHEDULE.
+    bookingConfirmEnabled: bool(env.BOOKING_CONFIRM_ENABLED, true),
+    // Signs the ?ref= on booking-form links. Empty falls back to APP_SECRET.
+    bookingRefSecret: env.BOOKING_REF_SECRET || '',
+    // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
+    bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),
+    // Sites allowed to call POST /booking/submitted. Empty = the BOOKING_FORM_URL origin only.
+    bookingFormOrigins: list(env.BOOKING_FORM_ORIGINS),
+    // Optional Page username for m.me links. Empty uses PAGE_ID.
+    pageUsername: String(env.PAGE_USERNAME || '').trim(),
     systemPromptFile: env.SYSTEM_PROMPT_FILE || path.join(__dirname, '..', 'prompts', 'system-prompt.md'),
     brandNewReferenceFile: env.BRAND_NEW_REFERENCE_FILE || path.join(__dirname, '..', 'prompts', 'brand-new-reference.md'),
     // Safety switches

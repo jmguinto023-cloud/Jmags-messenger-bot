@@ -12,6 +12,7 @@ const { buildView, applyAction, exportCsv, importOps, linkReviewToJob } = requir
 const { smsReady, sendJobConfirmation, markJobConfirmed, parseInbound, tokenOk, applyInboundSms } = require('./sms');
 const { opsPage } = require('./ops-page');
 const { activeNow } = require('./schedule');
+const bookingConfirm = require('./booking-confirm');
 
 const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
 
@@ -121,6 +122,20 @@ function createServer({ cfg, bot, log }) {
       );
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/admin/booking-confirms') {
+      if (!dashOk(cfg, req)) return send(401, 'Unauthorized');
+      const rows = Object.entries(bot.store.data.threads || {})
+        .filter(([, t]) => t && t.bookingConfirmSentAt)
+        .map(([id, t]) => ({
+          psidLast4: String(id).slice(-4), name: t.bookingName || '', wait: t.bookingWait || '',
+          priority: Boolean(t.bookingPriority), bookingId: t.bookingId || '', source: t.bookingSource || '',
+          sentAt: new Date(t.bookingConfirmSentAt).toISOString(),
+          confirmed: Boolean(t.bookingConfirmed),
+          confirmedAt: t.bookingConfirmedAt ? new Date(t.bookingConfirmedAt).toISOString() : '',
+        }))
+        .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+      return sendJson(200, rows);
+    }
     if (req.method === 'GET' && url.pathname === '/admin/paused') {
       if (!authorized(cfg, req)) return send(403, 'Forbidden');
       return sendJson(200, bot.pausedThreads());
@@ -145,6 +160,45 @@ function createServer({ cfg, bot, log }) {
       if (!dashOk(cfg, req)) return send(403, 'Forbidden');
       const enabled = Boolean(bot.push && bot.push.configured());
       return sendJson(200, { enabled, publicKey: enabled ? cfg.vapidPublicKey : '' });
+    }
+
+    // Booking form → Messenger confirmation. Called by the customer form after submit.
+    if (url.pathname === '/booking/submitted') {
+      const origin = req.headers.origin || '';
+      const cors = bookingConfirm.originAllowed(cfg, origin)
+        ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', Vary: 'Origin' }
+        : {};
+      const reply = (code, obj) => {
+        res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...cors });
+        res.end(JSON.stringify(obj));
+      };
+      if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+      if (req.method !== 'POST') return reply(405, { ok: false, error: 'POST only' });
+      if (origin && !cors['Access-Control-Allow-Origin']) return reply(403, { ok: false, error: 'origin not allowed' });
+      const chunks = [];
+      let size = 0;
+      req.on('data', (c) => { size += c.length; if (size > 2e4) req.destroy(); else chunks.push(c); });
+      req.on('end', async () => {
+        let body = {};
+        const rawText = Buffer.concat(chunks).toString('utf8');
+        try { body = JSON.parse(rawText || '{}'); } catch {
+          body = Object.fromEntries(new URLSearchParams(rawText));
+        }
+        const wait = bookingConfirm.normalizeWait(body.wait ?? body.willingToWait);
+        if (!wait) return reply(400, { ok: false, error: 'wait must be yes or no' });
+        const name = bookingConfirm.cleanName(body.name);
+        const messengerUrl = bookingConfirm.messengerConfirmUrl(cfg, name, wait);
+        const psid = bookingConfirm.readRef(cfg, body.ref);
+        if (!psid) return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl });
+        try {
+          const r = await bot.sendBookingConfirm(psid, { name, wait, bookingId: String(body.bookingId || '').slice(0, 40), source: 'form' });
+          return reply(200, { ok: true, sent: r.sent, reason: r.reason || '', messengerUrl: r.sent ? '' : messengerUrl });
+        } catch (e) {
+          log.warn('booking submitted handler failed', e.message);
+          return reply(200, { ok: true, sent: false, reason: 'send failed', messengerUrl });
+        }
+      });
+      return;
     }
 
     if (req.method === 'GET' && url.pathname === '/webhook') {

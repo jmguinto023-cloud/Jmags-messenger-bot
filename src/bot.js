@@ -22,6 +22,7 @@ const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
+const bookingConfirm = require('./booking-confirm');
 const {
   reviewPending, asksReviewStatus, isUnclearDuringReview, mentionsOldBooking,
   visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply,
@@ -202,6 +203,13 @@ class Bot {
     const psid = ev.sender && ev.sender.id;
     if (!psid || psid === this.cfg.pageId) return;
 
+    // Booking form fallback: customer tapped "Confirm sa Messenger" (m.me?ref=BK_...).
+    const bookingRef = bookingConfirm.referralFromEvent(ev);
+    if (bookingRef && !isStandby) {
+      await this.sendBookingConfirm(psid, { ...bookingRef, source: 'm.me' });
+      return;
+    }
+
     let text = '';
     let forceReason = '';
     const media = [];
@@ -249,6 +257,10 @@ class Bot {
     const t = this.store.thread(psid);
     t.followupFails = 0;
     t.followupNextAt = 0;
+    if (t.awaitingAgree && !media.length && bookingConfirm.isAgree(spoken)) {
+      await this.onBookingAgree(psid, t, ts, isStandby);
+      return;
+    }
     noteSuggestion(this.store, psid);
     // A new customer message ends a closed video follow-up, so a later silence
     // can use the normal quiet-customer nudge again.
@@ -798,7 +810,8 @@ class Bot {
       existing.fallbackSent = true;
       this.store.save();
     }
-    await this.graph.sendText(psid, clean);
+    const outgoing = bookingConfirm.personalizeFormUrls(this.cfg, clean, psid);
+    await this.graph.sendText(psid, outgoing);
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
     if (opts.videoFollowup || opts.ops) {
@@ -818,6 +831,74 @@ class Bot {
     this.log.info(`replied to ${short(psid)} (${clean.length} chars)${provider ? ` provider=${provider}` : ''}`);
     if (opts.armVideo) this.armVideoFollowup(psid);
     if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
+  }
+
+  // Booking form submitted: send the YES/NO message and wait for "AGREE".
+  // Runs whatever the bot schedule is; this is a reply to the customer's own form.
+  async sendBookingConfirm(psid, { name = '', wait = '', bookingId = '', source = 'form' } = {}) {
+    if (!this.cfg.bookingConfirmEnabled) return { sent: false, reason: 'booking confirm disabled' };
+    const w = bookingConfirm.normalizeWait(wait);
+    if (!w) return { sent: false, reason: 'missing yes/no answer' };
+    const t = this.store.thread(psid);
+    const now = this.now();
+    const key = `${w}|${bookingId || ''}|${bookingConfirm.cleanName(name)}`;
+    if (t.bookingConfirmKey === key && now - (t.bookingConfirmSentAt || 0) < 10 * 60 * 1000) {
+      return { sent: false, reason: 'already sent' };
+    }
+    const text = bookingConfirm.confirmText(name, w);
+    try {
+      await this.graph.sendText(psid, text);
+    } catch (e) {
+      this.log.warn(`booking confirm to ${short(psid)} failed`, e.message);
+      return { sent: false, reason: e.message };
+    }
+    Object.assign(t, {
+      bookingDone: true,
+      bookingFormSent: true,
+      bookingWait: w,
+      bookingPriority: w === 'no',
+      bookingName: bookingConfirm.cleanName(name) || t.bookingName || '',
+      bookingId: bookingId || t.bookingId || '',
+      bookingSource: source,
+      bookingConfirmKey: key,
+      bookingConfirmSentAt: now,
+      awaitingAgree: true,
+      bookingConfirmed: false,
+      bookingConfirmedAt: 0,
+      followupNextAt: 0,
+    });
+    this.store.addTurn(psid, 'assistant', text, now, { history: true, handoffReason: '', provider: 'booking-form' });
+    this.store.save();
+    this.log.info(`booking confirm sent to ${short(psid)} wait=${w} via ${source}`);
+    await this.notifyStaff(
+      w === 'no' ? 'New PRIORITY booking' : 'New booking (willing to wait)',
+      `${t.bookingName || 'Customer'} filled the form. Waiting for AGREE.`,
+    );
+    return { sent: true, wait: w };
+  }
+
+  async onBookingAgree(psid, t, ts, isStandby) {
+    t.awaitingAgree = false;
+    t.bookingConfirmed = true;
+    t.bookingConfirmedAt = ts || this.now();
+    this.store.save();
+    this.log.info(`booking AGREE from ${short(psid)} wait=${t.bookingWait}`);
+    if (!isStandby) {
+      const ack = bookingConfirm.agreeAckText(t.bookingWait);
+      try {
+        await this.graph.sendText(psid, ack);
+        this.store.addTurn(psid, 'assistant', ack, this.now(), { history: true, handoffReason: '', provider: 'booking-form' });
+      } catch (e) { this.log.warn(`booking AGREE ack to ${short(psid)} failed`, e.message); }
+    }
+    await this.notifyStaff(
+      t.bookingPriority ? 'PRIORITY booking confirmed' : 'Booking confirmed',
+      `${t.bookingName || 'Customer'} replied AGREE.`,
+    );
+  }
+
+  async notifyStaff(title, body) {
+    if (!this.push) return;
+    try { await this.push.notify({ title, body, url: '/dashboard' }); } catch (e) { this.log.warn('push notify failed', e.message); }
   }
 
   async sendTipsOnce(psid) {
