@@ -31,6 +31,28 @@
         <button class="button primary" type="submit">Sign in to training depot</button>
         <p id="login-error" class="error" role="alert"></p>
       </form>
+      <button type="button" id="forgot-password" class="text-button">Forgot your password? Reset it by email</button>
+      <form id="reset-request-form" class="login-card hidden" autocomplete="off">
+        <h2>Password recovery</h2>
+        <p class="muted">Enter your registered JMAGS email. We'll ask Supabase to send a secure reset link. No new account is created.</p>
+        <label for="reset-email">Registered email</label>
+        <input id="reset-email" type="email" autocomplete="email" required placeholder="Your JMAGS account email">
+        <button class="button primary" type="submit">Send password reset email</button>
+        <button class="button secondary" id="reset-cancel" type="button">Back to sign in</button>
+        <p id="reset-request-message" role="status"></p>
+      </form>
+      <section id="reset-complete" class="login-card hidden" aria-label="Set new password">
+        <h2>Create your new password</h2>
+        <p class="muted">Use the secure link sent to your registered email to reach this page.</p>
+        <form id="reset-complete-form" class="login-card">
+          <label for="new-password">New password</label>
+          <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="120" required>
+          <label for="confirm-password">Confirm password</label>
+          <input id="confirm-password" type="password" autocomplete="new-password" minlength="12" maxlength="120" required>
+          <button class="button primary" type="submit">Set new password</button>
+          <p id="reset-complete-message" role="status"></p>
+        </form>
+      </section>
       <div class="notice"><b>Protected records.</b> Only approved JMAGS users can access source links or change training labels. No AI messages are sent from this page.</div>
     </section>
 
