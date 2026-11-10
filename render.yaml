@@ -73,6 +73,12 @@ services:
         sync: false
       - key: BOOKING_REF_SECRET
         sync: false
+      # Netlify form webhook JWS secret. Empty rejects POST /booking/netlify.
+      - key: NETLIFY_WEBHOOK_SECRET
+        sync: false
+      # Empty keeps phone fallback on. Set false to require a signed link.
+      - key: BOOKING_PHONE_MATCH
+        sync: false
       - key: BOOKING_BOT_KEY
         sync: false
       - key: BOOKING_FORM_ORIGINS

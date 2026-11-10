@@ -83,8 +83,12 @@ function loadConfig(env = process.env) {
     netlifyFormId: (env.NETLIFY_FORM_ID || '').trim(),
     // Form → Messenger "Willing to wait?" confirmation. On by default; independent of BOT_SCHEDULE.
     bookingConfirmEnabled: bool(env.BOOKING_CONFIRM_ENABLED, true),
-    // Signs the ?ref= on booking-form links. Empty falls back to APP_SECRET.
+    // Signs ?token= and ?ref= on booking-form links. Empty falls back to APP_SECRET.
     bookingRefSecret: env.BOOKING_REF_SECRET || '',
+    // Netlify form-notification webhook (JWS secret, or the same value as a shared secret).
+    netlifyWebhookSecret: String(env.NETLIFY_WEBHOOK_SECRET || '').trim(),
+    // Match a form mobile to one stored Messenger chat when the link had no token.
+    bookingPhoneMatch: bool(env.BOOKING_PHONE_MATCH, true),
     // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
     bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),
     // Sites allowed to call POST /booking/submitted. Empty = the BOOKING_FORM_URL origin only.

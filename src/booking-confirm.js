@@ -1,31 +1,57 @@
 'use strict';
-// Booking form → Messenger confirmation.
+// Booking form → one Messenger confirmation.
 //
-// The customer form asks "Willing to wait po ba kayo within the day?".
-//   YES = Regular, the technician calls any time 9 AM–5 PM that day.
-//   NO  = automatic Priority (+₱1,000), first in the line-up.
-// After the form is submitted, the bot sends the matching message on Messenger and
-// asks the customer to reply AGREE. An AGREE reply marks the booking confirmed.
+// The live form (jmagscutomerform.netlify.app) posts to Netlify Forms. It does not
+// know the customer's PSID. Links the bot or staff send carry a signed
+// ?psid=&page=sanpablo|cavite&token= so the form can submit those hidden fields.
+// Netlify's form-notification webhook posts the submission here. A token is the
+// only proof of who to message. A phone number is a fallback, and only when it
+// matches exactly one Messenger chat or job the bot already stored.
 //
-// The form reaches the right Messenger thread in one of two ways:
-//   1. The link the bot sends carries ?ref=<signed PSID>. The form posts it back to
-//      POST /booking/submitted and the bot messages that thread at once.
-//   2. No ref (e.g. Ivan pasted the plain link): the form shows a "Confirm sa Messenger"
-//      button to m.me/<page>?ref=BK_... and the bot replies when the customer taps it.
+// Outside Meta's 24-hour window nothing is sent. An approved tag would be a later
+// change: messaging_type MESSAGE_TAG and tag CONFIRMED_EVENT_UPDATE, and only
+// after Meta approves that tag for this app. Do not send a tag before that.
+
 const crypto = require('node:crypto');
+const hours = require('./hours');
 
 const REF_PARAM = 'ref';
 const REFERRAL_PREFIX = 'BK_';
+const PAGE_KEYS = {
+  sanpablo: 'sanpablo',
+  san_pablo: 'sanpablo',
+  'san-pablo': 'sanpablo',
+  sp: 'sanpablo',
+  main: 'sanpablo',
+  cavite: 'cavite',
+};
+const SLOT_TTL_MS = 36 * 3600 * 1000;
+const RECENT_TTL_MS = 30 * 60 * 1000;
+const PENDING_MS = 2 * 60 * 1000;
+const DELIVERY_KEEP_MS = 90 * 86400 * 1000;
 
 function secret(cfg) {
-  return String(cfg.bookingRefSecret || cfg.appSecret || cfg.adminToken || '');
+  return String((cfg && (cfg.bookingRefSecret || cfg.appSecret || cfg.adminToken)) || '');
 }
 
 function sign(cfg, value) {
   return crypto.createHmac('sha256', secret(cfg)).update(String(value)).digest('base64url').slice(0, 16);
 }
 
-// Opaque, signed reference to one Messenger thread. Only the bot can mint a valid one.
+function normalizePageKey(value) {
+  const k = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+  return PAGE_KEYS[k] || '';
+}
+
+function pageRecord(cfg, key) {
+  const pages = (cfg && cfg.pages) || [];
+  const name = normalizePageKey(key);
+  if (name === 'cavite') return pages.find((p) => p.key === 'cavite') || null;
+  if (name === 'sanpablo') return pages.find((p) => p.primary) || pages.find((p) => p.key === 'main' || p.key === 'sanpablo') || null;
+  return null;
+}
+
+// Opaque, signed reference to one Messenger thread. The live form still reads ?ref=.
 function makeRef(cfg, psid) {
   if (!/^\d{5,30}$/.test(String(psid || '')) || !secret(cfg)) return '';
   return `${psid}.${sign(cfg, psid)}`;
@@ -41,20 +67,59 @@ function readRef(cfg, ref) {
   return m[1];
 }
 
-// Give every booking-form link the bot sends this customer's own ref, so the
-// form can send the confirmation back to this exact chat.
-function personalizeFormUrls(cfg, text, psid) {
-  const base = String(cfg.bookingFormUrl || '').trim();
+// Binds one PSID to one Page. A swapped page or PSID does not verify.
+function makeToken(cfg, psid, page) {
+  const key = normalizePageKey(page);
+  if (!key || !/^\d{5,30}$/.test(String(psid || '')) || !secret(cfg)) return '';
+  const body = `v1.${key}.${psid}`;
+  const sig = crypto.createHmac('sha256', secret(cfg)).update(body).digest('base64url').slice(0, 22);
+  return `${body}.${sig}`;
+}
+
+function readToken(cfg, token) {
+  const m = /^v1\.(sanpablo|cavite)\.(\d{5,30})\.([A-Za-z0-9_-]{22})$/.exec(String(token || '').trim());
+  if (!m || !secret(cfg)) return null;
+  const body = `v1.${m[1]}.${m[2]}`;
+  const want = crypto.createHmac('sha256', secret(cfg)).update(body).digest('base64url').slice(0, 22);
+  const a = Buffer.from(m[3]);
+  const b = Buffer.from(want);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return { psid: m[2], page: m[1] };
+}
+
+function bookingFormLink(cfg, psid, page, extra = {}) {
+  const base = String((cfg && cfg.bookingFormUrl) || '').trim();
+  const key = normalizePageKey(page);
+  const token = makeToken(cfg, psid, key);
+  if (!base || !key || !token) return '';
+  let u;
+  try { u = new URL(base); } catch { return ''; }
+  u.searchParams.set('psid', String(psid));
+  u.searchParams.set('page', key);
+  u.searchParams.set('token', token);
   const ref = makeRef(cfg, psid);
-  if (!base || !ref || !text || !text.includes(base)) return text;
+  if (ref) u.searchParams.set('ref', ref);
+  for (const [k, v] of Object.entries(extra || {})) {
+    if (v != null && String(v) !== '') u.searchParams.set(k, String(v));
+  }
+  return u.toString();
+}
+
+// Every booking-form link this bot sends is tied to this chat and this Page.
+function personalizeFormUrls(cfg, text, psid, page) {
+  const base = String((cfg && cfg.bookingFormUrl) || '').trim();
+  const key = normalizePageKey(page) || 'sanpablo';
+  const token = makeToken(cfg, psid, key);
+  const ref = makeRef(cfg, psid);
+  if (!base || !token || !text || !text.includes(base)) return text;
   const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // A link that already has ?ref= stays as written. Other query params still get this chat's signed ref.
   return text.replace(new RegExp(`${escaped}[^\\s)]*`, 'g'), (link) => {
     let u;
     try { u = new URL(link); } catch { return link; }
-    if (u.searchParams.has(REF_PARAM)) return link;
-    u.searchParams.set(REF_PARAM, ref);
-    if (cfg.bookingBotKey && !u.searchParams.has('b')) u.searchParams.set('b', cfg.bookingBotKey);
+    u.searchParams.set('psid', String(psid));
+    u.searchParams.set('page', key);
+    u.searchParams.set('token', token);
+    if (ref) u.searchParams.set('ref', ref);
     return u.toString();
   });
 }
@@ -66,39 +131,54 @@ function normalizeWait(value) {
   return '';
 }
 
+// YES (willing to wait) is Regular. NO is Priority. The service field is the backup.
+function bookingKind(sub) {
+  const wait = normalizeWait(sub && (sub.willingToWait != null ? sub.willingToWait : sub.wait));
+  if (wait) return wait;
+  const service = String((sub && sub.service) || '');
+  if (/priority/i.test(service)) return 'no';
+  if (/regular/i.test(service)) return 'yes';
+  return '';
+}
+
 function cleanName(name) {
   return String(name || '').replace(/[\r\n\t]+/g, ' ').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
 }
 
-function confirmText(name, wait) {
-  const who = cleanName(name);
-  const hello = who ? `Hello po mam/sir ${who}` : 'Hello po mam/sir';
-  if (normalizeWait(wait) === 'no') {
-    return [
-      `${hello},`,
-      'Dahil pinili nyo ang "NO" option, automatic po Priority kayo, kayo po ang mauuna sa line-up. Today!',
-      'Reply "AGREE" po sa chat para maconfirm po namin. Maraming salamat po. Happy to serve you all 😊',
-    ].join('\n');
+function prettyBookingDate(value) {
+  const raw = String(value || '').trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (iso) {
+    const mo = Number(iso[2]);
+    const da = Number(iso[3]);
+    if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) return hours.prettyDate(raw);
+    return '';
   }
-  return [
-    `${hello},`,
-    'Dahil pinili nyo po ang YES, ibig sabihin willing to wait po kayo sa schedule nyo within that day.',
-    "Don't worry po, from 9am to 5pm marereceive nyo po ang tawag ng technician namin as soon as possible.",
-    'Reply "AGREE" lang po kayo sa message para ma-confirm po. Maraming salamat po sa pagtitiwala. Happy to serve you all 🙂',
-  ].join('\n');
+  const cleaned = raw.replace(/[\r\n\t]+/g, ' ').replace(/[<>]/g, '').slice(0, 40);
+  if (!cleaned || /https?:/i.test(cleaned)) return '';
+  return cleaned;
 }
 
-function agreeAckText(wait) {
-  return normalizeWait(wait) === 'no'
-    ? 'Salamat po! Confirmed na po ang booking ninyo bilang PRIORITY ✅ Kayo po ang mauuna sa line-up.'
-    : 'Salamat po! Confirmed na po ang booking ninyo ✅ Tatawagan po kayo ng technician namin within the day, 9am to 5pm.';
+function confirmText(name, wait, date) {
+  const who = cleanName(name);
+  const when = prettyBookingDate(date);
+  const hello = who ? `Salamat po sa booking, ${who}! 😊` : 'Salamat po sa booking! 😊';
+  if (normalizeWait(wait) === 'no') {
+    const slot = when ? ` sa ${when}` : '';
+    return `${hello} Priority service po kayo (+P1,000)${slot}, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`;
+  }
+  const slot = when ? ` sa ${when}` : '';
+  return `${hello} Regular service po kayo${slot}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`;
+}
+
+function agreeAckText() {
+  return 'Salamat po, confirmed na po ang booking ninyo.';
 }
 
 function isAgree(text) {
   return /^\s*(?:ok(?:ay)?[\s,.!]*)?(?:i\s+)?agree(?:d)?(?:\s+(?:po|na|na po|ako|kami))*[\s.!👍🙂😊]*$/i.test(String(text || ''));
 }
 
-// m.me ref payload for the no-ref fallback. Meta allows letters, digits, + / = - . : _ (max 250).
 function referralRef(name, wait) {
   const w = normalizeWait(wait) === 'no' ? 'N' : 'Y';
   const n = Buffer.from(cleanName(name), 'utf8').toString('base64url').slice(0, 120);
@@ -132,7 +212,262 @@ function originAllowed(cfg, origin) {
   return list.filter(Boolean).includes(origin);
 }
 
+function secretEqual(got, want) {
+  const a = Buffer.from(String(got || ''));
+  const b = Buffer.from(String(want || ''));
+  if (!b.length || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function verifyNetlifyJws(token, secretValue, raw) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3 || !secretValue) return false;
+  let header;
+  let payload;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch { return false; }
+  if (!header || header.alg !== 'HS256') return false;
+  if (!payload || payload.iss !== 'netlify') return false;
+  const now = Date.now() / 1000;
+  if (payload.exp && now > Number(payload.exp)) return false;
+  if (payload.nbf && now < Number(payload.nbf)) return false;
+  const expected = crypto.createHmac('sha256', secretValue).update(`${parts[0]}.${parts[1]}`).digest();
+  let got;
+  try { got = Buffer.from(parts[2], 'base64url'); } catch { return false; }
+  if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return false;
+  const body = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw || ''));
+  const hash = crypto.createHash('sha256').update(body).digest('hex');
+  const claim = String(payload.sha256 || '');
+  if (claim.length !== hash.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(claim), Buffer.from(hash));
+}
+
+// JWS (X-Webhook-Signature) when Netlify has a secret set. Otherwise the same
+// secret as Authorization: Bearer, X-Webhook-Secret, or ?key= on the URL.
+function authorizeNetlify(cfg, { raw, signature, authorization, webhookSecret, queryKey } = {}) {
+  const hookSecret = String((cfg && cfg.netlifyWebhookSecret) || '');
+  if (!hookSecret) return { ok: false, status: 401, error: 'webhook secret not set' };
+  const sig = String(signature || '').trim();
+  if (sig) {
+    return verifyNetlifyJws(sig, hookSecret, raw)
+      ? { ok: true, via: 'jws' }
+      : { ok: false, status: 401, error: 'bad signature' };
+  }
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(String(authorization || ''));
+  const presented = (bearer && bearer[1]) || String(webhookSecret || '') || String(queryKey || '');
+  if (presented && secretEqual(presented, hookSecret)) return { ok: true, via: 'secret' };
+  return { ok: false, status: 401, error: 'unauthorized' };
+}
+
+function pickField(data, names) {
+  for (const name of names) {
+    if (data && data[name] != null && String(data[name]).trim()) return data[name];
+  }
+  return '';
+}
+
+function parseNetlifySubmission(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const data = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
+  return {
+    formName: String(body.form_name || body.formName || '').trim(),
+    submissionId: String(body.id || body.submission_id || body.submissionId || '').trim().slice(0, 80),
+    name: pickField(data, ['name', 'fullName', 'full_name']),
+    mobile: pickField(data, ['mobile', 'phone', 'contact']),
+    date: pickField(data, ['pdate', 'date', 'preferredDate', 'preferred_date']),
+    willingToWait: pickField(data, ['willingToWait', 'willing_to_wait', 'wait']),
+    service: pickField(data, ['service', 'serviceType', 'service_type']),
+    psid: String(pickField(data, ['psid', 'messengerPsid']) || '').trim(),
+    page: String(pickField(data, ['page', 'messengerPage']) || '').trim(),
+    token: String(pickField(data, ['token', 'messengerToken']) || '').trim(),
+    ref: String(pickField(data, ['ref', 'messengerRef']) || '').trim(),
+    bookingId: String(pickField(data, ['bookingId', 'booking_id']) || body.bookingId || '').trim().slice(0, 80),
+  };
+}
+
+// A signed token wins. A bare PSID is rejected. No token and no ref means "unknown".
+function identityFrom(cfg, sub) {
+  const row = sub || {};
+  if (row.token) {
+    const token = readToken(cfg, row.token);
+    if (!token) return { error: 'bad messenger token' };
+    if (row.psid && row.psid !== token.psid) return { error: 'bad messenger token' };
+    if (row.page && normalizePageKey(row.page) !== token.page) return { error: 'bad messenger token' };
+    return { psid: token.psid, page: token.page, via: 'token' };
+  }
+  if (row.ref) {
+    const psid = readRef(cfg, row.ref);
+    if (!psid) return { error: 'bad messenger token' };
+    return { psid, page: normalizePageKey(row.page), via: 'ref' };
+  }
+  if (row.psid || row.page) return { error: 'bad messenger token' };
+  return { via: 'none' };
+}
+
+function normalizeMobile(value) {
+  const d = String(value || '').replace(/\D/g, '');
+  if (/^09\d{9}$/.test(d)) return d;
+  if (/^639\d{9}$/.test(d)) return `0${d.slice(2)}`;
+  if (/^9\d{9}$/.test(d)) return `0${d}`;
+  return '';
+}
+
+function mobileLast4(value) {
+  const n = normalizeMobile(value);
+  return n ? n.slice(-4) : '';
+}
+
+function mobilesFromUser(thread) {
+  const found = new Set();
+  const re = /(?:\+?63|0)[\s.-]*9(?:[\s.-]*\d){9}\b/g;
+  for (const turn of (thread && thread.history) || []) {
+    if (!turn || turn.role !== 'user') continue;
+    const text = String(turn.content || '');
+    let m;
+    while ((m = re.exec(text))) {
+      const n = normalizeMobile(m[0]);
+      if (n) found.add(n);
+    }
+  }
+  return found;
+}
+
+function matchMobile(threads, mobile) {
+  const want = normalizeMobile(mobile);
+  if (!want) return { status: 'none' };
+  const hits = [];
+  for (const [key, thread] of Object.entries(threads || {})) {
+    if (mobilesFromUser(thread).has(want)) hits.push({ key, thread });
+  }
+  if (hits.length === 1) return { status: 'one', key: hits[0].key, thread: hits[0].thread };
+  if (hits.length > 1) return { status: 'many' };
+  return { status: 'none' };
+}
+
+function matchJobMobile(rows, mobile) {
+  const want = normalizeMobile(mobile);
+  if (!want) return '';
+  const ids = new Set();
+  for (const row of rows || []) {
+    const n = normalizeMobile(row && (row.phone || row.mobile));
+    if (n && n === want && row.psid) ids.add(String(row.psid));
+  }
+  return ids.size === 1 ? [...ids][0] : '';
+}
+
+function outsideWindowError(err) {
+  const body = err && err.body && err.body.error;
+  const sub = body && (body.error_subcode || body.errorSubcode);
+  if (sub === 2018278 || (body && body.code === 551)) return true;
+  return /outside of allowed window|outside the allowed window/i.test(String((err && err.message) || ''));
+}
+
+function bucket(store) {
+  store.data.bookingDeliveries ||= {};
+  return store.data.bookingDeliveries;
+}
+
+function pruneDeliveries(store, now) {
+  const all = bucket(store);
+  for (const [key, row] of Object.entries(all)) {
+    if (!row || !row.at || now - row.at > DELIVERY_KEEP_MS) delete all[key];
+  }
+  const keys = Object.keys(all);
+  if (keys.length > 5000) {
+    keys.sort((a, b) => (all[a].at || 0) - (all[b].at || 0));
+    for (const key of keys.slice(0, keys.length - 5000)) delete all[key];
+  }
+}
+
+function deliveryKeys({ psid, page, wait, name, date, submissionId, bookingId }) {
+  const durable = [];
+  if (submissionId) durable.push(`sub:${String(submissionId).slice(0, 80)}`);
+  if (bookingId) durable.push(`bid:${String(bookingId).slice(0, 80)}`);
+  const soft = [];
+  if (date) soft.push({ id: `slot:${psid}|${page}|${date}|${wait}`, ttl: SLOT_TTL_MS });
+  soft.push({ id: `recent:${psid}|${page}|${wait}|${name}`, ttl: RECENT_TTL_MS });
+  return { durable, soft };
+}
+
+function liveRow(row, now) {
+  if (!row) return null;
+  if (row.expiresAt && now >= row.expiresAt) return null;
+  return row;
+}
+
+// sent and in-flight stop a second send. An outside-window skip does not:
+// a later retry can send once the customer is inside the window again.
+function deliveryHold(store, spec, now) {
+  pruneDeliveries(store, now);
+  const all = bucket(store);
+  let outsideNotified = false;
+  const ids = [...(spec.durable || []), ...(spec.soft || []).map((item) => item.id)];
+  for (const id of ids) {
+    const row = liveRow(all[id], now);
+    if (!row) continue;
+    if (row.status === 'sent') return { action: 'stop', reason: 'already sent' };
+    if (row.status === 'pending' && now - row.at < PENDING_MS) return { action: 'stop', reason: 'in flight' };
+    // These can become sendable on a later retry (customer messages again, or the
+    // Page token is added). A bad token stays a hard stop.
+    if (row.status === 'skipped' && (row.reason === 'outside 24h window' || row.reason === 'no page token')) {
+      if (row.notified) outsideNotified = true;
+      continue;
+    }
+    if (row.status === 'skipped') return { action: 'stop', reason: row.reason || 'already handled' };
+  }
+  return { action: 'go', outsideNotified };
+}
+
+function markPending(store, spec, now) {
+  const all = bucket(store);
+  for (const id of spec.durable || []) all[id] = { status: 'pending', at: now };
+  for (const item of spec.soft || []) all[item.id] = { status: 'pending', at: now, expiresAt: now + item.ttl };
+  store.flushNow();
+}
+
+function markSent(store, spec, now, extra = {}) {
+  const all = bucket(store);
+  for (const id of spec.durable || []) all[id] = { status: 'sent', at: now, ...extra };
+  for (const item of spec.soft || []) all[item.id] = { status: 'sent', at: now, expiresAt: now + item.ttl, ...extra };
+  store.flushNow();
+}
+
+function markSkipped(store, ids, reason, now) {
+  const all = bucket(store);
+  for (const id of ids || []) {
+    if (!id) continue;
+    const prev = all[id] || {};
+    all[id] = { status: 'skipped', reason, at: prev.at || now, notified: true, psid: prev.psid || '' };
+  }
+  store.flushNow();
+}
+
+function releasePending(store, spec) {
+  const all = bucket(store);
+  const ids = [...(spec.durable || []), ...(spec.soft || []).map((item) => item.id)];
+  for (const id of ids) if (all[id] && all[id].status === 'pending') delete all[id];
+  store.flushNow();
+}
+
+// First time we record this submission as skipped, the caller should alert staff.
+function firstSkip(store, id, reason, now) {
+  if (!id) return true;
+  const all = bucket(store);
+  const prev = all[id];
+  const seen = Boolean(prev && prev.status === 'skipped' && prev.notified && prev.reason === reason);
+  all[id] = { status: 'skipped', reason, at: (prev && prev.at) || now, notified: true, psid: (prev && prev.psid) || '' };
+  store.flushNow();
+  return !seen;
+}
+
 module.exports = {
-  makeRef, readRef, personalizeFormUrls, normalizeWait, confirmText, agreeAckText, isAgree,
-  referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent, originAllowed, cleanName,
+  makeRef, readRef, makeToken, readToken, bookingFormLink, personalizeFormUrls,
+  normalizePageKey, pageRecord, normalizeWait, bookingKind, confirmText, agreeAckText,
+  isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
+  originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
+  parseNetlifySubmission, identityFrom, normalizeMobile, mobileLast4, matchMobile,
+  matchJobMobile, outsideWindowError, deliveryKeys, deliveryHold, markPending,
+  markSent, markSkipped, releasePending, firstSkip, REF_PARAM,
 };

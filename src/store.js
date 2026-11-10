@@ -257,6 +257,13 @@ class Store {
       delete this.data.threads[k];
     }
     const threads = dropKeys.length;
+    if (this.data.bookingDeliveries) {
+      for (const [k, row] of Object.entries(this.data.bookingDeliveries)) {
+        if ((row && row.psid === key) || k.startsWith(`slot:${key}|`) || k.startsWith(`recent:${key}|`) || k === `notoken:${key}`) {
+          delete this.data.bookingDeliveries[k];
+        }
+      }
+    }
     if (this.data.ops && Array.isArray(this.data.ops.jobs)) {
       for (const job of this.data.ops.jobs) {
         if (job && job.psid === key) job.psid = '';

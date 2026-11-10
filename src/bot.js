@@ -1,5 +1,6 @@
 'use strict';
 // Core logic: turns Messenger webhook events into Ivan-style replies, handoffs, or follow-ups.
+const crypto = require('node:crypto');
 const { parseHandoff } = require('./llm');
 const lines = require('./messages');
 const { sanitizeOutgoing, capCustomerReply, replyRejected, SAFE_TEMPLATE, nonFlatscreenLine, bookingFormMessage } = lines;
@@ -26,7 +27,7 @@ const { optOutReason, staffEscalation, publicCommentReply, STAFF_HANDOFF_LINE } 
 const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
-const { PageSwitches } = require('./page-switches');
+const { PageSwitches, pageKey } = require('./page-switches');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, quoteKnownTv, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
@@ -38,7 +39,6 @@ const {
   asksReviewStatus, isUnclearDuringReview, mentionsOldBooking, explicitNewUnit,
   visibleHistory, PENDING_REVIEW_STATUS, REVIEW_CLARIFY, guardStaleReply, PRICE_ASK, CALL_LINE,
 } = require('./recency');
-const crypto = require('node:crypto');
 
 // Model sometimes emits [HANDOFF: Customer ready to book] instead of the form.
 function isBookingIntentHandoff(reason) {
@@ -279,7 +279,8 @@ class Bot {
     // Booking form fallback: customer tapped "Confirm sa Messenger" (m.me?ref=BK_...).
     const bookingRef = bookingConfirm.referralFromEvent(ev);
     if (bookingRef && !isStandby) {
-      await this.sendBookingConfirm(psid, { ...bookingRef, source: 'm.me' });
+      // The m.me tap is itself a new customer message, so it is inside the 24h window.
+      await this.sendBookingConfirm(psid, { ...bookingRef, source: 'm.me', openedNow: true });
       return;
     }
 
@@ -523,6 +524,8 @@ class Bot {
     const now = this.now();
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
     if (t && t.optedOut) return 'opted out';
+    // After the booking confirm, staff own the chat even when this Page's switch is on.
+    if (t && t.bookingStaffOnly) return 'booking handed to staff';
     if (t && t.gateClosed) return 'quote-gate handoff';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
@@ -1119,7 +1122,7 @@ class Bot {
       existing.fallbackSent = true;
       this.store.save();
     }
-    const outgoing = bookingConfirm.personalizeFormUrls(this.cfg, clean, psid);
+    const outgoing = bookingConfirm.personalizeFormUrls(this.cfg, clean, psid, pageKey(currentPage()) || 'sanpablo');
     await this.graph.sendText(psid, outgoing);
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
@@ -1143,48 +1146,215 @@ class Bot {
     return true;
   }
 
-  // Booking form submitted: send the YES/NO message and wait for "AGREE".
-  // Runs whatever the bot schedule is; this is a reply to the customer's own form.
-  async sendBookingConfirm(psid, { name = '', wait = '', bookingId = '', source = 'form' } = {}) {
+  // One booking-type confirmation. Does not look at BOT_ENABLED or the Page on/off
+  // switch: the customer just submitted the form, and staff still need the reply
+  // AGREE even while auto-replies are off. After a successful send this chat stays
+  // quiet (bookingStaffOnly) so staff take over. Nothing is sent outside 24h.
+  async sendBookingConfirm(psid, opts = {}) {
+    const page = opts.page || currentPage() || this.locateThread(psid).page || (this.cfg.pages || []).find((p) => p.primary) || null;
+    if (page && currentPage() !== page) return withPage(page, () => this.sendBookingConfirm(psid, { ...opts, page }));
     if (!this.cfg.bookingConfirmEnabled) return { sent: false, reason: 'booking confirm disabled' };
-    const w = bookingConfirm.normalizeWait(wait);
-    if (!w) return { sent: false, reason: 'missing yes/no answer' };
-    const t = this.store.thread(psid);
-    const now = this.now();
-    const key = `${w}|${bookingId || ''}|${bookingConfirm.cleanName(name)}`;
-    if (t.bookingConfirmKey === key && now - (t.bookingConfirmSentAt || 0) < 10 * 60 * 1000) {
-      return { sent: false, reason: 'already sent' };
+    const wait = bookingConfirm.normalizeWait(opts.wait);
+    if (!wait) return { sent: false, reason: 'missing yes/no answer' };
+    if (!page || !page.token) {
+      const reason = 'no page token';
+      const skipId = opts.submissionId ? `sub:${opts.submissionId}` : `notoken:${psid}`;
+      if (bookingConfirm.firstSkip(this.store, skipId, reason, this.now())) {
+        await this.flagBookingStaff(psid, null, { ...opts, wait, reason, page: pageKey(page) });
+      }
+      return { sent: false, reason };
     }
-    const text = bookingConfirm.confirmText(name, w);
+    const name = bookingConfirm.cleanName(opts.name);
+    const date = bookingConfirm.prettyBookingDate(opts.date);
+    const now = this.now();
+    const pageName = pageKey(page) || 'sanpablo';
+    const keys = bookingConfirm.deliveryKeys({
+      psid, page: pageName, wait, name, date,
+      submissionId: opts.submissionId || '',
+      bookingId: opts.bookingId || '',
+    });
+    const held = bookingConfirm.deliveryHold(this.store, keys, now);
+    if (held.action === 'stop') return { sent: false, reason: held.reason, duplicate: true };
+
+    const existing = this.store.findThread(psid);
+    const last = (existing && existing.lastUserTs) || 0;
+    const inWindow = Boolean(opts.openedNow) || (last > 0 && now - last <= this.cfg.replyWindowHours * HOUR);
+    if (!inWindow) {
+      bookingConfirm.markSkipped(this.store, keys.durable, 'outside 24h window', now);
+      if (!held.outsideNotified) {
+        await this.flagBookingStaff(psid, existing, { name, wait, date, reason: 'outside 24h window', page: pageName });
+      }
+      this.log.warn(`booking confirm not sent to ${short(psid)}: outside 24h window`);
+      return { sent: false, reason: 'outside 24h window' };
+    }
+
+    bookingConfirm.markPending(this.store, keys, now);
+    const text = bookingConfirm.confirmText(name, wait, date);
     try {
       await this.graph.sendText(psid, text);
     } catch (e) {
-      this.log.warn(`booking confirm to ${short(psid)} failed`, e.message);
-      return { sent: false, reason: e.message };
+      const outside = bookingConfirm.outsideWindowError(e);
+      const retry = !outside && (!e.status || e.status >= 500);
+      if (retry) {
+        bookingConfirm.releasePending(this.store, keys);
+        this.log.warn(`booking confirm to ${short(psid)} failed`, e.message);
+        return { sent: false, reason: 'send failed', retry: true };
+      }
+      const reason = outside ? 'outside 24h window' : 'messenger rejected the send';
+      bookingConfirm.markSkipped(this.store, keys.durable, reason, now);
+      bookingConfirm.releasePending(this.store, { durable: [], soft: keys.soft });
+      if (outside ? !held.outsideNotified : true) {
+        await this.flagBookingStaff(psid, this.store.findThread(psid), { name, wait, date, reason, page: pageName });
+      }
+      this.log.warn(`booking confirm to ${short(psid)} not sent: ${reason}`);
+      return { sent: false, reason };
     }
+
+    bookingConfirm.markSent(this.store, keys, now, { psid: String(psid) });
+    this.cancelPending(psid);
+    this.bump(psid);
+    this.stopVideoFollowup(psid, 'booking confirmation sent');
+    const t = this.store.thread(psid);
     Object.assign(t, {
       bookingDone: true,
       bookingFormSent: true,
-      bookingWait: w,
-      bookingPriority: w === 'no',
-      bookingName: bookingConfirm.cleanName(name) || t.bookingName || '',
-      bookingId: bookingId || t.bookingId || '',
-      bookingSource: source,
-      bookingConfirmKey: key,
+      bookingStaffOnly: true,
+      formConfirmed: true,
+      bookingWait: wait,
+      bookingPriority: wait === 'no',
+      bookingName: name || t.bookingName || '',
+      bookingDate: date,
+      bookingPage: pageName,
+      bookingId: opts.bookingId || t.bookingId || '',
+      bookingSubmissionId: opts.submissionId || t.bookingSubmissionId || '',
+      bookingSource: opts.source || 'form',
       bookingConfirmSentAt: now,
       awaitingAgree: true,
       bookingConfirmed: false,
       bookingConfirmedAt: 0,
       followupNextAt: 0,
+      bookingNeedsStaff: false,
+      bookingNeedsStaffReason: '',
     });
     this.store.addTurn(psid, 'assistant', text, now, { history: true, handoffReason: '', provider: 'booking-form' });
-    this.store.save();
-    this.log.info(`booking confirm sent to ${short(psid)} wait=${w} via ${source}`);
+    this.store.flushNow();
+    this.log.info(`booking confirm sent to ${short(psid)} wait=${wait} via ${opts.source || 'form'} page=${pageName}`);
     await this.notifyStaff(
-      w === 'no' ? 'New PRIORITY booking' : 'New booking (willing to wait)',
+      wait === 'no' ? 'New PRIORITY booking' : 'New booking (willing to wait)',
       `${t.bookingName || 'Customer'} filled the form. Waiting for AGREE.`,
     );
-    return { sent: true, wait: w };
+    return { sent: true, wait };
+  }
+
+  // Netlify form-notification webhook. Authenticated, then one Messenger send.
+  async ingestNetlifyBooking(raw, headers = {}, queryKey = '') {
+    const auth = bookingConfirm.authorizeNetlify(this.cfg, {
+      raw,
+      signature: headers['x-webhook-signature'] || headers['X-Webhook-Signature'] || '',
+      authorization: headers.authorization || headers.Authorization || '',
+      webhookSecret: headers['x-webhook-secret'] || headers['X-Webhook-Secret'] || '',
+      queryKey,
+    });
+    if (!auth.ok) {
+      this.log.warn(`booking webhook rejected: ${auth.error}`);
+      return { status: auth.status, body: { ok: false, error: auth.error } };
+    }
+    const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw || '');
+    let payload = {};
+    try { payload = JSON.parse(text || '{}'); } catch {
+      payload = Object.fromEntries(new URLSearchParams(text));
+    }
+    const sub = bookingConfirm.parseNetlifySubmission(payload);
+    if (!sub.submissionId) {
+      sub.submissionId = crypto.createHash('sha256').update(Buffer.isBuffer(raw) ? raw : Buffer.from(text)).digest('hex').slice(0, 32);
+    }
+    if (sub.formName && sub.formName !== 'booking') {
+      return { status: 200, body: { ok: true, sent: false, reason: 'ignored form' } };
+    }
+    const kind = bookingConfirm.bookingKind(sub);
+    if (!kind) {
+      const fresh = bookingConfirm.firstSkip(this.store, `sub:${sub.submissionId}`, 'missing yes/no answer', this.now());
+      if (fresh) await this.flagBookingStaff('', null, { name: sub.name, reason: 'missing yes/no answer', mobileLast4: bookingConfirm.mobileLast4(sub.mobile) });
+      return { status: 200, body: { ok: true, sent: false, reason: 'missing yes/no answer' } };
+    }
+    const who = this.resolveBookingCustomer(sub);
+    if (who.error) {
+      const fresh = bookingConfirm.firstSkip(this.store, `sub:${sub.submissionId}`, who.error, this.now());
+      if (fresh) {
+        await this.flagBookingStaff('', null, {
+          name: sub.name, wait: kind, date: sub.date, reason: who.error,
+          mobileLast4: bookingConfirm.mobileLast4(sub.mobile),
+        });
+      }
+      this.log.warn(`booking webhook not sent: ${who.error}`);
+      return { status: 200, body: { ok: true, sent: false, reason: who.error } };
+    }
+    const result = await this.sendBookingConfirm(who.psid, {
+      page: who.page,
+      name: sub.name,
+      wait: kind,
+      date: sub.date,
+      bookingId: sub.bookingId,
+      submissionId: sub.submissionId,
+      source: who.via === 'phone' ? 'phone' : 'netlify',
+    });
+    if (result.retry) return { status: 502, body: { ok: false, sent: false, reason: result.reason || 'send failed' } };
+    return { status: 200, body: { ok: true, sent: Boolean(result.sent), reason: result.reason || '' } };
+  }
+
+  // Signed token first. Phone only when this bot already stored that number on
+  // exactly one chat (or one job linked to a PSID). A public form cannot name a PSID.
+  resolveBookingCustomer(sub) {
+    const ident = bookingConfirm.identityFrom(this.cfg, sub);
+    if (ident.error) return { error: ident.error };
+    if (ident.psid) {
+      let page = ident.page ? bookingConfirm.pageRecord(this.cfg, ident.page) : null;
+      if (ident.page && !page) return { error: 'no page token' };
+      if (!page) page = this.locateThread(ident.psid).page;
+      if (!page) return { error: 'no page token' };
+      return { psid: ident.psid, page, via: ident.via };
+    }
+    if (!this.cfg.bookingPhoneMatch) return { error: 'no messenger identity' };
+    const hit = bookingConfirm.matchMobile(this.store.data.threads, sub.mobile);
+    if (hit.status === 'many') return { error: 'phone matched more than one chat' };
+    if (hit.status === 'one') {
+      const page = this.pageForThread(hit.thread, hit.key);
+      const psid = (hit.thread && hit.thread.psid) || String(hit.key).split(':').pop();
+      if (!page || !psid) return { error: 'no messenger identity' };
+      return { psid, page, via: 'phone' };
+    }
+    const ops = this.store.data.ops || {};
+    const jobPsid = bookingConfirm.matchJobMobile([...(ops.jobs || []), ...(ops.bookings || [])], sub.mobile);
+    if (!jobPsid) return { error: 'no messenger identity' };
+    const located = this.locateThread(jobPsid);
+    if (!located.page) return { error: 'no messenger identity' };
+    return { psid: jobPsid, page: located.page, via: 'phone' };
+  }
+
+  async flagBookingStaff(psid, thread, info = {}) {
+    const reason = String(info.reason || '');
+    const name = bookingConfirm.cleanName(info.name);
+    if (thread) {
+      thread.bookingNeedsStaff = true;
+      thread.bookingNeedsStaffReason = reason;
+      if (name) thread.bookingName = name;
+      if (info.wait) thread.bookingWait = info.wait;
+      if (info.date) thread.bookingDate = bookingConfirm.prettyBookingDate(info.date);
+      if (info.page) thread.bookingPage = info.page;
+    } else {
+      const alerts = this.store.data.bookingAlerts ||= [];
+      alerts.push({
+        at: this.now(),
+        reason,
+        name,
+        mobileLast4: info.mobileLast4 || '',
+        page: info.page || '',
+      });
+      if (alerts.length > 200) alerts.splice(0, alerts.length - 200);
+    }
+    this.store.flushNow();
+    const who = name || 'Customer';
+    await this.notifyStaff('Booking needs staff', `${who}: ${reason}. No Messenger confirm was sent.`);
   }
 
   async onBookingAgree(psid, t, ts, isStandby) {
@@ -1474,6 +1644,10 @@ class Bot {
   }
 
   async maybeVideoFollowUp(psid, t, now) {
+    if (t.bookingStaffOnly) {
+      if (t.videoReplyAt) this.stopVideoFollowup(psid, 'booking handed to staff');
+      return;
+    }
     if (!t.videoReplyAt) return;
     if ((t.videoFollowupCount || 0) >= this.videoFollowupMax()) return;
     if (t.videoFollowupPending) return;
@@ -1780,6 +1954,7 @@ class Bot {
   // One confirmation if the form arrived, or one nudge if it did not. Never a second nudge.
   async reportFormStatus(psid, thread) {
     if (!thread.bookingFormSent || thread.formConfirmed || thread.formMissNotified) return false;
+    if (thread.bookingStaffOnly || thread.bookingConfirmSentAt) return false;
     const found = await this.formLanded(psid, thread);
     if (found) {
       thread.formConfirmed = true;
@@ -1845,6 +2020,7 @@ class Bot {
     const last = (t.history || [])[(t.history || []).length - 1];
     const catching = this.shouldCatchHotLead(t, now, last);
     if (!catching && (t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';
+    if (t.bookingStaffOnly) return 'booking handed to staff';
     if (t.bookingDone) return 'booking form already submitted';
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
     if (t.optedOut) return 'opted out';
