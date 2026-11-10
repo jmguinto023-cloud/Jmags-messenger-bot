@@ -76,8 +76,14 @@ services:
       # Netlify form webhook JWS secret. Empty rejects POST /booking/netlify.
       - key: NETLIFY_WEBHOOK_SECRET
         sync: false
-      # Ignored. A mobile number never selects the Messenger recipient.
+      # Ignored for choosing a recipient. A mobile number alone never selects the chat.
       - key: BOOKING_PHONE_MATCH
+        sync: false
+      # Match a submit to a chat that was sent the plain form link. Empty stays on.
+      - key: BOOKING_STAFF_LINK_MATCH
+        sync: false
+      # How many days an unused staff form link can still match. Empty keeps 7.
+      - key: BOOKING_STAFF_LINK_DAYS
         sync: false
       - key: BOOKING_BOT_KEY
         sync: false

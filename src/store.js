@@ -264,6 +264,9 @@ class Store {
         }
       }
     }
+    if (Array.isArray(this.data.formLinkSends)) {
+      this.data.formLinkSends = this.data.formLinkSends.filter((row) => !row || row.psid !== key);
+    }
     if (this.data.ops && Array.isArray(this.data.ops.jobs)) {
       for (const job of this.data.ops.jobs) {
         if (job && job.psid === key) job.psid = '';

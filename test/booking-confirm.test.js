@@ -408,7 +408,7 @@ test('a forged token or a matching phone does not get a message', async () => {
     }, 'sub-phone');
     const ok = await postHook(s, plain, {}, HOOK);
     assert.equal(ok.body.sent, false);
-    assert.equal(ok.body.reason, 'no messenger identity');
+    assert.match(ok.body.reason, /Booking needs staff/);
     assert.equal(sentTexts(s.mock).length, 0);
     assert.notEqual(s.app.bot.store.thread(psid).bookingSource, 'phone');
   } finally { await s.close(); }
@@ -425,7 +425,7 @@ test('a stored job phone does not receive the confirm', async () => {
     }, 'sub-job');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.equal(out.body.reason, 'no messenger identity');
+    assert.match(out.body.reason, /Booking needs staff/);
     assert.equal(sentTexts(s.mock).length, 0);
   } finally { await s.close(); }
 });
@@ -441,7 +441,7 @@ test('two chats with the same mobile are not messaged', async () => {
     const raw = submission({ name: 'Duo', willingToWait: 'yes', pdate: '2026-11-12', mobile: '09190001111' }, 'sub-duo');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.equal(out.body.reason, 'no messenger identity');
+    assert.match(out.body.reason, /Booking needs staff/);
     assert.equal(sentTexts(s.mock).length, 0);
     const listed = await fetch(`${s.base}/admin/booking-confirms`);
     assert.equal(listed.status, 401);
@@ -552,6 +552,133 @@ test('confirm goes only to the submitter and does not turn any switch on', async
     assert.ok(replies.slice(2).includes(other));
     assert.equal(replies.includes(psid) ? replies.filter((id) => id === psid).length : 0, 2);
     assert.equal(replies.includes(caviteCustomer), false);
+  } finally { await s.close(); }
+});
+
+function echo(psid, body, pageId = PAGE) {
+  return {
+    object: 'page',
+    entry: [{
+      id: pageId,
+      time: Date.now(),
+      messaging: [{
+        sender: { id: pageId },
+        recipient: { id: psid },
+        timestamp: Date.now(),
+        message: { mid: `echo.${++n}`, is_echo: true, app_id: '999', text: body },
+      }],
+    }],
+  };
+}
+
+test('the live calendar date 11/12/26 is included, including from the details text', () => {
+  const fromField = bc.parseNetlifySubmission({
+    form_name: 'booking',
+    data: { name: 'Ana Cruz', willingToWait: 'yes', pdate: '11/12/26' },
+  });
+  assert.match(bc.confirmText(fromField.name, 'yes', fromField.date), /Regular service po kayo sa Huwebes, Nov 12\./);
+  const fromDetails = bc.parseNetlifySubmission({
+    data: { name: 'Ana Cruz', willingToWait: 'yes', details: 'Preferred date: 11/12/26\nService type: REGULAR' },
+  });
+  assert.equal(bc.prettyBookingDate(fromDetails.date), 'Huwebes, Nov 12');
+  const one = [{ psid: '5551153001', pageKey: 'sanpablo', entryIds: ['a'], phones: [], names: ['Ana Cruz'], label: 'Ana Cruz' }];
+  assert.equal(bc.pickStaffLink(one, { name: 'Ana', mobile: '' }).match.psid, '5551153001');
+  assert.equal(bc.pickStaffLink(one, { name: 'Juan Cruz', mobile: '' }).match, null);
+});
+
+test('a staff form-link echo confirms only that chat, then the chatbot stays silent', async () => {
+  const s = await setup({ BATCH_WINDOW_MS: '0' });
+  try {
+    const psid = '5551150001';
+    s.app.bot.store.addTurn(psid, 'user', 'Ako si Ana Cruz, 09181234567', Date.now());
+    await s.webhook(echo(psid, 'Paki fill-up po https://jmagscutomerform.netlify.app salamat'));
+    const t = s.app.bot.store.thread(psid);
+    assert.equal(t.bookingStaffOnly || false, false);
+    assert.equal((s.app.store.data.formLinkSends || []).some((row) => row.psid === psid && !row.consumedAt), true);
+    const raw = submission({
+      name: 'Ana Cruz', mobile: '09181234567', willingToWait: 'yes', pdate: '11/12/26',
+    }, 'sub-staff-1');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, true);
+    assert.match(sentTexts(s.mock)[0], /sa Huwebes, Nov 12/);
+    assert.equal(s.mock.calls.messages[0].recipient.id, psid);
+    assert.equal(s.app.store.data.formLinkSends.find((row) => row.psid === psid).consumedAt > 0, true);
+
+    t.pausedUntil = 0;
+    t.pauseSource = '';
+    await s.webhook(text(psid, 'AGREE'));
+    const quiet = sentTexts(s.mock).length;
+    t.pausedUntil = 0;
+    t.pauseSource = '';
+    s.app.cfg.botEnabled = true;
+    await s.webhook(text(psid, 'magkano po ang repair'));
+    assert.equal(sentTexts(s.mock).length, quiet);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(t.bookingStaffOnly, true);
+    s.app.cfg.botEnabled = false;
+    await s.webhook(text(psid, 'hello po ulit'));
+    assert.equal(sentTexts(s.mock).length, quiet);
+    assert.equal(s.mock.calls.llm.length, 0);
+
+    const again = submission({
+      name: 'Ana Cruz', mobile: '09181234567', willingToWait: 'yes', pdate: '11/13/26',
+    }, 'sub-staff-2');
+    const second = await postHook(s, again, { 'X-Webhook-Signature': jws(again) });
+    assert.equal(second.body.sent, false);
+    assert.equal(sentTexts(s.mock).length, quiet);
+  } finally { await s.close(); }
+});
+
+test('two staff-link chats with the same mobile are not messaged, and a chat that never got the link is not either', async () => {
+  const s = await setup();
+  try {
+    const a = '5551151001';
+    const b = '5551151002';
+    const stranger = '5551151003';
+    s.app.bot.store.addTurn(a, 'user', '09170001111 Ana Cruz', Date.now());
+    s.app.bot.store.addTurn(b, 'user', '09170001111 Juan Cruz', Date.now());
+    s.app.bot.store.addTurn(stranger, 'user', 'number ko 09170001111', Date.now());
+    await s.webhook(echo(a, 'https://www.jmagscutomerform.netlify.app/'));
+    await s.webhook(echo(b, 'http://jmagscutomerform.netlify.app'));
+    const raw = submission({
+      name: 'Ana Cruz', mobile: '09170001111', willingToWait: 'no', pdate: '11/12/26',
+    }, 'sub-two');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, false);
+    assert.match(out.body.reason, /Booking needs staff/);
+    assert.match(out.body.reason, /1001/);
+    assert.match(out.body.reason, /1002/);
+    assert.equal(out.body.reason.includes(a), false);
+    assert.equal(sentTexts(s.mock).length, 0);
+    assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
+
+    const onlyStranger = await setup();
+    try {
+      onlyStranger.app.bot.store.addTurn(stranger, 'user', '09175556666', Date.now());
+      const lone = submission({
+        name: 'Ana Cruz', mobile: '09175556666', willingToWait: 'yes', pdate: '11/12/26',
+      }, 'sub-stranger');
+      const missed = await postHook(onlyStranger, lone, { 'X-Webhook-Signature': jws(lone) });
+      assert.equal(missed.body.sent, false);
+      assert.equal(sentTexts(onlyStranger.mock).length, 0);
+    } finally { await onlyStranger.close(); }
+  } finally { await s.close(); }
+});
+
+test('a Cavite staff echo confirms with the Cavite Page token', async () => {
+  const s = await setup({ CAVITE_PAGE_ACCESS_TOKEN: 'CAV-TOKEN' });
+  try {
+    const psid = '5551152001';
+    const cav = s.app.cfg.pages.find((p) => p.key === 'cavite');
+    await withPage(cav, () => s.app.bot.store.addTurn(psid, 'user', 'Cely Ramos 09183334444', Date.now()));
+    await s.webhook(echo(psid, 'https://jmagscutomerform.netlify.app', CAVITE));
+    assert.equal(s.app.store.data.formLinkSends[0].pageKey, 'cavite');
+    const raw = submission({
+      name: 'Cely Ramos', mobile: '09183334444', willingToWait: 'yes', service: 'REGULAR', pdate: '11/12/26',
+    }, 'sub-cav-staff');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, true);
+    assert.ok(s.mock.calls.pages.some((p) => p.kind === 'message' && p.token === 'CAV-TOKEN' && p.path.includes(CAVITE)));
   } finally { await s.close(); }
 });
 
