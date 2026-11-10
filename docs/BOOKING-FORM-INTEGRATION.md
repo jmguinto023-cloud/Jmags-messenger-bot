@@ -74,9 +74,13 @@ valid signed token still matches that token first.
 
 ## What the customer receives
 
-Regular (`willingToWait=yes`, or service REGULAR):
+Regular (`willingToWait=yes`, or service REGULAR). `[date]` is the same weekday form as before, for example `Martes, Nov 11`. With no date, ` sa [date]` is left out:
 
-> Salamat po sa booking, [Name]! 😊 Regular service po kayo sa [date]. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.
+> Salamat po sa Pag fill up ng booking, [Name]! 😊
+>
+> Nasa line up po kayo sa [date] ng "REGULAR SERVICE" ibig sabihin available po kayo anytime? Hintayin na lang po tumawag ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.
+>
+> Maraming salamat! HAPPY to SERVE you all 😊
 
 Priority (`willingToWait=no`, or service `PRIORITY` / `PRIORITY (+P1,000)`):
 

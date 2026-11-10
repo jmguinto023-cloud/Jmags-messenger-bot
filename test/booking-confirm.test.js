@@ -90,12 +90,14 @@ test('token binds one PSID to one Page and a bare PSID is rejected', () => {
 test('YES and NO messages name the service, the date, and staff', () => {
   const when = prettyDate('2026-11-12');
   const yes = bc.confirmText('Maria Santos', 'yes', '2026-11-12');
-  assert.equal(yes, `Salamat po sa booking, Maria Santos! 😊 Regular service po kayo sa ${when}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`);
+  assert.equal(yes, regularText('Maria Santos', when));
+  assert.equal(bc.confirmText('Maria Santos', 'yes', ''), regularText('Maria Santos'));
+  assert.match(bc.confirmText('Maria Santos', 'yes', ''), /kayo ng "REGULAR SERVICE"/);
   assert.doesNotMatch(yes, /technician/i);
   const no = bc.confirmText('Maria Santos', 'no', '2026-11-12');
   assert.equal(no, `Salamat po sa booking, Maria Santos! 😊 Priority service po kayo (+P1,000) sa ${when}, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`);
   assert.doesNotMatch(no, /technician/i);
-  assert.match(bc.confirmText('', 'yes'), /^Salamat po sa booking! 😊 Regular service po kayo\./);
+  assert.equal(bc.confirmText('', 'yes'), regularText(''));
   assert.equal(bc.agreeAckText('no'), 'Salamat po, confirmed na po ang booking ninyo.');
   assert.equal(bc.bookingKind({ willingToWait: 'yes', service: 'PRIORITY' }), 'yes');
   assert.equal(bc.bookingKind({ service: 'PRIORITY (+P1,000)' }), 'no');
@@ -273,8 +275,7 @@ test('signed webhook sends one Regular message, retries do not, and a later ques
     const first = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(first.status, 200);
     assert.equal(first.body.sent, true);
-    const when = prettyDate('2026-11-12');
-    assert.equal(sentTexts(s.mock)[0], `Salamat po sa booking, Maria Santos! 😊 Regular service po kayo sa ${when}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`);
+    assert.equal(sentTexts(s.mock)[0], regularText('Maria Santos', prettyDate('2026-11-12')));
     const again = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(again.body.sent, false);
     assert.equal(again.body.reason, 'already sent');
@@ -574,7 +575,12 @@ function echo(psid, body, pageId = PAGE, appId = '999') {
     }],
   };
 }
-const confirmMsgs = (mock) => mock.calls.messages.filter((m) => m.message && /Salamat po sa booking/.test(m.message.text));
+const confirmMsgs = (mock) => mock.calls.messages.filter((m) => m.message && /Salamat po sa (booking|Pag fill up)/.test(m.message.text));
+function regularText(name, date) {
+  const who = name ? `, ${name}` : '';
+  const when = date ? ` sa ${date}` : '';
+  return `Salamat po sa Pag fill up ng booking${who}! 😊\n\nNasa line up po kayo${when} ng "REGULAR SERVICE" ibig sabihin available po kayo anytime? Hintayin na lang po tumawag ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.\n\nMaraming salamat! HAPPY to SERVE you all 😊`;
+}
 const SAVED_REPLY = 'Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊';
 const personalMsgs = (mock) => mock.calls.messages.filter((m) => m.message && String(m.message.text).startsWith('👇 Booking link po ninyo:'));
 
@@ -672,13 +678,12 @@ test('the live calendar date 11/12/26 is included, including from the details te
     form_name: 'booking',
     data: { name: 'Ana Cruz', willingToWait: 'yes', pdate: '11/12/26' },
   });
-  assert.match(bc.confirmText(fromField.name, 'yes', fromField.date), /Regular service po kayo sa Huwebes, Nov 12\./);
+  assert.equal(bc.confirmText(fromField.name, 'yes', fromField.date), regularText('Ana Cruz', 'Huwebes, Nov 12'));
   const fromDetails = bc.parseNetlifySubmission({
     data: { name: 'Ana Cruz', willingToWait: 'yes', details: 'Preferred date: 11/12/26\nService type: REGULAR' },
   });
   assert.equal(bc.prettyBookingDate(fromDetails.date), 'Huwebes, Nov 12');
-  assert.equal(bc.confirmText('Ana Cruz', 'yes', ''), 'Salamat po sa booking, Ana Cruz! 😊 Regular service po kayo. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.');
-  assert.doesNotMatch(bc.confirmText('Ana Cruz', 'yes', ''), /kayo sa\s*\./);
+  assert.equal(bc.confirmText('Ana Cruz', 'no', fromDetails.date), `Salamat po sa booking, Ana Cruz! 😊 Priority service po kayo (+P1,000) sa Huwebes, Nov 12, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`);
 });
 
 test('a unique mobile overrides a name clash, and two mobiles use the name as a tiebreaker', () => {
@@ -789,7 +794,7 @@ test('a staff form-link echo confirms only that chat, then the chatbot stays sil
     }, 'sub-staff-1');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, true);
-    assert.match(confirmMsgs(s.mock)[0].message.text, /sa Huwebes, Nov 12/);
+    assert.equal(confirmMsgs(s.mock)[0].message.text, regularText('Ana Cruz', 'Huwebes, Nov 12'));
     assert.equal(confirmMsgs(s.mock)[0].recipient.id, psid);
     assert.equal(s.app.store.data.formLinkSends.find((row) => row.psid === psid).consumedAt > 0, true);
 

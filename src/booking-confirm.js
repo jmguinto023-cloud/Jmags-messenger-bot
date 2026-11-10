@@ -223,13 +223,18 @@ function submissionDate(data, body) {
 function confirmText(name, wait, date) {
   const who = cleanName(name);
   const when = prettyBookingDate(date);
-  const hello = who ? `Salamat po sa booking, ${who}! 😊` : 'Salamat po sa booking! 😊';
   if (normalizeWait(wait) === 'no') {
+    const hello = who ? `Salamat po sa booking, ${who}! 😊` : 'Salamat po sa booking! 😊';
     const slot = when ? ` sa ${when}` : '';
     return `${hello} Priority service po kayo (+P1,000)${slot}, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`;
   }
-  const slot = when ? ` sa ${when}` : '';
-  return `${hello} Regular service po kayo${slot}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`;
+  const hello = who ? `Salamat po sa Pag fill up ng booking, ${who}! 😊` : 'Salamat po sa Pag fill up ng booking! 😊';
+  const whenSlot = when ? ` sa ${when}` : '';
+  return [
+    hello,
+    `Nasa line up po kayo${whenSlot} ng "REGULAR SERVICE" ibig sabihin available po kayo anytime? Hintayin na lang po tumawag ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`,
+    'Maraming salamat! HAPPY to SERVE you all 😊',
+  ].join('\n\n');
 }
 
 function agreeAckText() {
