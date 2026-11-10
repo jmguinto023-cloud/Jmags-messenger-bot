@@ -519,7 +519,9 @@ class Bot {
     const now = this.now();
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
     if (t && t.optedOut) return 'opted out';
-    // After the booking confirm, staff own the chat even when this Page's switch is on.
+    // Booking silence is per chat. Copying a link, the form, the confirm, and AGREE
+    // do not turn the bot on, and nothing here clears it. A later inbound stays quiet
+    // while BOT_ENABLED is on or off until staff explicitly clear bookingStaffOnly.
     if (t && t.bookingStaffOnly) return 'booking handed to staff';
     if (t && t.gateClosed) return 'quote-gate handoff';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';

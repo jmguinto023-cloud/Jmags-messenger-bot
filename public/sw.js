@@ -38,6 +38,7 @@ function isDataRequest(url) {
     || url.pathname.startsWith('/dashboard/')
     || url.pathname === '/ops'
     || url.pathname === '/ops.js'
+    || url.pathname === '/copy-form-link.js'
     || url.pathname === '/ops.css'
     || url.pathname.startsWith('/ops/');
 }

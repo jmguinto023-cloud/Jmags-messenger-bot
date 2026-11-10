@@ -36,6 +36,7 @@ function shell({ title, body, refresh }) {
 <body>
 ${body}
 <script src="/dashboard.js"></script>
+<script src="/copy-form-link.js"></script>
 </body>
 </html>`;
 }
@@ -133,6 +134,15 @@ function reviewPageId(row, fallback) {
   return (row && row.pageId) || fallback || '';
 }
 
+function phoneTail(thread) {
+  const blob = ((thread && thread.history) || [])
+    .filter((h) => h && h.role === 'user')
+    .map((h) => h.content || '')
+    .join('\n');
+  const match = blob.match(/(?:\+63|0)9\d{9}/);
+  return match ? match[0].replace(/\D/g, '').slice(-4) : '';
+}
+
 function reviewCard(row, pageId, thread, now, windowMs, jobs) {
   const summary = row.summary || {};
   const named = String(row.customerName || '').trim();
@@ -157,10 +167,11 @@ function reviewCard(row, pageId, thread, now, windowMs, jobs) {
     : (snippet
       ? `<p><button type="button" class="ghost copy-name" data-copy-text="${esc(snippet)}" data-copy-kind="message">Kopyahin ang mensahe</button></p>`
       : '');
+  const find = [named, row.psidLast4, phoneTail(thread)].filter(Boolean).join(' ');
   const ivan = row.ivanRepliedAt ? ' <span class="pill ivan">Sinagot ni Ivan</span>' : '';
   const disabled = open ? '' : ' disabled';
   const note = open ? '' : WINDOW_ERROR;
-  return `<article class="card" data-review-id="${esc(row.id)}">
+  return `<article class="card" data-review-id="${esc(row.id)}" data-find="${esc(find)}">
     <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span>${ivan}</h2>
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
     ${row.quietNote ? `<p class="meta quiet">${esc(row.quietNote)}</p>` : ''}
@@ -176,6 +187,7 @@ function reviewCard(row, pageId, thread, now, windowMs, jobs) {
     </div>
     ${jobPicker(row, thread, jobs)}
     ${copyButton}
+    <p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.id)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>
     <p><a class="inbox-fallback" href="${esc(genericInboxUrl(pageId))}">Buksan ang Inbox</a></p>
     ${button}
   </article>`;
@@ -204,6 +216,8 @@ function listPage(cfg, reviews, threads, now = Date.now(), jobs = []) {
         <form method="post" action="/dashboard/logout"><button class="ghost" type="submit">Log out</button></form>
       </div>
       <p id="status" class="status"></p>
+      <label for="card-search">Find a customer</label>
+      <input id="card-search" type="search" placeholder="Name, or last 4 of PSID or phone" autocomplete="off">
       <section id="list">${cards}</section>
     </main>`,
   });

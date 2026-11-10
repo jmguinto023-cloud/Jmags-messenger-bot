@@ -13,6 +13,7 @@ const { smsReady, sendJobConfirmation, markJobConfirmed, parseInbound, tokenOk, 
 const { opsPage } = require('./ops-page');
 const { activeNow } = require('./schedule');
 const bookingConfirm = require('./booking-confirm');
+const { linkForCard } = require('./form-link-card');
 
 const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
 
@@ -271,7 +272,7 @@ function createServer({ cfg, bot, log }) {
       return send(403, 'Forbidden');
     }
 
-    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply' || url.pathname === '/dashboard/link-job' || url.pathname === '/ops/action');
+    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply' || url.pathname === '/dashboard/api/booking-link' || url.pathname === '/dashboard/link-job' || url.pathname === '/ops/action');
     if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || url.pathname === '/sms/inbound' || dashPost)) {
       const chunks = [];
       let size = 0;
@@ -282,6 +283,7 @@ function createServer({ cfg, bot, log }) {
         if (url.pathname === '/dashboard/logout') return dashboardLogout();
         if (url.pathname === '/dashboard/reviewed') return dashboardReviewed(req, raw);
         if (url.pathname === '/dashboard/api/reply') return dashboardReply(req, raw);
+        if (url.pathname === '/dashboard/api/booking-link') return dashboardBookingLink(req, raw);
         if (url.pathname === '/dashboard/link-job') return dashboardLinkJob(req, raw);
         if (url.pathname === '/ops/action') return opsAction(req, raw);
         if (url.pathname === '/sms/inbound') return smsInbound(req, raw);
@@ -404,6 +406,15 @@ function createServer({ cfg, bot, log }) {
       if (!result.ok) return send(400, result.error || 'Bad request');
       res.writeHead(303, { Location: '/dashboard' });
       res.end('');
+    }
+
+    function dashboardBookingLink(rq, raw) {
+      if (!dashOk(cfg, rq)) return sendJson(403, { ok: false, error: 'Unauthorized' });
+      let body;
+      try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch { return sendJson(400, { ok: false, error: 'Bad JSON' }); }
+      const found = linkForCard(cfg, bot.store, body && body.id);
+      if (!found) return sendJson(404, { ok: false, error: 'Hindi makita ang chat.' });
+      return sendJson(200, { ok: true, url: found.url, page: found.page });
     }
 
     function dashboardReply(rq, raw) {

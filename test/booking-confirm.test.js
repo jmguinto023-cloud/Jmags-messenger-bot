@@ -555,3 +555,149 @@ test('confirm goes only to the submitter and does not turn any switch on', async
   } finally { await s.close(); }
 });
 
+test('copy form link uses the card id for both Pages and does not touch the chat', async () => {
+  const { listPage } = require('../src/dashboard-page');
+  const { threadCardId } = require('../src/form-link-card');
+  const shown = '5550001111';
+  const html = listPage({ replyWindowHours: 23.5, pageId: PAGE }, [{
+    id: 'aa11bb22cc33dd44',
+    timestamp: new Date().toISOString(),
+    psid: shown,
+    psidLast4: '1111',
+    customerName: 'Ana Cruz',
+    status: 'new',
+    type: 'photo',
+    summary: {},
+  }], {
+    [shown]: { history: [{ role: 'user', content: '09171234567', ts: Date.now() }], lastUserTs: Date.now() },
+  }, Date.now(), []);
+  assert.match(html, /Copy form link/);
+  assert.match(html, /data-card-id="aa11bb22cc33dd44"/);
+  assert.match(html, /data-find="Ana Cruz 1111 4567"/);
+  assert.match(html, /id="card-search"/);
+  assert.equal(html.includes(shown), false);
+  assert.equal(html.match(/data-find="([^"]+)"/)[1].includes('09171234567'), false);
+
+  const s = await setup({ CAVITE_PAGE_ACCESS_TOKEN: 'CAV-TOKEN', ADMIN_TOKEN: 'adm' });
+  try {
+    const denied = await fetch(`${s.base}/dashboard/api/booking-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'aa11bb22cc33dd44' }),
+    });
+    assert.equal(denied.status, 403);
+    const psid = '5551142001';
+    const thread = s.app.bot.store.thread(psid);
+    thread.lastUserTs = Date.now();
+    const before = JSON.stringify(thread);
+    const enabledBefore = s.app.cfg.botEnabled;
+    s.app.bot.store.data.reviews.push({
+      id: 'aa11bb22cc33dd44',
+      psid,
+      pageId: PAGE,
+      threadKey: psid,
+      psidLast4: '2001',
+      customerName: 'Ana Cruz',
+      status: 'new',
+      type: 'photo',
+      timestamp: new Date().toISOString(),
+    });
+    const cavitePsid = '5551142002';
+    const cavite = s.app.cfg.pages.find((p) => p.key === 'cavite');
+    await withPage(cavite, () => { s.app.bot.store.thread(cavitePsid).lastUserTs = Date.now(); });
+    const caviteKey = `${CAVITE}:${cavitePsid}`;
+    const res = await fetch(`${s.base}/dashboard/api/booking-link`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'aa11bb22cc33dd44' }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(body).sort(), ['ok', 'page', 'url']);
+    assert.equal(body.page, 'sanpablo');
+    assert.deepEqual(bc.readToken(s.app.cfg, new URL(body.url).searchParams.get('token')), { psid, page: 'sanpablo' });
+    assert.equal(JSON.stringify(s.app.bot.store.thread(psid)), before);
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal((s.mock.calls.switches || []).length, 0);
+    assert.equal(s.app.cfg.botEnabled, enabledBefore);
+    const cav = await (await fetch(`${s.base}/dashboard/api/booking-link`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: threadCardId(caviteKey) }),
+    })).json();
+    assert.equal(cav.page, 'cavite');
+    assert.deepEqual(bc.readToken(s.app.cfg, new URL(cav.url).searchParams.get('token')), { psid: cavitePsid, page: 'cavite' });
+    assert.equal(s.mock.calls.messages.length, 0);
+    const missing = await fetch(`${s.base}/dashboard/api/booking-link`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: psid }),
+    });
+    assert.equal(missing.status, 404);
+  } finally { await s.close(); }
+});
+
+test('after the form link, submit, and AGREE the chatbot stays silent with the bot on or off', async () => {
+  const s = await setup({ BATCH_WINDOW_MS: '0', ADMIN_TOKEN: 'adm' });
+  try {
+    const psid = '5551143001';
+    const other = '5551143099';
+    s.app.cfg.botEnabled = true;
+    s.mock.state.botSwitches = [
+      { page_key: 'sanpablo', enabled: true },
+      { page_key: 'cavite', enabled: true },
+    ];
+    s.app.bot.switches.cache = null;
+    s.app.bot.switches.cacheMs = 0;
+    const thread = s.app.bot.store.thread(psid);
+    thread.lastUserTs = Date.now();
+    const reviewId = 'bb22cc33dd44ee55';
+    s.app.bot.store.data.reviews.push({
+      id: reviewId,
+      psid,
+      pageId: PAGE,
+      threadKey: psid,
+      psidLast4: '3001',
+      customerName: 'Ana Link',
+      status: 'new',
+      type: 'photo',
+      timestamp: new Date().toISOString(),
+    });
+    const linked = await (await fetch(`${s.base}/dashboard/api/booking-link`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer adm', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: reviewId }),
+    })).json();
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(thread.bookingStaffOnly || false, false);
+    const token = new URL(linked.url).searchParams.get('token');
+    const raw = submission({
+      name: 'Ana Link', willingToWait: 'yes', pdate: '2026-11-12',
+      psid, page: 'sanpablo', token,
+    }, 'sub-silence');
+    const sent = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(sent.body.sent, true);
+    await s.webhook(text(psid, 'AGREE'));
+    assert.equal(thread.bookingConfirmed, true);
+    assert.equal(thread.bookingStaffOnly, true);
+    const quiet = sentTexts(s.mock).length;
+
+    s.app.cfg.botEnabled = true;
+    await s.webhook(text(psid, 'magkano po ang repair'));
+    assert.equal(sentTexts(s.mock).length, quiet);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(thread.bookingStaffOnly, true);
+
+    s.app.cfg.botEnabled = false;
+    await s.webhook(text(psid, 'hello po nandito pa ako'));
+    assert.equal(sentTexts(s.mock).length, quiet);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(thread.bookingStaffOnly, true);
+
+    s.app.cfg.botEnabled = true;
+    await s.webhook(text(other, 'hello po'));
+    assert.ok(s.mock.calls.messages.some((m) => m.recipient && m.recipient.id === other));
+    assert.equal(s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === psid).length, quiet);
+  } finally { await s.close(); }
+});
+

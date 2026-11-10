@@ -1035,5 +1035,7 @@ test('today tab lists hot leads oldest first and skips a finished booking', asyn
     assert.doesNotMatch(page, /data-hot-lead="cc33"/);
     assert.doesNotMatch(page, /data-hot-lead="dd44"/);
     assert.doesNotMatch(page, /0917\d{7}/);
+    assert.match(page, /Copy form link/);
+    assert.doesNotMatch(page, /hot-old-aa11/);
   } finally { await s.close(); }
 });
