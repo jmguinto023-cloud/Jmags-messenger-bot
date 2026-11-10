@@ -581,9 +581,90 @@ test('the live calendar date 11/12/26 is included, including from the details te
     data: { name: 'Ana Cruz', willingToWait: 'yes', details: 'Preferred date: 11/12/26\nService type: REGULAR' },
   });
   assert.equal(bc.prettyBookingDate(fromDetails.date), 'Huwebes, Nov 12');
-  const one = [{ psid: '5551153001', pageKey: 'sanpablo', entryIds: ['a'], phones: [], names: ['Ana Cruz'], label: 'Ana Cruz' }];
-  assert.equal(bc.pickStaffLink(one, { name: 'Ana', mobile: '' }).match.psid, '5551153001');
-  assert.equal(bc.pickStaffLink(one, { name: 'Juan Cruz', mobile: '' }).match, null);
+});
+
+test('initials are not a name clash, a real clash blocks, and two chats stay ambiguous', () => {
+  const live = [{
+    psid: '5550009161', pageKey: 'sanpablo', entryIds: ['a'],
+    phones: ['09386369374'], names: ['JM AG'], label: 'JM AG',
+  }];
+  const hit = bc.pickStaffLink(live, { name: 'Jhon Michael Angelo Guinto', mobile: '09386369374' });
+  assert.equal(hit.match.psid, '5550009161');
+  assert.equal(hit.decisions[0].why, 'accepted: unique mobile, name does not clash');
+  assert.equal(JSON.stringify(hit.decisions).includes('09386369374'), false);
+  assert.equal(JSON.stringify(hit.decisions).includes('5550009161'), false);
+
+  const jmag = [{ ...live[0], names: ['JMAG'], label: 'JMAG' }];
+  assert.equal(bc.pickStaffLink(jmag, { name: 'Jhon Michael Angelo Guinto', mobile: '09386369374' }).match.psid, '5550009161');
+
+  const only = [{ ...live[0], phones: ['09170000000'] }];
+  const anyPhone = bc.pickStaffLink(only, { name: 'Jhon Michael Angelo Guinto', mobile: '09998887777' });
+  assert.equal(anyPhone.match.psid, '5550009161');
+  assert.equal(anyPhone.decisions[0].why, 'accepted: only open staff link, name does not clash');
+
+  const clash = [{
+    psid: '5550009161', pageKey: 'sanpablo', entryIds: ['a'],
+    phones: ['09386369374'], names: ['Maria Santos'], label: 'Maria Santos',
+  }];
+  const blocked = bc.pickStaffLink(clash, { name: 'Pedro Reyes', mobile: '09386369374' });
+  assert.equal(blocked.match, null);
+  assert.match(blocked.reason, /Booking needs staff/);
+  assert.match(blocked.reason, /9161/);
+  assert.equal(blocked.reason.includes('5550009161'), false);
+  assert.equal(blocked.decisions[0].why, 'rejected: name clash');
+
+  const two = [
+    live[0],
+    {
+      psid: '5550001002', pageKey: 'sanpablo', entryIds: ['b'],
+      phones: ['09386369374'], names: ['Ana Cruz'], label: 'Ana Cruz',
+    },
+  ];
+  const amb = bc.pickStaffLink(two, { name: 'Jhon Michael Angelo Guinto', mobile: '09386369374' });
+  assert.equal(amb.match, null);
+  assert.match(amb.reason, /9161/);
+  assert.match(amb.reason, /1002/);
+  assert.equal(amb.decisions.every((row) => row.why.startsWith('rejected:')), true);
+});
+
+test('a stored name of JM AG still confirms the one chat that has the form phone', async () => {
+  const s = await setup();
+  const notes = [];
+  s.app.bot.log.info = (...a) => notes.push(a.map(String).join(' '));
+  try {
+    const psid = '5550009161';
+    s.app.bot.store.addTurn(psid, 'user', '09386369374', Date.now());
+    s.app.bot.store.thread(psid).profileName = 'JM AG';
+    await s.webhook(echo(psid, 'https://jmagscutomerform.netlify.app'));
+    const raw = submission({
+      name: 'Jhon Michael Angelo Guinto', mobile: '09386369374', willingToWait: 'yes', pdate: '11/12/26',
+    }, 'sub-jm-ag');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, true);
+    assert.equal(s.mock.calls.messages[0].recipient.id, psid);
+    assert.match(sentTexts(s.mock)[0], /Jhon Michael Angelo Guinto/);
+    assert.equal(s.app.store.data.formLinkSends.find((row) => row.psid === psid).consumedAt > 0, true);
+    assert.ok(notes.some((line) => line.includes('staff form link recorded sanpablo') && line.includes('9161') && !line.includes(psid)));
+    assert.ok(notes.some((line) => line.includes('booking staff-link sanpablo') && line.includes('9161') && line.includes('accepted: unique mobile')));
+    assert.equal(notes.some((line) => line.includes('09386369374') || line.includes(psid)), false);
+
+    const clash = await setup();
+    try {
+      const other = '5550009170';
+      clash.app.bot.store.addTurn(other, 'user', 'Ako si Maria Santos, 09386369374', Date.now());
+      await clash.webhook(echo(other, 'https://jmagscutomerform.netlify.app'));
+      const rawClash = submission({
+        name: 'Pedro Reyes', mobile: '09386369374', willingToWait: 'yes', pdate: '11/12/26',
+      }, 'sub-clash');
+      const blocked = await postHook(clash, rawClash, { 'X-Webhook-Signature': jws(rawClash) });
+      assert.equal(blocked.body.sent, false);
+      assert.match(blocked.body.reason, /Booking needs staff/);
+      assert.match(blocked.body.reason, /9170/);
+      assert.equal(blocked.body.reason.includes(other), false);
+      assert.equal(sentTexts(clash.mock).length, 0);
+      assert.equal(clash.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
+    } finally { await clash.close(); }
+  } finally { await s.close(); }
 });
 
 test('a staff form-link echo confirms only that chat, then the chatbot stays silent', async () => {

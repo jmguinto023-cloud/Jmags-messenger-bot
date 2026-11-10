@@ -1351,6 +1351,7 @@ class Bot {
     list.push(row);
     if (list.length > 2000) list.splice(0, list.length - 2000);
     this.store.flushNow();
+    this.log.info(`staff form link recorded ${pageName} ${short(psid)}`);
     return row;
   }
 
@@ -1413,7 +1414,15 @@ class Bot {
       const label = bookingConfirm.cleanName((facts.names || [])[0] || '');
       candidates.push({ ...group, phones: facts.phones, names: facts.names, label });
     }
-    return bookingConfirm.pickStaffLink(candidates, sub);
+    const picked = bookingConfirm.pickStaffLink(candidates, sub);
+    if (!(picked.decisions || []).length) {
+      this.log.info('booking staff-link: no open form-link sends in the window');
+    } else {
+      for (const row of picked.decisions) {
+        this.log.info(`booking staff-link ${row.pageKey} ${short(row.last4)} ${row.why}`);
+      }
+    }
+    return picked;
   }
 
   threadsForPsid(psid) {

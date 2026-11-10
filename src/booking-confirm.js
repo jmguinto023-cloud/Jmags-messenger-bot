@@ -375,6 +375,47 @@ function namesRoughlyMatch(a, b) {
   return shorter.every((word) => longer.includes(word));
 }
 
+function compactLetters(name) {
+  return cleanName(name).toLowerCase().replace(/[^a-zñ]/gi, '');
+}
+
+function initialsOf(name) {
+  return cleanName(name).toLowerCase().replace(/[^a-zñ\s]/gi, ' ').split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join('');
+}
+
+// "JM AG" and "JMAG" are the first letters of "Jhon Michael Angelo Guinto".
+function initialsCompatible(a, b) {
+  const left = initialsOf(a);
+  const right = compactLetters(b);
+  return left.length >= 2 && right.length >= 2 && left === right;
+}
+
+function namesOverlap(a, b) {
+  const left = nameTokens(a);
+  const right = nameTokens(b);
+  if (!left.length || !right.length) return false;
+  return left.some((word) => right.includes(word));
+}
+
+// A short stored name such as "JM AG" has no usable token. That is unknown, not a clash.
+// A clash is both sides having real words and sharing none of them.
+function namesClash(formName, storedNames) {
+  const form = cleanName(formName);
+  if (!form || !nameTokens(form).length) return false;
+  const usable = (storedNames || []).map(cleanName).filter((n) => nameTokens(n).length > 0);
+  if (!usable.length) return false;
+  return usable.every((n) => !namesOverlap(form, n) && !initialsCompatible(form, n));
+}
+
+function nameAgrees(formName, storedNames) {
+  const form = cleanName(formName);
+  if (!form) return false;
+  return (storedNames || []).some((n) => namesRoughlyMatch(form, n) || initialsCompatible(form, n));
+}
+
 function phonesInText(text) {
   const found = [];
   const re = /(?:\+?63|0)[\s.-]*9(?:[\s.-]*\d){9}\b/g;
@@ -396,37 +437,76 @@ function staffNeedReason(candidates) {
   return `Booking needs staff${bits.length ? `: ${bits.join(', ')}` : ''}`;
 }
 
+function decision(row, accepted, why) {
+  return {
+    pageKey: (row.c && row.c.pageKey) || '',
+    last4: String((row.c && row.c.psid) || '').slice(-4),
+    accepted,
+    why,
+  };
+}
+
 // Candidates are only chats that were sent the form link and are still open.
-// A unique phone wins. One open chat whose name roughly matches is also enough.
+// One open chat is accepted unless the names really clash. Several chats still
+// need one phone, or one name when the form has no phone.
 function pickStaffLink(candidates, sub) {
   const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
   const phone = normalizeMobile(sub && sub.mobile);
   const formName = cleanName(sub && sub.name);
   const rows = list.map((c) => {
     const phones = (c.phones || []).map(normalizeMobile).filter(Boolean);
-    const names = (c.names || []).filter(Boolean);
+    const names = (c.names || []).map(cleanName).filter(Boolean);
     return {
       c,
+      names,
       phoneHit: Boolean(phone) && phones.includes(phone),
-      nameHit: Boolean(formName) && names.some((n) => namesRoughlyMatch(formName, n)),
-      hasName: names.length > 0,
+      nameHit: nameAgrees(formName, names),
+      clash: namesClash(formName, names),
     };
+  });
+  const finish = (match, reason, flagged, whyFor) => ({
+    match,
+    reason,
+    candidates: flagged,
+    decisions: rows.map((row) => decision(row, Boolean(match && match === row.c), whyFor(row))),
   });
   const phoneHits = rows.filter((row) => row.phoneHit);
   if (phoneHits.length > 1) {
-    return { match: null, reason: staffNeedReason(phoneHits.map((row) => row.c)), candidates: phoneHits.map((row) => row.c) };
+    return finish(null, staffNeedReason(phoneHits.map((row) => row.c)), phoneHits.map((row) => row.c), (row) => (
+      row.phoneHit ? 'rejected: mobile matches more than one chat' : 'rejected: mobile does not match'
+    ));
   }
   if (phoneHits.length === 1) {
     const hit = phoneHits[0];
-    if (formName && hit.hasName && !hit.nameHit) {
-      return { match: null, reason: staffNeedReason([hit.c]), candidates: [hit.c] };
+    if (hit.clash) {
+      return finish(null, staffNeedReason([hit.c]), [hit.c], (row) => (
+        row === hit ? 'rejected: name clash' : 'rejected: mobile does not match'
+      ));
     }
-    return { match: hit.c, reason: '' };
+    return finish(hit.c, '', [hit.c], (row) => (
+      row === hit ? 'accepted: unique mobile, name does not clash' : 'rejected: mobile does not match'
+    ));
   }
-  if (list.length === 1 && rows[0].nameHit) return { match: rows[0].c, reason: '' };
+  if (list.length === 1) {
+    const only = rows[0];
+    if (only.clash) {
+      return finish(null, staffNeedReason([only.c]), [only.c], () => 'rejected: name clash');
+    }
+    return finish(only.c, '', [only.c], () => 'accepted: only open staff link, name does not clash');
+  }
   const nameHits = rows.filter((row) => row.nameHit);
-  if (!phone && nameHits.length === 1) return { match: nameHits[0].c, reason: '' };
-  return { match: null, reason: staffNeedReason(list), candidates: list };
+  if (!phone && nameHits.length === 1) {
+    const hit = nameHits[0];
+    return finish(hit.c, '', [hit.c], (row) => (
+      row === hit ? 'accepted: only name match' : 'rejected: name does not match'
+    ));
+  }
+  return finish(null, staffNeedReason(list), list, (row) => {
+    if (row.clash) return 'rejected: name clash';
+    if (phone) return 'rejected: mobile does not match';
+    if (nameHits.length > 1) return 'rejected: name matches more than one chat';
+    return 'rejected: ambiguous';
+  });
 }
 
 function normalizeMobile(value) {
