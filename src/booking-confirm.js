@@ -447,8 +447,9 @@ function decision(row, accepted, why) {
 }
 
 // Candidates are only chats that were sent the form link and are still open.
-// One open chat is accepted unless the names really clash. Several chats still
-// need one phone, or one name when the form has no phone.
+// A mobile the customer typed wins, even when the Facebook name differs.
+// Several chats with that mobile use the name to pick one. With no mobile hit,
+// one open chat is accepted only when the names do not clash.
 function pickStaffLink(candidates, sub) {
   const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
   const phone = normalizeMobile(sub && sub.mobile);
@@ -472,19 +473,23 @@ function pickStaffLink(candidates, sub) {
   });
   const phoneHits = rows.filter((row) => row.phoneHit);
   if (phoneHits.length > 1) {
+    const named = phoneHits.filter((row) => row.nameHit);
+    if (named.length === 1) {
+      const hit = named[0];
+      return finish(hit.c, '', [hit.c], (row) => {
+        if (row === hit) return 'accepted: name breaks the mobile tie';
+        return row.phoneHit ? 'rejected: name does not match' : 'rejected: mobile does not match';
+      });
+    }
     return finish(null, staffNeedReason(phoneHits.map((row) => row.c)), phoneHits.map((row) => row.c), (row) => (
       row.phoneHit ? 'rejected: mobile matches more than one chat' : 'rejected: mobile does not match'
     ));
   }
   if (phoneHits.length === 1) {
     const hit = phoneHits[0];
-    if (hit.clash) {
-      return finish(null, staffNeedReason([hit.c]), [hit.c], (row) => (
-        row === hit ? 'rejected: name clash' : 'rejected: mobile does not match'
-      ));
-    }
+    const why = hit.clash ? 'accepted: unique mobile (name differs)' : 'accepted: unique mobile, name does not clash';
     return finish(hit.c, '', [hit.c], (row) => (
-      row === hit ? 'accepted: unique mobile, name does not clash' : 'rejected: mobile does not match'
+      row === hit ? why : 'rejected: mobile does not match'
     ));
   }
   if (list.length === 1) {
