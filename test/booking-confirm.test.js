@@ -90,12 +90,14 @@ test('token binds one PSID to one Page and a bare PSID is rejected', () => {
 test('YES and NO messages name the service, the date, and staff', () => {
   const when = prettyDate('2026-11-12');
   const yes = bc.confirmText('Maria Santos', 'yes', '2026-11-12');
-  assert.equal(yes, `Salamat po sa booking, Maria Santos! 😊 Regular service po kayo sa ${when}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`);
+  assert.equal(yes, regularText('Maria Santos', when));
+  assert.equal(bc.confirmText('Maria Santos', 'yes', ''), regularText('Maria Santos'));
+  assert.match(bc.confirmText('Maria Santos', 'yes', ''), /kayo ng "REGULAR SERVICE"/);
   assert.doesNotMatch(yes, /technician/i);
   const no = bc.confirmText('Maria Santos', 'no', '2026-11-12');
   assert.equal(no, `Salamat po sa booking, Maria Santos! 😊 Priority service po kayo (+P1,000) sa ${when}, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`);
   assert.doesNotMatch(no, /technician/i);
-  assert.match(bc.confirmText('', 'yes'), /^Salamat po sa booking! 😊 Regular service po kayo\./);
+  assert.equal(bc.confirmText('', 'yes'), regularText(''));
   assert.equal(bc.agreeAckText('no'), 'Salamat po, confirmed na po ang booking ninyo.');
   assert.equal(bc.bookingKind({ willingToWait: 'yes', service: 'PRIORITY' }), 'yes');
   assert.equal(bc.bookingKind({ service: 'PRIORITY (+P1,000)' }), 'no');
@@ -121,14 +123,14 @@ test('form submit with ref sends the NO message on Messenger, AGREE confirms', a
     const psid = '5550001111';
     s.app.bot.store.thread(psid).lastUserTs = Date.now();
     const ref = bc.makeRef(s.app.cfg, psid);
-    const res = await s.submit({ ref, name: 'Ana Reyes', wait: 'no', bookingId: 'BK-77' });
+    const res = await s.submit({ ref, name: 'Ana Reyes', wait: 'no', bookingId: 'BK-77', pdate: '11/10/26' });
     assert.equal(res.headers.get('access-control-allow-origin'), ORIGIN);
     const body = await res.json();
     assert.equal(body.sent, true);
     let texts = sentTexts(s.mock);
     assert.equal(texts.length, 1);
     assert.match(texts[0], /Salamat po sa booking, Ana Reyes/);
-    assert.match(texts[0], /Priority service po kayo \(\+P1,000\)/);
+    assert.match(texts[0], /Priority service po kayo \(\+P1,000\) sa Martes, Nov 10/);
     assert.doesNotMatch(texts[0], /technician/i);
     const t = s.app.bot.store.thread(psid);
     assert.equal(t.awaitingAgree, true);
@@ -136,7 +138,7 @@ test('form submit with ref sends the NO message on Messenger, AGREE confirms', a
     assert.equal(t.bookingDone, true);
 
     // Duplicate submit within 10 minutes is not sent twice.
-    const again = await (await s.submit({ ref, name: 'Ana Reyes', wait: 'no', bookingId: 'BK-77' })).json();
+    const again = await (await s.submit({ ref, name: 'Ana Reyes', wait: 'no', bookingId: 'BK-77', pdate: '11/10/26' })).json();
     assert.equal(again.sent, false);
 
     await s.webhook(text(psid, 'AGREE po'));
@@ -273,8 +275,7 @@ test('signed webhook sends one Regular message, retries do not, and a later ques
     const first = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(first.status, 200);
     assert.equal(first.body.sent, true);
-    const when = prettyDate('2026-11-12');
-    assert.equal(sentTexts(s.mock)[0], `Salamat po sa booking, Maria Santos! 😊 Regular service po kayo sa ${when}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`);
+    assert.equal(sentTexts(s.mock)[0], regularText('Maria Santos', prettyDate('2026-11-12')));
     const again = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(again.body.sent, false);
     assert.equal(again.body.reason, 'already sent');
@@ -475,12 +476,16 @@ test('the browser confirm and the webhook do not send two messages for one booki
     const ref = bc.makeRef(s.app.cfg, psid);
     const token = bc.makeToken(s.app.cfg, psid, 'sanpablo');
     const browser = await s.submit({ ref, name: 'Ana Reyes', wait: 'no', bookingId: 'BK-90' });
-    assert.equal((await browser.json()).sent, true);
+    assert.equal((await browser.json()).sent, false);
+    assert.equal(sentTexts(s.mock).length, 0);
     const raw = submission({
       name: 'Ana Reyes', willingToWait: 'no', pdate: '2026-11-12', psid, page: 'sanpablo', token,
     }, 'sub-both');
     const hook = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
-    assert.equal(hook.body.sent, false);
+    assert.equal(hook.body.sent, true);
+    assert.match(sentTexts(s.mock)[0], /sa Huwebes, Nov 12/);
+    const again = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(again.body.sent, false);
     assert.equal(sentTexts(s.mock).length, 1);
   } finally { await s.close(); }
 });
@@ -570,7 +575,12 @@ function echo(psid, body, pageId = PAGE, appId = '999') {
     }],
   };
 }
-const confirmMsgs = (mock) => mock.calls.messages.filter((m) => m.message && /Salamat po sa booking/.test(m.message.text));
+const confirmMsgs = (mock) => mock.calls.messages.filter((m) => m.message && /Salamat po sa (booking|Pag fill up)/.test(m.message.text));
+function regularText(name, date) {
+  const who = name ? `, ${name}` : '';
+  const when = date ? ` sa ${date}` : '';
+  return `Salamat po sa Pag fill up ng booking${who}! 😊\n\nNasa line up po kayo${when} ng "REGULAR SERVICE" ibig sabihin available po kayo anytime? Hintayin na lang po tumawag ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.\n\nMaraming salamat! HAPPY to SERVE you all 😊`;
+}
 const SAVED_REPLY = 'Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊';
 const personalMsgs = (mock) => mock.calls.messages.filter((m) => m.message && String(m.message.text).startsWith('👇 Booking link po ninyo:'));
 
@@ -590,15 +600,27 @@ test('a staff saved reply with no URL sends one signed booking link', async () =
   try {
     const psid = '5550004411';
     s.app.cfg.botEnabled = false;
+    s.app.cfg.publicBaseUrl = s.base;
     s.app.bot.store.addTurn(psid, 'user', 'hello po', Date.now());
     await s.webhook(echo(psid, SAVED_REPLY));
     assert.equal(personalMsgs(s.mock).length, 1);
     assert.equal(personalMsgs(s.mock)[0].recipient.id, psid);
     const url = personalMsgs(s.mock)[0].message.text.slice('👇 Booking link po ninyo: '.length);
-    const parsed = new URL(url);
+    assert.match(url, /\/b\/[A-Za-z0-9]{8}$/);
+    assert.equal(url.includes(psid), false);
+    const hop = await fetch(url, { redirect: 'manual' });
+    assert.equal(hop.status, 302);
+    const parsed = new URL(hop.headers.get('location'));
     assert.deepEqual(bc.readToken(s.app.cfg, parsed.searchParams.get('token')), { psid, page: 'sanpablo' });
     assert.equal(bc.readRef(s.app.cfg, parsed.searchParams.get('ref')), psid);
     assert.equal(parsed.searchParams.get('page'), 'sanpablo');
+    const missing = await fetch(`${s.base}/b/zzzzzzzz`, { redirect: 'manual' });
+    assert.equal(missing.status, 302);
+    assert.equal(new URL(missing.headers.get('location')).search, '');
+    const staleCode = s.app.store.saveShortLink({ psid, page: 'sanpablo', token: 'old', ref: 'old' }, Date.now() - 8 * 86400e3);
+    const stale = await fetch(`${s.base}/b/${staleCode}`, { redirect: 'manual' });
+    assert.equal(stale.status, 302);
+    assert.equal(new URL(stale.headers.get('location')).search, '');
     assert.equal(s.app.store.data.formLinkSends.filter((row) => row.psid === psid).length, 1);
     assert.equal(s.app.cfg.botEnabled, false);
     assert.equal((s.mock.calls.switches || []).length, 0);
@@ -639,10 +661,12 @@ test('a staff saved reply with no URL sends one signed booking link', async () =
     const cav = cavite.app.cfg.pages.find((p) => p.key === 'cavite');
     await withPage(cav, () => cavite.app.bot.store.addTurn(cavPsid, 'user', 'hi', Date.now()));
     cavite.app.cfg.botEnabled = false;
+    cavite.app.cfg.publicBaseUrl = cavite.base;
     await cavite.webhook(echo(cavPsid, SAVED_REPLY, CAVITE));
     const msg = personalMsgs(cavite.mock)[0];
     assert.equal(msg.recipient.id, cavPsid);
-    assert.equal(new URL(msg.message.text.slice('👇 Booking link po ninyo: '.length)).searchParams.get('page'), 'cavite');
+    const cavHop = await fetch(msg.message.text.slice('👇 Booking link po ninyo: '.length), { redirect: 'manual' });
+    assert.equal(new URL(cavHop.headers.get('location')).searchParams.get('page'), 'cavite');
     assert.ok(cavite.mock.calls.pages.some((p) => p.kind === 'message' && p.token === 'CAV-TOKEN' && p.path.includes(CAVITE)));
     assert.equal(cavite.app.store.data.formLinkSends[0].pageKey, 'cavite');
     assert.equal(cavite.app.cfg.botEnabled, false);
@@ -654,11 +678,12 @@ test('the live calendar date 11/12/26 is included, including from the details te
     form_name: 'booking',
     data: { name: 'Ana Cruz', willingToWait: 'yes', pdate: '11/12/26' },
   });
-  assert.match(bc.confirmText(fromField.name, 'yes', fromField.date), /Regular service po kayo sa Huwebes, Nov 12\./);
+  assert.equal(bc.confirmText(fromField.name, 'yes', fromField.date), regularText('Ana Cruz', 'Huwebes, Nov 12'));
   const fromDetails = bc.parseNetlifySubmission({
     data: { name: 'Ana Cruz', willingToWait: 'yes', details: 'Preferred date: 11/12/26\nService type: REGULAR' },
   });
   assert.equal(bc.prettyBookingDate(fromDetails.date), 'Huwebes, Nov 12');
+  assert.equal(bc.confirmText('Ana Cruz', 'no', fromDetails.date), `Salamat po sa booking, Ana Cruz! 😊 Priority service po kayo (+P1,000) sa Huwebes, Nov 12, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`);
 });
 
 test('a unique mobile overrides a name clash, and two mobiles use the name as a tiebreaker', () => {
@@ -769,7 +794,7 @@ test('a staff form-link echo confirms only that chat, then the chatbot stays sil
     }, 'sub-staff-1');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, true);
-    assert.match(confirmMsgs(s.mock)[0].message.text, /sa Huwebes, Nov 12/);
+    assert.equal(confirmMsgs(s.mock)[0].message.text, regularText('Ana Cruz', 'Huwebes, Nov 12'));
     assert.equal(confirmMsgs(s.mock)[0].recipient.id, psid);
     assert.equal(s.app.store.data.formLinkSends.find((row) => row.psid === psid).consumedAt > 0, true);
 

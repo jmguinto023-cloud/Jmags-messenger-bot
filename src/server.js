@@ -73,6 +73,14 @@ function createServer({ cfg, bot, log }) {
       });
     }
 
+    const shortCode = req.method === 'GET' && /^\/b\/([A-Za-z0-9]{6,8})$/.exec(url.pathname);
+    if (shortCode) {
+      const row = bot.store.readShortLink(shortCode[1], bot.now(), bookingConfirm.SHORT_LINK_MS);
+      const target = row ? bookingConfirm.expandShortLink(cfg, row) : bookingConfirm.plainFormUrl(cfg);
+      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
     if (req.method === 'GET' && url.pathname === '/') {
       return sendFile(res, 'index.html', 'text/html; charset=utf-8');
     }
@@ -245,10 +253,16 @@ function createServer({ cfg, bot, log }) {
         const psid = bookingConfirm.readRef(cfg, body.ref);
         if (!psid) return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl: '' });
         try {
+          const date = bookingConfirm.submissionDate(body, body);
+          // The live form's browser call sends ref, name, and wait, but not pdate.
+          // Sending now would block the Netlify notification, which does have the date.
+          if (!date) {
+            return reply(200, { ok: true, sent: false, reason: 'date arrives with the form notification', messengerUrl: '' });
+          }
           const r = await bot.sendBookingConfirm(psid, {
             name,
             wait,
-            date: body.pdate || body.date || '',
+            date,
             bookingId: String(body.bookingId || '').slice(0, 40),
             source: 'form',
           });

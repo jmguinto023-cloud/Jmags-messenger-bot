@@ -1377,7 +1377,7 @@ class Bot {
       this.log.info(`personal form link skipped ${pageName} ${short(psid)}: sent within 10 minutes`);
       return;
     }
-    const link = bookingConfirm.bookingFormLink(this.cfg, psid, pageName);
+    const link = this.shortBookingLink(psid, pageName);
     if (!link) {
       this.log.info(`personal form link skipped ${pageName} ${short(psid)}: could not sign link`);
       return;
@@ -1391,6 +1391,22 @@ class Bot {
     thread.personalLinkSentAt = now;
     this.store.flushNow();
     this.log.info(`personal form link sent ${pageName} ${short(psid)}`);
+  }
+
+  // The Messenger text carries /b/<code>. The redirect still opens the full signed form URL.
+  shortBookingLink(psid, pageName) {
+    const full = bookingConfirm.bookingFormLink(this.cfg, psid, pageName);
+    if (!full) return '';
+    let target;
+    try { target = new URL(full); } catch { return full; }
+    const code = this.store.saveShortLink({
+      psid,
+      page: pageName,
+      token: target.searchParams.get('token') || '',
+      ref: target.searchParams.get('ref') || '',
+    }, this.now(), bookingConfirm.SHORT_LINK_MS);
+    const base = String(this.cfg.publicBaseUrl || '').replace(/\/$/, '');
+    return `${base}/b/${code}`;
   }
 
   consumeFormLinks(ids, submissionId) {

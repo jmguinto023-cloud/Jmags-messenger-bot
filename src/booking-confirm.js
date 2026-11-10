@@ -87,6 +87,32 @@ function readToken(cfg, token) {
   return { psid: m[2], page: m[1] };
 }
 
+const SHORT_LINK_MS = 7 * 86400e3;
+
+function plainFormUrl(cfg) {
+  try {
+    const u = new URL(String((cfg && cfg.bookingFormUrl) || 'https://jmagscutomerform.netlify.app/'));
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return 'https://jmagscutomerform.netlify.app/';
+  }
+}
+
+function expandShortLink(cfg, row) {
+  if (!row || !row.psid || !row.page) return plainFormUrl(cfg);
+  const base = String((cfg && cfg.bookingFormUrl) || '').trim();
+  if (!base) return plainFormUrl(cfg);
+  let u;
+  try { u = new URL(base); } catch { return plainFormUrl(cfg); }
+  u.searchParams.set('psid', String(row.psid));
+  u.searchParams.set('page', String(row.page));
+  if (row.token) u.searchParams.set('token', String(row.token));
+  if (row.ref) u.searchParams.set('ref', String(row.ref));
+  return u.toString();
+}
+
 function bookingFormLink(cfg, psid, page, extra = {}) {
   const base = String((cfg && cfg.bookingFormUrl) || '').trim();
   const key = normalizePageKey(page);
@@ -197,13 +223,18 @@ function submissionDate(data, body) {
 function confirmText(name, wait, date) {
   const who = cleanName(name);
   const when = prettyBookingDate(date);
-  const hello = who ? `Salamat po sa booking, ${who}! 😊` : 'Salamat po sa booking! 😊';
   if (normalizeWait(wait) === 'no') {
+    const hello = who ? `Salamat po sa booking, ${who}! 😊` : 'Salamat po sa booking! 😊';
     const slot = when ? ` sa ${when}` : '';
     return `${hello} Priority service po kayo (+P1,000)${slot}, mauuna po kayo sa line-up. Paki-reply po ng AGREE para ma-confirm.`;
   }
-  const slot = when ? ` sa ${when}` : '';
-  return `${hello} Regular service po kayo${slot}. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`;
+  const hello = who ? `Salamat po sa Pag fill up ng booking, ${who}! 😊` : 'Salamat po sa Pag fill up ng booking! 😊';
+  const whenSlot = when ? ` sa ${when}` : '';
+  return [
+    hello,
+    `Nasa line up po kayo${whenSlot} ng "REGULAR SERVICE" ibig sabihin available po kayo anytime? Hintayin na lang po tumawag ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.`,
+    'Maraming salamat! HAPPY to SERVE you all 😊',
+  ].join('\n\n');
 }
 
 function agreeAckText() {
@@ -704,10 +735,11 @@ function firstSkip(store, id, reason, now) {
 
 module.exports = {
   makeRef, readRef, makeToken, readToken, bookingFormLink, personalizeFormUrls,
+  plainFormUrl, expandShortLink, SHORT_LINK_MS,
   normalizePageKey, pageRecord, normalizeWait, bookingKind, confirmText, agreeAckText,
   isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
-  parseNetlifySubmission, identityFrom, normalizeMobile, mobileLast4, matchMobile,
+  parseNetlifySubmission, submissionDate, identityFrom, normalizeMobile, mobileLast4, matchMobile,
   textHasFormLink, textHasLinkTrigger, textIsStaffFormSignal, normalizeTriggerText,
   personalFormLinkText, isPersonalFormLinkText, namesRoughlyMatch, phonesInText, pickStaffLink, staffNeedReason,
   matchJobMobile, outsideWindowError, deliveryKeys, deliveryHold, markPending,

@@ -62,6 +62,11 @@ on its own.
 When that staff echo is recorded and the customer messaged within the reply
 window, the bot sends one signed link from the same Page:
 `👇 Booking link po ninyo: <link>`.
+
+The link in that message is a short redirect, `PUBLIC_BASE_URL/b/<code>` (Render's
+`RENDER_EXTERNAL_URL` when `PUBLIC_BASE_URL` is empty). The code lasts 7 days in
+`state.json`. Opening it redirects to the full signed form URL. An unknown or
+expired code redirects to the plain form.
 A repeat within 10 minutes does not send another. The bot's own echo of that
 message is not recorded. `BOOKING_AUTO_PERSONAL_LINK` empty stays on. This send
 ignores `BOT_ENABLED` and does not change the switch. A submit that carries a
@@ -69,9 +74,13 @@ valid signed token still matches that token first.
 
 ## What the customer receives
 
-Regular (`willingToWait=yes`, or service REGULAR):
+Regular (`willingToWait=yes`, or service REGULAR). `[date]` is the same weekday form as before, for example `Martes, Nov 11`. With no date, ` sa [date]` is left out:
 
-> Salamat po sa booking, [Name]! 😊 Regular service po kayo sa [date]. Tatawag po ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.
+> Salamat po sa Pag fill up ng booking, [Name]! 😊
+>
+> Nasa line up po kayo sa [date] ng "REGULAR SERVICE" ibig sabihin available po kayo anytime? Hintayin na lang po tumawag ang staff namin anytime 9AM-5PM sa araw na iyon. Paki-reply po ng AGREE para ma-confirm.
+>
+> Maraming salamat! HAPPY to SERVE you all 😊
 
 Priority (`willingToWait=no`, or service `PRIORITY` / `PRIORITY (+P1,000)`):
 
