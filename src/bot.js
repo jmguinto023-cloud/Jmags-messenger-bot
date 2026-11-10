@@ -1369,8 +1369,10 @@ class Bot {
   async chatFacts(psid, page) {
     return withPage(page, async () => {
       const thread = this.store.findThread(psid) || {};
-      const blob = (thread.history || []).map((h) => (h && h.content) || '').join('\n');
-      const phones = bookingConfirm.phonesInText(blob);
+      const history = thread.history || [];
+      const blob = history.map((h) => (h && h.content) || '').join('\n');
+      const typed = history.filter((h) => h && h.role === 'user').map((h) => h.content || '').join('\n');
+      const phones = bookingConfirm.phonesInText(typed);
       const names = [];
       if (thread.profileName) names.push(thread.profileName);
       if (thread.bookingName) names.push(thread.bookingName);
