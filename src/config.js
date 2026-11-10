@@ -15,6 +15,10 @@ function num(v, def) {
 function list(v) {
   return String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
+function phraseList(v, def) {
+  if (v === undefined || String(v).trim() === '') return def.slice();
+  return String(v).split('|').map((s) => s.trim()).filter(Boolean);
+}
 function smsSenderSetting(value) {
   const name = String(value || '').trim();
   if (!name) return 'JMAGS';
@@ -92,6 +96,10 @@ function loadConfig(env = process.env) {
     // Match a form to a chat only after staff or the bot sent that chat the form link.
     bookingStaffLinkMatch: bool(env.BOOKING_STAFF_LINK_MATCH, true),
     bookingStaffLinkDays: num(env.BOOKING_STAFF_LINK_DAYS, 7),
+    // After a staff form-link echo, send one signed link. Empty stays on.
+    bookingAutoPersonalLink: bool(env.BOOKING_AUTO_PERSONAL_LINK, true),
+    // Saved-reply text that counts as sending the form, even with no URL. | separated.
+    bookingLinkTriggerPhrases: phraseList(env.BOOKING_LINK_TRIGGER_PHRASES, ['eto po ang schedule form niyo']),
     // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
     bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),
     // Sites allowed to call POST /booking/submitted. Empty = the BOOKING_FORM_URL origin only.

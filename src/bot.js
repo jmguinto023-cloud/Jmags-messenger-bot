@@ -1126,7 +1126,9 @@ class Bot {
     }
     const outgoing = bookingConfirm.personalizeFormUrls(this.cfg, clean, psid, pageKey(currentPage()) || 'sanpablo');
     await this.graph.sendText(psid, outgoing);
-    if (bookingConfirm.textHasFormLink(outgoing, this.cfg)) this.noteStaffFormLink(psid, 'bot');
+    if (bookingConfirm.textHasFormLink(outgoing, this.cfg) && !bookingConfirm.isPersonalFormLinkText(outgoing)) {
+      this.noteStaffFormLink(psid, 'bot');
+    }
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
     if (opts.videoFollowup || opts.ops) {
@@ -1352,7 +1354,43 @@ class Bot {
     if (list.length > 2000) list.splice(0, list.length - 2000);
     this.store.flushNow();
     this.log.info(`staff form link recorded ${pageName} ${short(psid)}`);
+    if ((source || 'staff') === 'staff') return this.sendPersonalFormLink(psid, page, pageName);
     return row;
+  }
+
+  // One signed link after staff paste the plain URL. Not a chatbot reply: it ignores
+  // BOT_ENABLED and does not turn anything on. Our own message is not a staff link.
+  async sendPersonalFormLink(psid, page, pageName) {
+    if (!this.cfg.bookingAutoPersonalLink) {
+      this.log.info(`personal form link skipped ${pageName} ${short(psid)}: BOOKING_AUTO_PERSONAL_LINK is off`);
+      return;
+    }
+    const thread = this.store.thread(psid);
+    const now = this.now();
+    const last = thread.lastUserTs || 0;
+    const windowMs = (Number(this.cfg.replyWindowHours) || 23.5) * HOUR;
+    if (!(last > 0 && now - last <= windowMs)) {
+      this.log.info(`personal form link skipped ${pageName} ${short(psid)}: outside 24h window`);
+      return;
+    }
+    if (thread.personalLinkSentAt && now - thread.personalLinkSentAt < 10 * 60 * 1000) {
+      this.log.info(`personal form link skipped ${pageName} ${short(psid)}: sent within 10 minutes`);
+      return;
+    }
+    const link = bookingConfirm.bookingFormLink(this.cfg, psid, pageName);
+    if (!link) {
+      this.log.info(`personal form link skipped ${pageName} ${short(psid)}: could not sign link`);
+      return;
+    }
+    try {
+      await this.graph.sendText(psid, bookingConfirm.personalFormLinkText(link));
+    } catch (e) {
+      this.log.info(`personal form link skipped ${pageName} ${short(psid)}: ${e.message}`);
+      return;
+    }
+    thread.personalLinkSentAt = now;
+    this.store.flushNow();
+    this.log.info(`personal form link sent ${pageName} ${short(psid)}`);
   }
 
   consumeFormLinks(ids, submissionId) {
@@ -1598,7 +1636,11 @@ class Bot {
     if (appId && this.cfg.ignoreEchoAppIds.includes(appId)) return;
     if (this.store.seen(m.mid)) return;
     // Staff pasted the plain form link. Remember the chat. Do not edit their message.
-    if (m.text && bookingConfirm.textHasFormLink(m.text, this.cfg)) this.noteStaffFormLink(psid, 'staff');
+    // Our signed follow-up also contains the host; that echo is not another staff link.
+    let follow = null;
+    if (bookingConfirm.textIsStaffFormSignal(m.text, this.cfg)) {
+      follow = this.noteStaffFormLink(psid, 'staff');
+    }
     const t = this.store.thread(psid);
     const at = Number(ev.timestamp) || this.now();
     // Meta's own inbox automation, not a person typing in Page Inbox.
@@ -1606,7 +1648,7 @@ class Bot {
       if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
       this.store.save();
       this.log.info(`page AI echo for ${short(psid)} app_id=${appId} – not pausing`);
-      return;
+      return follow;
     }
     // Saved reply / instant reply / greeting / away message / Meta AI from the Page Inbox app.
     const auto = this.automatedEchoReason(t, m, at);
@@ -1615,7 +1657,7 @@ class Bot {
       if (m.text) this.store.addTurn(psid, 'assistant', m.text, this.now());
       this.store.save();
       this.log.info(`automated echo for ${short(psid)} app_id=${appId || 'none'} (${auto}) – not pausing`);
-      return;
+      return follow;
     }
     // A person (Ivan) replied from the Page: pause the bot here.
     t.pausedUntil = this.now() + this.pauseMs();
@@ -1627,6 +1669,7 @@ class Bot {
     this.cancelPending(psid);
     this.store.save();
     this.log.info(`human reply detected for ${short(psid)} app_id=${appId || 'none'} – bot paused ${this.cfg.humanPauseMinutes}m`);
+    return follow;
   }
 
   // Why a Page echo is an automation rather than Ivan typing ('' = treat as human).
