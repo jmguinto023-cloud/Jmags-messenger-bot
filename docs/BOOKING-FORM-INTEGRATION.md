@@ -39,12 +39,9 @@ Authorization: Bearer ADMIN_TOKEN
 `page=cavite` uses the Cavite Page token. A plain link with no token is not a
 promise to message whoever typed a PSID into the form.
 
-If the submission has no valid token, the bot may match `mobile` to a number it
-already stored: a mobile the customer themselves typed in that Messenger chat, or
-exactly one job/booking row that has both that phone and a PSID. Zero matches or
-more than one match: nobody is messaged, and staff get a flag. Set
-`BOOKING_PHONE_MATCH=false` to turn this fallback off. A bad token never falls
-through to the phone match.
+A submission with no valid token or signed `ref` is not sent. A mobile number,
+a job row, or an `m.me` link does not choose a recipient. Staff get a flag
+instead. `BOOKING_PHONE_MATCH` does not turn that back on.
 
 ## What the customer receives
 
@@ -103,7 +100,7 @@ reviewed. Do not deploy from this change by itself.
 | `NETLIFY_WEBHOOK_SECRET` | Shared with Netlify. Required. Empty rejects every webhook. `GET /health` shows `bookingWebhook: "configured"` or `"missing"` and does not reveal the value. |
 | `BOOKING_REF_SECRET` | Signs `token` and `ref`. Empty uses `APP_SECRET`. Rotating it invalidates links already sent. |
 | `BOOKING_CONFIRM_ENABLED` | Empty keeps the confirm on. `false` stops sends. |
-| `BOOKING_PHONE_MATCH` | Empty keeps the phone fallback on. `false` requires a signed link. |
+| `BOOKING_PHONE_MATCH` | Ignored. A mobile number never selects who is messaged. |
 | `BOOKING_FORM_URL` | `https://jmagscutomerform.netlify.app/` |
 | `CAVITE_PAGE_ACCESS_TOKEN` | Required for Cavite confirms. Without it, a Cavite booking is flagged and is not sent with the San Pablo token. |
 
@@ -181,4 +178,5 @@ fires when Netlify accepts the submission, including when the Supabase call fail
 - No SMS from this path.
 - No second chat after the confirm, including when the Page switch is on.
 - No untagged send outside 24 hours.
-- No message to a PSID that did not come from a valid token, a legacy `ref`, or one unique stored mobile.
+- No message except to the one PSID on a valid token or signed `ref`.
+- Sending the confirm does not turn `BOT_ENABLED` or a Page switch on. Other customers stay on the normal switch.

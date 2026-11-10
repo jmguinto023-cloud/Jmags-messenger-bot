@@ -153,20 +153,21 @@ test('form submit with ref sends the NO message on Messenger, AGREE confirms', a
   } finally { await s.close(); }
 });
 
-test('form submit without ref returns an m.me button link; tapping it sends the YES message', async () => {
+test('a form with no signed ref does not message whoever opens Messenger', async () => {
   const s = await setup();
   try {
+    s.app.cfg.botEnabled = true;
+    s.mock.state.botSwitches = [
+      { page_key: 'sanpablo', enabled: false },
+      { page_key: 'cavite', enabled: false },
+    ];
     const body = await (await s.submit({ name: 'Pedro', wait: 'yes' })).json();
     assert.equal(body.sent, false);
-    assert.match(body.messengerUrl, new RegExp(`^https://m\\.me/${PAGE}\\?ref=BK_Y_`));
-    const ref = new URL(body.messengerUrl).searchParams.get('ref');
+    assert.equal(body.messengerUrl, '');
+    const ref = bc.referralRef('Pedro', 'yes');
     await s.webhook(referral('7770002222', ref));
-    const texts = sentTexts(s.mock);
-    assert.equal(texts.length, 1);
-    assert.match(texts[0], /Salamat po sa booking, Pedro/);
-    assert.match(texts[0], /Regular service po kayo/);
-    assert.match(texts[0], /Tatawag po ang staff namin/);
-    assert.doesNotMatch(texts[0], /technician/i);
+    await s.webhook(text('7770002222', 'hello po'));
+    assert.equal(sentTexts(s.mock).length, 0);
   } finally { await s.close(); }
 });
 
@@ -384,7 +385,7 @@ test('Cavite token sends with the Cavite Page token, and a missing Cavite token 
   } finally { await bare.close(); }
 });
 
-test('a forged token is not saved by a matching phone, and a unique phone can send', async () => {
+test('a forged token or a matching phone does not get a message', async () => {
   const s = await setup();
   try {
     const psid = '5551117777';
@@ -406,13 +407,14 @@ test('a forged token is not saved by a matching phone, and a unique phone can se
       name: 'Ria', willingToWait: 'no', pdate: '2026-11-14', mobile: '09181234567',
     }, 'sub-phone');
     const ok = await postHook(s, plain, {}, HOOK);
-    assert.equal(ok.body.sent, true);
-    assert.equal(s.app.bot.store.thread(psid).bookingSource, 'phone');
-    assert.match(sentTexts(s.mock)[0], /Priority service po kayo/);
+    assert.equal(ok.body.sent, false);
+    assert.equal(ok.body.reason, 'no messenger identity');
+    assert.equal(sentTexts(s.mock).length, 0);
+    assert.notEqual(s.app.bot.store.thread(psid).bookingSource, 'phone');
   } finally { await s.close(); }
 });
 
-test('a job that already stores the mobile can identify that Messenger chat', async () => {
+test('a stored job phone does not receive the confirm', async () => {
   const s = await setup();
   try {
     const psid = '5551120000';
@@ -422,9 +424,9 @@ test('a job that already stores the mobile can identify that Messenger chat', as
       name: 'Job Person', willingToWait: 'yes', pdate: '2026-11-12', mobile: '09175550000',
     }, 'sub-job');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
-    assert.equal(out.body.sent, true);
-    assert.equal(s.app.bot.store.thread(psid).bookingSource, 'phone');
-    assert.match(sentTexts(s.mock)[0], /Regular service po kayo/);
+    assert.equal(out.body.sent, false);
+    assert.equal(out.body.reason, 'no messenger identity');
+    assert.equal(sentTexts(s.mock).length, 0);
   } finally { await s.close(); }
 });
 
@@ -439,7 +441,7 @@ test('two chats with the same mobile are not messaged', async () => {
     const raw = submission({ name: 'Duo', willingToWait: 'yes', pdate: '2026-11-12', mobile: '09190001111' }, 'sub-duo');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.equal(out.body.reason, 'phone matched more than one chat');
+    assert.equal(out.body.reason, 'no messenger identity');
     assert.equal(sentTexts(s.mock).length, 0);
     const listed = await fetch(`${s.base}/admin/booking-confirms`);
     assert.equal(listed.status, 401);
@@ -480,6 +482,76 @@ test('the browser confirm and the webhook do not send two messages for one booki
     const hook = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(hook.body.sent, false);
     assert.equal(sentTexts(s.mock).length, 1);
+  } finally { await s.close(); }
+});
+
+test('confirm goes only to the submitter and does not turn any switch on', async () => {
+  const s = await setup({ CAVITE_PAGE_ACCESS_TOKEN: 'CAV-TOKEN', BATCH_WINDOW_MS: '0' });
+  try {
+    s.app.cfg.botEnabled = false;
+    s.mock.state.botSwitches = [
+      { page_key: 'sanpablo', enabled: false },
+      { page_key: 'cavite', enabled: false },
+    ];
+    const psid = '5551130001';
+    const other = '5551130002';
+    const caviteCustomer = '5551130003';
+    s.app.bot.store.thread(psid).lastUserTs = Date.now();
+    const token = bc.makeToken(s.app.cfg, psid, 'sanpablo');
+    const raw = submission({
+      name: 'Only One', willingToWait: 'yes', pdate: '2026-11-12',
+      psid, page: 'sanpablo', token, mobile: '09170000000',
+    }, 'sub-only');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, true);
+    assert.equal(s.mock.calls.messages[0].recipient.id, psid);
+    assert.equal(s.app.cfg.botEnabled, false);
+    assert.deepEqual(s.mock.state.botSwitches.map((row) => row.enabled), [false, false]);
+
+    await s.webhook(text(psid, 'AGREE po'));
+    assert.equal(sentTexts(s.mock).length, 2);
+    assert.equal(s.mock.calls.messages[1].recipient.id, psid);
+    const thread = s.app.bot.store.thread(psid);
+    assert.equal(thread.bookingConfirmed, true);
+    assert.equal(thread.bookingStaffOnly, true);
+    assert.equal(s.app.cfg.botEnabled, false);
+    assert.deepEqual(s.mock.state.botSwitches.map((row) => row.enabled), [false, false]);
+
+    s.app.cfg.botEnabled = true;
+    await s.webhook(text(other, 'magkano po'));
+    await s.webhook({
+      object: 'page',
+      entry: [{
+        id: CAVITE,
+        time: Date.now(),
+        messaging: [{
+          sender: { id: caviteCustomer },
+          recipient: { id: CAVITE },
+          timestamp: Date.now(),
+          message: { mid: `bk.cav.${Date.now()}`, text: 'hello po' },
+        }],
+      }],
+    });
+    await s.webhook(text(psid, 'ano na po'));
+    assert.equal(sentTexts(s.mock).length, 2);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.ok((s.mock.calls.switches || []).length >= 1);
+    assert.ok((s.mock.calls.switches || []).every((call) => call.method === 'GET'));
+
+    s.app.bot.switches.cache = null;
+    s.app.bot.switches.cacheMs = 0;
+    s.mock.state.botSwitches = [
+      { page_key: 'sanpablo', enabled: true },
+      { page_key: 'cavite', enabled: true },
+    ];
+    assert.equal(await s.app.bot.send(psid, 'Auto status po', { ops: true }), false);
+    assert.equal(sentTexts(s.mock).length, 2);
+    await s.webhook(text(other, 'hello po'));
+    const replies = s.mock.calls.messages.map((m) => m.recipient.id);
+    assert.deepEqual(replies.slice(0, 2), [psid, psid]);
+    assert.ok(replies.slice(2).includes(other));
+    assert.equal(replies.includes(psid) ? replies.filter((id) => id === psid).length : 0, 2);
+    assert.equal(replies.includes(caviteCustomer), false);
   } finally { await s.close(); }
 });
 

@@ -241,9 +241,8 @@ function createServer({ cfg, bot, log }) {
         const wait = bookingConfirm.normalizeWait(body.wait ?? body.willingToWait);
         if (!wait) return reply(400, { ok: false, error: 'wait must be yes or no' });
         const name = bookingConfirm.cleanName(body.name);
-        const messengerUrl = bookingConfirm.messengerConfirmUrl(cfg, name, wait);
         const psid = bookingConfirm.readRef(cfg, body.ref);
-        if (!psid) return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl });
+        if (!psid) return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl: '' });
         try {
           const r = await bot.sendBookingConfirm(psid, {
             name,
@@ -252,10 +251,10 @@ function createServer({ cfg, bot, log }) {
             bookingId: String(body.bookingId || '').slice(0, 40),
             source: 'form',
           });
-          return reply(200, { ok: true, sent: r.sent, reason: r.reason || '', messengerUrl: r.sent ? '' : messengerUrl });
+          return reply(200, { ok: true, sent: r.sent, reason: r.reason || '', messengerUrl: '' });
         } catch (e) {
           log.warn('booking submitted handler failed', e.message);
-          return reply(200, { ok: true, sent: false, reason: 'send failed', messengerUrl });
+          return reply(200, { ok: true, sent: false, reason: 'send failed', messengerUrl: '' });
         }
       });
       return;

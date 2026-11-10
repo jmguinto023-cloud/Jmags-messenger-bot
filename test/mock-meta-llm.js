@@ -21,7 +21,7 @@ function startMock({ llmResponder } = {}) {
       if (url.pathname.endsWith('/alert')) { calls.alerts.push(body); return json(200, { ok: true }); }
       if (url.pathname === '/rest/v1/bot_switches') {
         calls.switches = calls.switches || [];
-        calls.switches.push({ apikey: req.headers.apikey || '', authorization: req.headers.authorization || '' });
+        calls.switches.push({ method: req.method, apikey: req.headers.apikey || '', authorization: req.headers.authorization || '' });
         if (state.switchFail) return json(state.switchStatus || 500, { message: 'switch unread' });
         const rows = state.botSwitches || [
           { page_key: 'sanpablo', enabled: true },
