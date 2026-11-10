@@ -276,13 +276,8 @@ class Bot {
     if (this.cfg.pageId) pageIds.add(String(this.cfg.pageId));
     if (!psid || pageIds.has(String(psid))) return;
 
-    // Booking form fallback: customer tapped "Confirm sa Messenger" (m.me?ref=BK_...).
-    const bookingRef = bookingConfirm.referralFromEvent(ev);
-    if (bookingRef && !isStandby) {
-      // The m.me tap is itself a new customer message, so it is inside the 24h window.
-      await this.sendBookingConfirm(psid, { ...bookingRef, source: 'm.me', openedNow: true });
-      return;
-    }
+    // An m.me?ref=BK_ tap is not proof this person submitted the form. Leave it on
+    // the normal path so a Page switch that is off keeps every non-submitter silent.
 
     let text = '';
     let forceReason = '';
@@ -1088,6 +1083,11 @@ class Bot {
   }
 
   async send(psid, text, opts = {}) {
+    const handed = this.store.findThread(psid);
+    if (handed && handed.bookingStaffOnly) {
+      this.log.info(`no auto reply to ${short(psid)}: booking handed to staff`);
+      return false;
+    }
     const switched = await this.pageSwitchReason(psid);
     if (switched) {
       this.log.info(`no reply to ${short(psid)}: ${switched}`);
@@ -1302,33 +1302,35 @@ class Bot {
     return { status: 200, body: { ok: true, sent: Boolean(result.sent), reason: result.reason || '' } };
   }
 
-  // Signed token first. Phone only when this bot already stored that number on
-  // exactly one chat (or one job linked to a PSID). A public form cannot name a PSID.
+  // Only a signed token or signed ref chooses the recipient. A mobile number on a
+  // public form is not that customer, so it never selects a PSID.
   resolveBookingCustomer(sub) {
     const ident = bookingConfirm.identityFrom(this.cfg, sub);
     if (ident.error) return { error: ident.error };
-    if (ident.psid) {
-      let page = ident.page ? bookingConfirm.pageRecord(this.cfg, ident.page) : null;
-      if (ident.page && !page) return { error: 'no page token' };
-      if (!page) page = this.locateThread(ident.psid).page;
+    if (!ident.psid) return { error: 'no messenger identity' };
+    if (ident.page) {
+      const page = bookingConfirm.pageRecord(this.cfg, ident.page);
       if (!page) return { error: 'no page token' };
       return { psid: ident.psid, page, via: ident.via };
     }
-    if (!this.cfg.bookingPhoneMatch) return { error: 'no messenger identity' };
-    const hit = bookingConfirm.matchMobile(this.store.data.threads, sub.mobile);
-    if (hit.status === 'many') return { error: 'phone matched more than one chat' };
-    if (hit.status === 'one') {
-      const page = this.pageForThread(hit.thread, hit.key);
-      const psid = (hit.thread && hit.thread.psid) || String(hit.key).split(':').pop();
-      if (!page || !psid) return { error: 'no messenger identity' };
-      return { psid, page, via: 'phone' };
+    const hits = this.threadsForPsid(ident.psid);
+    if (hits.length !== 1 || !hits[0].page) return { error: hits.length > 1 ? 'ambiguous messenger thread' : 'no messenger identity' };
+    return { psid: ident.psid, page: hits[0].page, via: ident.via };
+  }
+
+  threadsForPsid(psid) {
+    const id = String(psid || '');
+    const hits = [];
+    for (const [key, thread] of Object.entries(this.store.data.threads || {})) {
+      if (!thread) continue;
+      const raw = thread.psid
+        ? String(thread.psid)
+        : (String(key).includes(':') ? String(key).slice(String(key).indexOf(':') + 1) : String(key));
+      if (raw !== id) continue;
+      const page = this.pageForThread(thread, key);
+      if (page) hits.push({ key, thread, page });
     }
-    const ops = this.store.data.ops || {};
-    const jobPsid = bookingConfirm.matchJobMobile([...(ops.jobs || []), ...(ops.bookings || [])], sub.mobile);
-    if (!jobPsid) return { error: 'no messenger identity' };
-    const located = this.locateThread(jobPsid);
-    if (!located.page) return { error: 'no messenger identity' };
-    return { psid: jobPsid, page: located.page, via: 'phone' };
+    return hits;
   }
 
   async flagBookingStaff(psid, thread, info = {}) {
@@ -1361,6 +1363,8 @@ class Bot {
     t.awaitingAgree = false;
     t.bookingConfirmed = true;
     t.bookingConfirmedAt = ts || this.now();
+    // The ack is the last automatic line. This does not turn BOT_ENABLED or a Page switch on.
+    t.bookingStaffOnly = true;
     this.store.save();
     this.log.info(`booking AGREE from ${short(psid)} wait=${t.bookingWait}`);
     if (!isStandby) {
