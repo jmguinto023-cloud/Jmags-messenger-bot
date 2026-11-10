@@ -68,3 +68,22 @@ test('configuration endpoint fails closed when no publishable key is configured'
   assert.match((await response.json()).error,/not configured/i);
  });
 });
+
+
+test('password recovery UI is present and never embeds or invents a default password', async()=>{
+ const html=await fs.readFile(path.join(__dirname,'..','index.html'),'utf8');
+ const script=await fs.readFile(path.join(__dirname,'..','app.js'),'utf8');
+ assert.match(html,/Forgot your password\? Reset it by email/);
+ assert.match(html,/Send password reset email/);
+ assert.match(html,/Set new password/);
+ assert.match(html,/id="confirm-password"/);
+ assert.doesNotMatch(html,/jmguinto023@gmail\.com/);
+ assert.doesNotMatch(script,/jmguinto023@gmail\.com/);
+ assert.doesNotThrow(()=>new vm.Script(script));
+ assert.match(script,/auth\/v1\/recover\?redirect_to=/);
+ assert.match(script,/method: 'PUT'/);
+ assert.match(script,/auth\/v1\/user/);
+ assert.match(script,/window\.history\.replaceState/);
+ assert.match(script,/await checkMembership\(\)/);
+ assert.match(script,/session = null/);
+});
