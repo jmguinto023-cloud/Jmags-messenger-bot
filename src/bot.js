@@ -1283,6 +1283,16 @@ class Bot {
       return { status: 200, body: { ok: true, sent: false, reason: 'missing yes/no answer' } };
     }
     const who = await this.resolveBookingCustomer(sub);
+    const fields = bookingConfirm.identityFieldSummary(sub);
+    if (who.via === 'token' || who.via === 'ref') {
+      this.log.info(`booking webhook identity token=ok ${pageKey(who.page)} ${short(who.psid)}`);
+    } else if (who.via === 'browser-confirm') {
+      this.log.info(`booking webhook identity token=absent matched browser confirm ${pageKey(who.page)} ${short(who.psid)}`);
+    } else if (sub.token) {
+      this.log.info(`booking webhook identity token=rejected ${who.error || 'bad messenger token'}`);
+    } else {
+      this.log.info(`booking webhook identity ${fields}`);
+    }
     if (who.error) {
       const fresh = bookingConfirm.firstSkip(this.store, `sub:${sub.submissionId}`, who.error, this.now());
       if (fresh) {
@@ -1301,7 +1311,7 @@ class Bot {
       date: sub.date,
       bookingId: sub.bookingId,
       submissionId: sub.submissionId,
-      source: who.via === 'staff-link' ? 'staff-link' : 'netlify',
+      source: who.via === 'staff-link' ? 'staff-link' : (who.via === 'browser-confirm' ? 'browser-confirm' : 'netlify'),
     });
     if (result.sent && who.entryIds) this.consumeFormLinks(who.entryIds, sub.submissionId);
     if (result.retry) return { status: 502, body: { ok: false, sent: false, reason: result.reason || 'send failed' } };
@@ -1313,6 +1323,11 @@ class Bot {
     const ident = bookingConfirm.identityFrom(this.cfg, sub);
     if (ident.error) return { error: ident.error };
     if (!ident.psid) {
+      const pending = this.takePendingFormConfirm(sub.name);
+      if (pending) {
+        const page = bookingConfirm.pageRecord(this.cfg, pending.page);
+        if (page) return { psid: pending.psid, page, via: 'browser-confirm' };
+      }
       if (!this.cfg.bookingStaffLinkMatch) return { error: 'no messenger identity' };
       const picked = await this.matchStaffFormLink(sub);
       if (!picked.match) return { error: picked.reason || 'no messenger identity' };
@@ -1328,6 +1343,43 @@ class Bot {
     const hits = this.threadsForPsid(ident.psid);
     if (hits.length !== 1 || !hits[0].page) return { error: hits.length > 1 ? 'ambiguous messenger thread' : 'no messenger identity' };
     return { psid: ident.psid, page: hits[0].page, via: ident.via };
+  }
+
+  notePendingFormConfirm(psid, name, wait) {
+    const hits = this.threadsForPsid(psid);
+    let pageName = hits.length === 1 ? pageKey(hits[0].page) : '';
+    if (!pageName) {
+      const links = Object.values(this.store.data.shortLinks || {}).filter((row) => row && String(row.psid) === String(psid));
+      links.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      pageName = (links[0] && links[0].page) || 'sanpablo';
+    }
+    const now = this.now();
+    const list = (this.store.data.pendingFormConfirms || []).filter((row) => row && now - row.at < 30 * 60 * 1000);
+    list.push({
+      psid: String(psid),
+      page: pageName,
+      name: bookingConfirm.cleanName(name),
+      wait: bookingConfirm.normalizeWait(wait) || '',
+      at: now,
+    });
+    this.store.data.pendingFormConfirms = list.slice(-200);
+    this.store.flushNow();
+  }
+
+  takePendingFormConfirm(name) {
+    const want = bookingConfirm.cleanName(name).toLowerCase();
+    const now = this.now();
+    const fresh = (this.store.data.pendingFormConfirms || []).filter((row) => row && now - row.at <= 15 * 60 * 1000);
+    this.store.data.pendingFormConfirms = fresh;
+    if (!want) return null;
+    const hits = fresh.filter((row) => bookingConfirm.cleanName(row.name).toLowerCase() === want);
+    if (hits.length !== 1) {
+      this.store.flushNow();
+      return null;
+    }
+    this.store.data.pendingFormConfirms = fresh.filter((row) => row !== hits[0]);
+    this.store.flushNow();
+    return hits[0];
   }
 
   noteStaffFormLink(psid, source) {

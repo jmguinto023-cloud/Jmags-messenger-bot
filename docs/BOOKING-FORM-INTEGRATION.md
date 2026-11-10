@@ -63,10 +63,13 @@ When that staff echo is recorded and the customer messaged within the reply
 window, the bot sends one signed link from the same Page:
 `👇 Booking link po ninyo: <link>`.
 
-The link in that message is a short redirect, `PUBLIC_BASE_URL/b/<code>` (Render's
+The link in that message is `PUBLIC_BASE_URL/b/<code>` (Render's
 `RENDER_EXTERNAL_URL` when `PUBLIC_BASE_URL` is empty). The code lasts 7 days in
-`state.json`. Opening it redirects to the full signed form URL. An unknown or
-expired code redirects to the plain form.
+`state.json`. Opening it returns a small page that navigates to the full signed
+form URL, so Messenger's in-app browser keeps `psid`, `page`, `token`, and `ref`.
+An unknown or expired code goes to the plain form. The form's own browser call
+sends the signed `ref` but not the date; that chat is remembered until the
+Netlify notification arrives with the date.
 A repeat within 10 minutes does not send another. The bot's own echo of that
 message is not recorded. `BOOKING_AUTO_PERSONAL_LINK` empty stays on. This send
 ignores `BOT_ENABLED` and does not change the switch. A submit that carries a

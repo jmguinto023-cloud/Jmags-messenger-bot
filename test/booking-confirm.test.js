@@ -583,6 +583,47 @@ function regularText(name, date) {
 }
 const SAVED_REPLY = 'Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊';
 const personalMsgs = (mock) => mock.calls.messages.filter((m) => m.message && String(m.message.text).startsWith('👇 Booking link po ninyo:'));
+async function shortLinkTarget(shortUrl) {
+  const res = await fetch(shortUrl);
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  const found = html.match(/location\.replace\((.*)\)/);
+  assert.ok(found, html.slice(0, 200));
+  return new URL(JSON.parse(found[1]));
+}
+
+test('a short link still confirms the chat when the form notification has no token', async () => {
+  const s = await setup();
+  const notes = [];
+  s.app.bot.log.info = (...a) => notes.push(a.map(String).join(' '));
+  try {
+    const psid = '4882959418499161';
+    s.app.bot.store.thread(psid).lastUserTs = Date.now();
+    const ref = bc.makeRef(s.app.cfg, psid);
+    const browser = await s.submit({ ref, name: 'Jhon Michael Angelo Guinto', wait: 'yes', bookingId: 'BK-short' });
+    assert.equal((await browser.json()).sent, false);
+    const raw = submission({
+      name: 'Jhon Michael Angelo Guinto', mobile: '09170009161', willingToWait: 'yes', pdate: '11/11/26',
+    }, 'sub-short-token');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, true);
+    const confirm = confirmMsgs(s.mock).at(-1);
+    assert.equal(confirm.recipient.id, psid);
+    assert.equal(confirm.message.text, regularText('Jhon Michael Angelo Guinto', prettyDate('2026-11-11')));
+    assert.ok(notes.some((line) => line.includes('token=absent matched browser confirm') && line.includes('9161') && !line.includes(psid)));
+    assert.equal(notes.some((line) => /token=v1|ref=4882959418499161/.test(line)), false);
+
+    const otherRef = bc.makeRef(s.app.cfg, psid);
+    await s.submit({ ref: otherRef, name: 'Ana Cruz', wait: 'yes' });
+    const before = s.mock.calls.messages.length;
+    const rawOther = submission({
+      name: 'Pedro Reyes', willingToWait: 'yes', pdate: '11/11/26',
+    }, 'sub-short-other');
+    const missed = await postHook(s, rawOther, { 'X-Webhook-Signature': jws(rawOther) });
+    assert.equal(missed.body.sent, false);
+    assert.equal(s.mock.calls.messages.length, before);
+  } finally { await s.close(); }
+});
 
 test('the saved-reply phrase matches after normalizing case, spaces, punctuation, and emoji', () => {
   const phrases = { bookingLinkTriggerPhrases: ['eto po ang schedule form niyo'] };
@@ -608,19 +649,15 @@ test('a staff saved reply with no URL sends one signed booking link', async () =
     const url = personalMsgs(s.mock)[0].message.text.slice('👇 Booking link po ninyo: '.length);
     assert.match(url, /\/b\/[A-Za-z0-9]{8}$/);
     assert.equal(url.includes(psid), false);
-    const hop = await fetch(url, { redirect: 'manual' });
-    assert.equal(hop.status, 302);
-    const parsed = new URL(hop.headers.get('location'));
+    const parsed = await shortLinkTarget(url);
     assert.deepEqual(bc.readToken(s.app.cfg, parsed.searchParams.get('token')), { psid, page: 'sanpablo' });
     assert.equal(bc.readRef(s.app.cfg, parsed.searchParams.get('ref')), psid);
     assert.equal(parsed.searchParams.get('page'), 'sanpablo');
-    const missing = await fetch(`${s.base}/b/zzzzzzzz`, { redirect: 'manual' });
-    assert.equal(missing.status, 302);
-    assert.equal(new URL(missing.headers.get('location')).search, '');
+    const missing = await shortLinkTarget(`${s.base}/b/zzzzzzzz`);
+    assert.equal(missing.search, '');
     const staleCode = s.app.store.saveShortLink({ psid, page: 'sanpablo', token: 'old', ref: 'old' }, Date.now() - 8 * 86400e3);
-    const stale = await fetch(`${s.base}/b/${staleCode}`, { redirect: 'manual' });
-    assert.equal(stale.status, 302);
-    assert.equal(new URL(stale.headers.get('location')).search, '');
+    const stale = await shortLinkTarget(`${s.base}/b/${staleCode}`);
+    assert.equal(stale.search, '');
     assert.equal(s.app.store.data.formLinkSends.filter((row) => row.psid === psid).length, 1);
     assert.equal(s.app.cfg.botEnabled, false);
     assert.equal((s.mock.calls.switches || []).length, 0);
@@ -665,8 +702,8 @@ test('a staff saved reply with no URL sends one signed booking link', async () =
     await cavite.webhook(echo(cavPsid, SAVED_REPLY, CAVITE));
     const msg = personalMsgs(cavite.mock)[0];
     assert.equal(msg.recipient.id, cavPsid);
-    const cavHop = await fetch(msg.message.text.slice('👇 Booking link po ninyo: '.length), { redirect: 'manual' });
-    assert.equal(new URL(cavHop.headers.get('location')).searchParams.get('page'), 'cavite');
+    const cavTarget = await shortLinkTarget(msg.message.text.slice('👇 Booking link po ninyo: '.length));
+    assert.equal(cavTarget.searchParams.get('page'), 'cavite');
     assert.ok(cavite.mock.calls.pages.some((p) => p.kind === 'message' && p.token === 'CAV-TOKEN' && p.path.includes(CAVITE)));
     assert.equal(cavite.app.store.data.formLinkSends[0].pageKey, 'cavite');
     assert.equal(cavite.app.cfg.botEnabled, false);
