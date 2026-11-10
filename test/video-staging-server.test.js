@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { Script } = require('node:vm');
 const { createStagingServer } = require('../src/video-staging-server');
 const { runSyntheticVideoSelfTest } = require('../src/video-staging-self-test');
 
@@ -133,5 +134,15 @@ test('parallel public demo requests share one synthetic run', async () => {
     const responses=await Promise.all(Array.from({length:4},()=>fetch(base+'/api/demo',{method:'POST'})));
     assert.ok(responses.every(r=>r.status===200));
     assert.equal(calls,1);
+  });
+});
+
+test('public demo button JavaScript compiles inside its HTML template', async () => {
+  await withServer({token:''}, async base => {
+    const page=await (await fetch(base+'/')).text();
+    const match=page.match(/<script>([\s\S]*?)<\/script>/i);
+    assert.ok(match,'inline demo script must be present');
+    assert.doesNotThrow(()=>new Script(match[1]),'browser button script must be valid JavaScript');
+    assert.match(match[1], /fetch\('\/api\/demo'/);
   });
 });
