@@ -1126,6 +1126,7 @@ class Bot {
     }
     const outgoing = bookingConfirm.personalizeFormUrls(this.cfg, clean, psid, pageKey(currentPage()) || 'sanpablo');
     await this.graph.sendText(psid, outgoing);
+    if (bookingConfirm.textHasFormLink(outgoing, this.cfg)) this.noteStaffFormLink(psid, 'bot');
     const t = this.store.thread(psid);
     if (this.cfg.bookingFormUrl && clean.includes(this.cfg.bookingFormUrl)) t.bookingFormSent = true;
     if (opts.videoFollowup || opts.ops) {
@@ -1279,7 +1280,7 @@ class Bot {
       if (fresh) await this.flagBookingStaff('', null, { name: sub.name, reason: 'missing yes/no answer', mobileLast4: bookingConfirm.mobileLast4(sub.mobile) });
       return { status: 200, body: { ok: true, sent: false, reason: 'missing yes/no answer' } };
     }
-    const who = this.resolveBookingCustomer(sub);
+    const who = await this.resolveBookingCustomer(sub);
     if (who.error) {
       const fresh = bookingConfirm.firstSkip(this.store, `sub:${sub.submissionId}`, who.error, this.now());
       if (fresh) {
@@ -1298,18 +1299,25 @@ class Bot {
       date: sub.date,
       bookingId: sub.bookingId,
       submissionId: sub.submissionId,
-      source: who.via === 'phone' ? 'phone' : 'netlify',
+      source: who.via === 'staff-link' ? 'staff-link' : 'netlify',
     });
+    if (result.sent && who.entryIds) this.consumeFormLinks(who.entryIds, sub.submissionId);
     if (result.retry) return { status: 502, body: { ok: false, sent: false, reason: result.reason || 'send failed' } };
     return { status: 200, body: { ok: true, sent: Boolean(result.sent), reason: result.reason || '' } };
   }
 
-  // Only a signed token or signed ref chooses the recipient. A mobile number on a
-  // public form is not that customer, so it never selects a PSID.
-  resolveBookingCustomer(sub) {
+  // Signed token or ref first. Otherwise only a chat that was sent the form link.
+  async resolveBookingCustomer(sub) {
     const ident = bookingConfirm.identityFrom(this.cfg, sub);
     if (ident.error) return { error: ident.error };
-    if (!ident.psid) return { error: 'no messenger identity' };
+    if (!ident.psid) {
+      if (!this.cfg.bookingStaffLinkMatch) return { error: 'no messenger identity' };
+      const picked = await this.matchStaffFormLink(sub);
+      if (!picked.match) return { error: picked.reason || 'no messenger identity' };
+      const page = bookingConfirm.pageRecord(this.cfg, picked.match.pageKey);
+      if (!page) return { error: 'no page token' };
+      return { psid: picked.match.psid, page, via: 'staff-link', entryIds: picked.match.entryIds || [] };
+    }
     if (ident.page) {
       const page = bookingConfirm.pageRecord(this.cfg, ident.page);
       if (!page) return { error: 'no page token' };
@@ -1318,6 +1326,94 @@ class Bot {
     const hits = this.threadsForPsid(ident.psid);
     if (hits.length !== 1 || !hits[0].page) return { error: hits.length > 1 ? 'ambiguous messenger thread' : 'no messenger identity' };
     return { psid: ident.psid, page: hits[0].page, via: ident.via };
+  }
+
+  noteStaffFormLink(psid, source) {
+    const page = currentPage() || (this.cfg.pages || []).find((p) => p.primary) || null;
+    const pageName = pageKey(page);
+    if (!psid || (pageName !== 'sanpablo' && pageName !== 'cavite')) return null;
+    const now = this.now();
+    const list = this.store.data.formLinkSends ||= [];
+    const keepAfter = now - Math.max(30, (this.cfg.bookingStaffLinkDays || 7) * 2) * 86400e3;
+    const kept = list.filter((row) => row && row.sentAt >= keepAfter);
+    list.length = 0;
+    list.push(...kept);
+    const row = {
+      id: crypto.randomBytes(8).toString('hex'),
+      psid: String(psid),
+      pageId: (page && page.id) || '',
+      pageKey: pageName,
+      sentAt: now,
+      source: source || 'staff',
+      consumedAt: 0,
+      submissionId: '',
+    };
+    list.push(row);
+    if (list.length > 2000) list.splice(0, list.length - 2000);
+    this.store.flushNow();
+    return row;
+  }
+
+  consumeFormLinks(ids, submissionId) {
+    const want = new Set(ids || []);
+    for (const row of this.store.data.formLinkSends || []) {
+      if (row && want.has(row.id) && !row.consumedAt) {
+        row.consumedAt = this.now();
+        row.submissionId = String(submissionId || '').slice(0, 80);
+      }
+    }
+    this.store.flushNow();
+  }
+
+  async chatFacts(psid, page) {
+    return withPage(page, async () => {
+      const thread = this.store.findThread(psid) || {};
+      const blob = (thread.history || []).map((h) => (h && h.content) || '').join('\n');
+      const phones = bookingConfirm.phonesInText(blob);
+      const names = [];
+      if (thread.profileName) names.push(thread.profileName);
+      if (thread.bookingName) names.push(thread.bookingName);
+      for (const review of this.store.data.reviews || []) {
+        if (!review || String(review.psid) !== String(psid)) continue;
+        if (page && page.id && review.pageId && review.pageId !== page.id) continue;
+        if (review.customerName) names.push(review.customerName);
+      }
+      const said = blob.match(/(?:ako si|pangalan ko(?: po)?(?: ay| si)?|my name is)\s+([A-Za-zÑñ][A-Za-zÑñ .' -]{1,40})/i);
+      if (said) names.push(said[1]);
+      if (!names.length && this.graph && this.graph.userName) {
+        const got = await this.graph.userName(psid);
+        if (got && thread.history) {
+          thread.profileName = got;
+          names.push(got);
+          this.store.save();
+        }
+      }
+      return { phones, names };
+    });
+  }
+
+  async matchStaffFormLink(sub) {
+    const days = Number(this.cfg.bookingStaffLinkDays) || 7;
+    const cutoff = this.now() - days * 86400e3;
+    const pageFilter = bookingConfirm.normalizePageKey(sub && sub.page);
+    const open = (this.store.data.formLinkSends || []).filter((row) => row && !row.consumedAt && row.sentAt >= cutoff
+      && (!pageFilter || row.pageKey === pageFilter));
+    const groups = new Map();
+    for (const row of open) {
+      const key = `${row.pageKey}:${row.psid}`;
+      const group = groups.get(key) || { psid: row.psid, pageKey: row.pageKey, entryIds: [] };
+      group.entryIds.push(row.id);
+      groups.set(key, group);
+    }
+    const candidates = [];
+    for (const group of groups.values()) {
+      const page = bookingConfirm.pageRecord(this.cfg, group.pageKey);
+      if (!page) continue;
+      const facts = await this.chatFacts(group.psid, page);
+      const label = bookingConfirm.cleanName((facts.names || [])[0] || '');
+      candidates.push({ ...group, phones: facts.phones, names: facts.names, label });
+    }
+    return bookingConfirm.pickStaffLink(candidates, sub);
   }
 
   threadsForPsid(psid) {
@@ -1490,6 +1586,8 @@ class Bot {
     if (appId && appId === this.cfg.appId) return;
     if (appId && this.cfg.ignoreEchoAppIds.includes(appId)) return;
     if (this.store.seen(m.mid)) return;
+    // Staff pasted the plain form link. Remember the chat. Do not edit their message.
+    if (m.text && bookingConfirm.textHasFormLink(m.text, this.cfg)) this.noteStaffFormLink(psid, 'staff');
     const t = this.store.thread(psid);
     const at = Number(ev.timestamp) || this.now();
     // Meta's own inbox automation, not a person typing in Page Inbox.

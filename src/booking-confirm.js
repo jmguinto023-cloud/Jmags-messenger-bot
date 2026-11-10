@@ -145,18 +145,53 @@ function cleanName(name) {
   return String(name || '').replace(/[\r\n\t]+/g, ' ').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
 }
 
-function prettyBookingDate(value) {
+function isoFromBookingDate(value) {
   const raw = String(value || '').trim();
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  // The live calendar stores month/day/2-digit year, for example 11/12/26.
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(raw);
+  if (m) {
+    const year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    return `${year}-${String(Number(m[1])).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
+  }
+  return '';
+}
+
+function prettyBookingDate(value) {
+  const iso = isoFromBookingDate(value);
   if (iso) {
-    const mo = Number(iso[2]);
-    const da = Number(iso[3]);
-    if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) return hours.prettyDate(raw);
+    const mo = Number(iso.slice(5, 7));
+    const da = Number(iso.slice(8, 10));
+    if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) return hours.prettyDate(iso);
     return '';
   }
-  const cleaned = raw.replace(/[\r\n\t]+/g, ' ').replace(/[<>]/g, '').slice(0, 40);
+  const cleaned = String(value || '').trim().replace(/[\r\n\t]+/g, ' ').replace(/[<>]/g, '').slice(0, 40);
   if (!cleaned || /https?:/i.test(cleaned)) return '';
   return cleaned;
+}
+
+function dateFromDetails(text) {
+  const m = String(text || '').match(/Preferred date:\s*([^\n\r]+)/i);
+  return m ? m[1].trim() : '';
+}
+
+function submissionDate(data, body) {
+  const direct = pickField(data, ['pdate', 'preferredDate', 'preferred_date', 'preferred-date', 'bookingDate']);
+  if (direct) return direct;
+  for (const [key, value] of Object.entries(data || {})) {
+    if (/pdate|preferred.?date|^date$/i.test(key) && String(value || '').trim()) return value;
+  }
+  const blobs = [data && data.details, data && data.summary, body && body.summary, body && body.body];
+  for (const blob of blobs) {
+    const found = dateFromDetails(blob);
+    if (found) return found;
+  }
+  const human = (body && body.human_fields) || {};
+  for (const [key, value] of Object.entries(human)) {
+    if (/date/i.test(key) && String(value || '').trim() && !/created|updated/i.test(key)) return value;
+  }
+  return '';
 }
 
 function confirmText(name, wait, date) {
@@ -276,7 +311,7 @@ function parseNetlifySubmission(payload) {
     submissionId: String(body.id || body.submission_id || body.submissionId || '').trim().slice(0, 80),
     name: pickField(data, ['name', 'fullName', 'full_name']),
     mobile: pickField(data, ['mobile', 'phone', 'contact']),
-    date: pickField(data, ['pdate', 'date', 'preferredDate', 'preferred_date']),
+    date: submissionDate(data, body),
     willingToWait: pickField(data, ['willingToWait', 'willing_to_wait', 'wait']),
     service: pickField(data, ['service', 'serviceType', 'service_type']),
     psid: String(pickField(data, ['psid', 'messengerPsid']) || '').trim(),
@@ -304,6 +339,94 @@ function identityFrom(cfg, sub) {
   }
   if (row.psid || row.page) return { error: 'bad messenger token' };
   return { via: 'none' };
+}
+
+function formHosts(cfg) {
+  const hosts = ['jmagscutomerform.netlify.app'];
+  try {
+    const host = new URL(String((cfg && cfg.bookingFormUrl) || '')).host.replace(/^www\./, '');
+    if (host && !hosts.includes(host)) hosts.push(host);
+  } catch { /* keep the live host */ }
+  return hosts;
+}
+
+function textHasFormLink(text, cfg) {
+  const raw = String(text || '').toLowerCase();
+  return formHosts(cfg).some((host) => {
+    const escaped = host.replace(/\./g, '\\.');
+    return new RegExp(`(^|[^a-z0-9-])${escaped}([^a-z0-9-]|$)`, 'i').test(raw);
+  });
+}
+
+function nameTokens(name) {
+  return cleanName(name).toLowerCase().replace(/[^a-zñ\s]/gi, ' ').split(/\s+/)
+    .filter((word) => word.length >= 3 && !['po', 'sir', 'maam', 'mam', 'the'].includes(word));
+}
+
+function namesRoughlyMatch(a, b) {
+  const left = nameTokens(a);
+  const right = nameTokens(b);
+  if (!left.length || !right.length) return false;
+  const phraseL = left.join(' ');
+  const phraseR = right.join(' ');
+  if (phraseL === phraseR || phraseL.includes(phraseR) || phraseR.includes(phraseL)) return true;
+  if (left[0] !== right[0]) return false;
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
+  return shorter.every((word) => longer.includes(word));
+}
+
+function phonesInText(text) {
+  const found = [];
+  const re = /(?:\+?63|0)[\s.-]*9(?:[\s.-]*\d){9}\b/g;
+  const raw = String(text || '');
+  let m;
+  while ((m = re.exec(raw))) {
+    const n = normalizeMobile(m[0]);
+    if (n && !found.includes(n)) found.push(n);
+  }
+  return found;
+}
+
+function staffNeedReason(candidates) {
+  const bits = (candidates || []).map((c) => {
+    const last4 = String(c.psid || '').slice(-4);
+    const who = cleanName(c.label || '');
+    return `${c.pageKey || ''} ··${last4}${who ? ` ${who}` : ''}`.trim();
+  });
+  return `Booking needs staff${bits.length ? `: ${bits.join(', ')}` : ''}`;
+}
+
+// Candidates are only chats that were sent the form link and are still open.
+// A unique phone wins. One open chat whose name roughly matches is also enough.
+function pickStaffLink(candidates, sub) {
+  const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+  const phone = normalizeMobile(sub && sub.mobile);
+  const formName = cleanName(sub && sub.name);
+  const rows = list.map((c) => {
+    const phones = (c.phones || []).map(normalizeMobile).filter(Boolean);
+    const names = (c.names || []).filter(Boolean);
+    return {
+      c,
+      phoneHit: Boolean(phone) && phones.includes(phone),
+      nameHit: Boolean(formName) && names.some((n) => namesRoughlyMatch(formName, n)),
+      hasName: names.length > 0,
+    };
+  });
+  const phoneHits = rows.filter((row) => row.phoneHit);
+  if (phoneHits.length > 1) {
+    return { match: null, reason: staffNeedReason(phoneHits.map((row) => row.c)), candidates: phoneHits.map((row) => row.c) };
+  }
+  if (phoneHits.length === 1) {
+    const hit = phoneHits[0];
+    if (formName && hit.hasName && !hit.nameHit) {
+      return { match: null, reason: staffNeedReason([hit.c]), candidates: [hit.c] };
+    }
+    return { match: hit.c, reason: '' };
+  }
+  if (list.length === 1 && rows[0].nameHit) return { match: rows[0].c, reason: '' };
+  const nameHits = rows.filter((row) => row.nameHit);
+  if (!phone && nameHits.length === 1) return { match: nameHits[0].c, reason: '' };
+  return { match: null, reason: staffNeedReason(list), candidates: list };
 }
 
 function normalizeMobile(value) {
@@ -468,6 +591,7 @@ module.exports = {
   isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
   parseNetlifySubmission, identityFrom, normalizeMobile, mobileLast4, matchMobile,
+  textHasFormLink, namesRoughlyMatch, phonesInText, pickStaffLink, staffNeedReason,
   matchJobMobile, outsideWindowError, deliveryKeys, deliveryHold, markPending,
   markSent, markSkipped, releasePending, firstSkip, REF_PARAM,
 };

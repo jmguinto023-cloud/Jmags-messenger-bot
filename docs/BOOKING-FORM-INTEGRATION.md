@@ -43,9 +43,13 @@ Authorization: Bearer ADMIN_TOKEN
 `page=cavite` uses the Cavite Page token. A plain link with no token is not a
 promise to message whoever typed a PSID into the form.
 
-A submission with no valid token or signed `ref` is not sent. A mobile number,
-a job row, or an `m.me` link does not choose a recipient. Staff get a flag
-instead. `BOOKING_PHONE_MATCH` does not turn that back on.
+Staff can also paste the plain link `https://jmagscutomerform.netlify.app` in the
+Page inbox. The bot records that chat when the echo contains that host. On submit,
+with no signed token, it messages that chat only when the form's mobile or name
+matches exactly one open link from the last `BOOKING_STAFF_LINK_DAYS` (default 7).
+Several or none: no message, and staff get a flag. A used link is not reused.
+`BOOKING_PHONE_MATCH` still does not match a phone that was never sent the link.
+`BOOKING_STAFF_LINK_MATCH` empty stays on.
 
 ## What the customer receives
 

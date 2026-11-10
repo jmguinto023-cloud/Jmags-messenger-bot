@@ -87,8 +87,11 @@ function loadConfig(env = process.env) {
     bookingRefSecret: env.BOOKING_REF_SECRET || '',
     // Netlify form-notification webhook (JWS secret, or the same value as a shared secret).
     netlifyWebhookSecret: String(env.NETLIFY_WEBHOOK_SECRET || '').trim(),
-    // Kept so an old Render value still loads. A mobile number never selects the recipient.
+    // Kept so an old Render value still loads. A mobile number alone never selects the recipient.
     bookingPhoneMatch: bool(env.BOOKING_PHONE_MATCH, false),
+    // Match a form to a chat only after staff or the bot sent that chat the form link.
+    bookingStaffLinkMatch: bool(env.BOOKING_STAFF_LINK_MATCH, true),
+    bookingStaffLinkDays: num(env.BOOKING_STAFF_LINK_DAYS, 7),
     // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
     bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),
     // Sites allowed to call POST /booking/submitted. Empty = the BOOKING_FORM_URL origin only.
