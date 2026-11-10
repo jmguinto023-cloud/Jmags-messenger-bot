@@ -1657,7 +1657,7 @@ class Bot {
       this.log.info(`personal form link skipped ${pageName} ${short(psid)}: sent within 10 minutes`);
       return;
     }
-    const link = this.shortBookingLink(psid, pageName);
+    const link = this.cfg.bookingShortLink ? this.shortBookingLink(psid, pageName) : bookingConfirm.bookingFormLink(this.cfg, psid, pageName);
     if (!link) {
       this.log.info(`personal form link skipped ${pageName} ${short(psid)}: could not sign link`);
       return;
@@ -1673,7 +1673,7 @@ class Bot {
     this.log.info(`personal form link sent ${pageName} ${short(psid)}`);
   }
 
-  // The Messenger text carries /b/<code>. The redirect still opens the full signed form URL.
+  // Optional. BOOKING_SHORT_LINK sends /b/<code>. Old codes still open when it is off.
   shortBookingLink(psid, pageName) {
     const full = bookingConfirm.bookingFormLink(this.cfg, psid, pageName);
     if (!full) return '';

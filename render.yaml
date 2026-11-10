@@ -91,6 +91,9 @@ services:
       # Saved-reply phrases that count as a form link, separated by |. Empty keeps the default.
       - key: BOOKING_LINK_TRIGGER_PHRASES
         sync: false
+      # Empty stays off. true sends /b/<code> instead of the full signed form URL.
+      - key: BOOKING_SHORT_LINK
+        sync: false
       - key: BOOKING_BOT_KEY
         sync: false
       - key: BOOKING_FORM_ORIGINS

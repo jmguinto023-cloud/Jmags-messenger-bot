@@ -697,6 +697,20 @@ test('a short link still confirms the chat when the form notification has no tok
   } finally { await s.close(); }
 });
 
+test('BOOKING_SHORT_LINK sends /b/<code> and old codes still open', async () => {
+  const s = await setup({ BOOKING_SHORT_LINK: 'true' });
+  try {
+    s.app.cfg.publicBaseUrl = s.base;
+    const psid = '5550004420';
+    s.app.bot.store.addTurn(psid, 'user', 'hello po', Date.now());
+    await s.webhook(echo(psid, SAVED_REPLY));
+    const url = personalMsgs(s.mock)[0].message.text.slice('👇 Booking link po ninyo: '.length);
+    assert.match(url, /\/b\/[A-Za-z0-9]{8}$/);
+    const parsed = await shortLinkTarget(url);
+    assert.deepEqual(bc.readToken(s.app.cfg, parsed.searchParams.get('token')), { psid, page: 'sanpablo' });
+  } finally { await s.close(); }
+});
+
 test('the saved-reply phrase matches after normalizing case, spaces, punctuation, and emoji', () => {
   const phrases = { bookingLinkTriggerPhrases: ['eto po ang schedule form niyo'] };
   assert.equal(bc.textHasFormLink(SAVED_REPLY, cfg), false);
@@ -719,12 +733,18 @@ test('a staff saved reply with no URL sends one signed booking link', async () =
     assert.equal(personalMsgs(s.mock).length, 1);
     assert.equal(personalMsgs(s.mock)[0].recipient.id, psid);
     const url = personalMsgs(s.mock)[0].message.text.slice('👇 Booking link po ninyo: '.length);
-    assert.match(url, /\/b\/[A-Za-z0-9]{8}$/);
-    assert.equal(url.includes(psid), false);
-    const parsed = await shortLinkTarget(url);
+    const parsed = new URL(url);
+    assert.equal(parsed.host, 'jmagscutomerform.netlify.app');
+    assert.equal(parsed.searchParams.get('psid'), psid);
+    assert.equal(parsed.searchParams.get('page'), 'sanpablo');
     assert.deepEqual(bc.readToken(s.app.cfg, parsed.searchParams.get('token')), { psid, page: 'sanpablo' });
     assert.equal(bc.readRef(s.app.cfg, parsed.searchParams.get('ref')), psid);
-    assert.equal(parsed.searchParams.get('page'), 'sanpablo');
+    assert.equal(url.includes('/b/'), false);
+    const kept = s.app.store.saveShortLink({
+      psid, page: 'sanpablo', token: parsed.searchParams.get('token'), ref: parsed.searchParams.get('ref'),
+    }, Date.now());
+    const still = await shortLinkTarget(`${s.base}/b/${kept}`);
+    assert.equal(still.searchParams.get('psid'), psid);
     const missing = await shortLinkTarget(`${s.base}/b/zzzzzzzz`);
     assert.equal(missing.search, '');
     const staleCode = s.app.store.saveShortLink({ psid, page: 'sanpablo', token: 'old', ref: 'old' }, Date.now() - 8 * 86400e3);
@@ -774,8 +794,9 @@ test('a staff saved reply with no URL sends one signed booking link', async () =
     await cavite.webhook(echo(cavPsid, SAVED_REPLY, CAVITE));
     const msg = personalMsgs(cavite.mock)[0];
     assert.equal(msg.recipient.id, cavPsid);
-    const cavTarget = await shortLinkTarget(msg.message.text.slice('👇 Booking link po ninyo: '.length));
+    const cavTarget = new URL(msg.message.text.slice('👇 Booking link po ninyo: '.length));
     assert.equal(cavTarget.searchParams.get('page'), 'cavite');
+    assert.equal(cavTarget.host, 'jmagscutomerform.netlify.app');
     assert.ok(cavite.mock.calls.pages.some((p) => p.kind === 'message' && p.token === 'CAV-TOKEN' && p.path.includes(CAVITE)));
     assert.equal(cavite.app.store.data.formLinkSends[0].pageKey, 'cavite');
     assert.equal(cavite.app.cfg.botEnabled, false);
