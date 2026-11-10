@@ -1391,40 +1391,63 @@ class Bot {
           this.store.save();
         }
       }
-      return { phones, names };
+      return { phones, names, lastUserTs: thread.lastUserTs || 0 };
     });
   }
 
   async matchStaffFormLink(sub) {
-    const days = Number(this.cfg.bookingStaffLinkDays) || 7;
-    const cutoff = this.now() - days * 86400e3;
+    const maxHours = Number(this.cfg.bookingStaffLinkMaxAgeHours);
+    const maxAgeMs = (maxHours > 0 ? maxHours : 24) * HOUR;
+    const lookbackMs = Math.max(maxAgeMs, (Number(this.cfg.bookingStaffLinkDays) || 7) * 86400e3);
+    const windowMs = (Number(this.cfg.replyWindowHours) || 23.5) * HOUR;
+    const now = this.now();
     const pageFilter = bookingConfirm.normalizePageKey(sub && sub.page);
-    const open = (this.store.data.formLinkSends || []).filter((row) => row && !row.consumedAt && row.sentAt >= cutoff
+    const open = (this.store.data.formLinkSends || []).filter((row) => row && !row.consumedAt && row.sentAt >= now - lookbackMs
       && (!pageFilter || row.pageKey === pageFilter));
     const groups = new Map();
     for (const row of open) {
       const key = `${row.pageKey}:${row.psid}`;
-      const group = groups.get(key) || { psid: row.psid, pageKey: row.pageKey, entryIds: [] };
+      const group = groups.get(key) || { psid: row.psid, pageKey: row.pageKey, entryIds: [], newest: 0 };
       group.entryIds.push(row.id);
+      group.newest = Math.max(group.newest, Number(row.sentAt) || 0);
       groups.set(key, group);
     }
-    const candidates = [];
+    const eligible = [];
+    const skipped = [];
     for (const group of groups.values()) {
+      const note = { pageKey: group.pageKey || '', last4: String(group.psid || '').slice(-4), accepted: false, why: '' };
       const page = bookingConfirm.pageRecord(this.cfg, group.pageKey);
-      if (!page) continue;
+      if (!page) {
+        note.why = 'rejected: no page token';
+        skipped.push(note);
+        continue;
+      }
+      if (group.newest < now - maxAgeMs) {
+        note.why = `rejected: form link older than ${maxHours > 0 ? maxHours : 24}h`;
+        skipped.push(note);
+        continue;
+      }
+      const lastUserTs = await withPage(page, async () => (this.store.findThread(group.psid) || {}).lastUserTs || 0);
+      if (!(lastUserTs > 0 && now - lastUserTs <= windowMs)) {
+        note.why = 'rejected: outside 24h window';
+        skipped.push(note);
+        continue;
+      }
       const facts = await this.chatFacts(group.psid, page);
       const label = bookingConfirm.cleanName((facts.names || [])[0] || '');
-      candidates.push({ ...group, phones: facts.phones, names: facts.names, label });
+      eligible.push({ ...group, phones: facts.phones, names: facts.names, label });
     }
-    const picked = bookingConfirm.pickStaffLink(candidates, sub);
-    if (!(picked.decisions || []).length) {
+    const picked = bookingConfirm.pickStaffLink(eligible, sub);
+    const decisions = [...skipped, ...(picked.decisions || [])];
+    if (!decisions.length) {
       this.log.info('booking staff-link: no open form-link sends in the window');
     } else {
-      for (const row of picked.decisions) {
+      for (const row of decisions) {
         this.log.info(`booking staff-link ${row.pageKey} ${short(row.last4)} ${row.why}`);
       }
     }
-    return picked;
+    if (!picked.match) return { match: null, reason: bookingConfirm.STAFF_LINK_NO_MATCH, decisions };
+    return { ...picked, decisions };
   }
 
   threadsForPsid(psid) {

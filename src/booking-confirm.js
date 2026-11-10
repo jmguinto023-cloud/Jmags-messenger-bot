@@ -416,6 +416,15 @@ function nameAgrees(formName, storedNames) {
   return (storedNames || []).some((n) => namesRoughlyMatch(form, n) || initialsCompatible(form, n));
 }
 
+// A no-mobile fallback needs a real overlap or initials. A blank or short name is not one.
+function namesPositivelyMatch(formName, storedNames) {
+  const form = cleanName(formName);
+  if (!form || !nameTokens(form).length) return false;
+  return (storedNames || []).some((n) => namesOverlap(form, n) || initialsCompatible(form, n));
+}
+
+const STAFF_LINK_NO_MATCH = 'Booking needs staff: no recent in-window chat matched';
+
 function phonesInText(text) {
   const found = [];
   const re = /(?:\+?63|0)[\s.-]*9(?:[\s.-]*\d){9}\b/g;
@@ -446,10 +455,9 @@ function decision(row, accepted, why) {
   };
 }
 
-// Candidates are only chats that were sent the form link and are still open.
+// Candidates passed in are already inside the messaging window and the link-age limit.
 // A mobile the customer typed wins, even when the Facebook name differs.
-// Several chats with that mobile use the name to pick one. With no mobile hit,
-// one open chat is accepted only when the names do not clash.
+// With no mobile hit, a chat is accepted only when the names positively match.
 function pickStaffLink(candidates, sub) {
   const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
   const phone = normalizeMobile(sub && sub.mobile);
@@ -462,6 +470,7 @@ function pickStaffLink(candidates, sub) {
       names,
       phoneHit: Boolean(phone) && phones.includes(phone),
       nameHit: nameAgrees(formName, names),
+      positive: namesPositivelyMatch(formName, names),
       clash: namesClash(formName, names),
     };
   });
@@ -492,25 +501,19 @@ function pickStaffLink(candidates, sub) {
       row === hit ? why : 'rejected: mobile does not match'
     ));
   }
-  if (list.length === 1) {
-    const only = rows[0];
-    if (only.clash) {
-      return finish(null, staffNeedReason([only.c]), [only.c], () => 'rejected: name clash');
-    }
-    return finish(only.c, '', [only.c], () => 'accepted: only open staff link, name does not clash');
+  const positiveHits = rows.filter((row) => row.positive);
+  if (positiveHits.length === 1) {
+    const hit = positiveHits[0];
+    const why = list.length === 1
+      ? 'accepted: only open staff link, name matches'
+      : 'accepted: only name match';
+    return finish(hit.c, '', [hit.c], (row) => (row === hit ? why : 'rejected: name does not match'));
   }
-  const nameHits = rows.filter((row) => row.nameHit);
-  if (!phone && nameHits.length === 1) {
-    const hit = nameHits[0];
-    return finish(hit.c, '', [hit.c], (row) => (
-      row === hit ? 'accepted: only name match' : 'rejected: name does not match'
-    ));
-  }
-  return finish(null, staffNeedReason(list), list, (row) => {
+  return finish(null, STAFF_LINK_NO_MATCH, list, (row) => {
     if (row.clash) return 'rejected: name clash';
     if (phone) return 'rejected: mobile does not match';
-    if (nameHits.length > 1) return 'rejected: name matches more than one chat';
-    return 'rejected: ambiguous';
+    if (row.positive) return 'rejected: name matches more than one chat';
+    return 'rejected: name does not match';
   });
 }
 
@@ -677,6 +680,7 @@ module.exports = {
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
   parseNetlifySubmission, identityFrom, normalizeMobile, mobileLast4, matchMobile,
   textHasFormLink, namesRoughlyMatch, phonesInText, pickStaffLink, staffNeedReason,
+  STAFF_LINK_NO_MATCH,
   matchJobMobile, outsideWindowError, deliveryKeys, deliveryHold, markPending,
   markSent, markSkipped, releasePending, firstSkip, REF_PARAM,
 };
