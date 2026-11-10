@@ -112,6 +112,96 @@
       setText('login-error',formatError(error));
     } finally { button.disabled = false; }
   }
+
+  function showRecoveryRequest(visible) {
+    $('reset-request-form').classList.toggle('hidden', !visible);
+    $('login-form').classList.toggle('hidden', visible);
+    $('forgot-password').classList.toggle('hidden', visible);
+    if (visible) $('reset-email').value = $('email').value.trim();
+    setText('reset-request-message', '');
+  }
+  async function requestPasswordReset(event) {
+    event.preventDefault();
+    const button = $('reset-request-form').querySelector('button[type="submit"]');
+    button.disabled = true;
+    setText('reset-request-message', 'Requesting a secure reset email...');
+    const email = $('reset-email').value.trim().toLowerCase();
+    const redirectTo = window.location.origin + '/?mode=recover';
+    try {
+      await authFetch('/auth/v1/recover?redirect_to=' + encodeURIComponent(redirectTo), {
+        method: 'POST',
+        body: JSON.stringify({ email })
+      });
+      // Generic response: do not reveal whether an email is registered.
+      setText('reset-request-message',
+        'If this email belongs to an account, a password reset link will arrive. Open it from the same browser. Check Spam if needed.');
+    } catch (error) {
+      setText('reset-request-message', 'Could not request email: ' + formatError(error));
+    } finally { button.disabled = false; }
+  }
+  async function recoveryFromLink() {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    if (hash.get('type') !== 'recovery' || !hash.get('access_token') || !hash.get('refresh_token')) {
+      return false;
+    }
+    const newSession = {
+      access_token: hash.get('access_token'),
+      refresh_token: hash.get('refresh_token'),
+      expires_at: Date.now() + (Number(hash.get('expires_in') || 3600) * 1000),
+    };
+    // Never retain recovery credentials in the address bar or browser history.
+    window.history.replaceState({}, document.title, window.location.pathname);
+    session = newSession;
+    saveSession();
+    await checkMembership();
+    showDashboard(false);
+    $('login-form').classList.add('hidden');
+    $('forgot-password').classList.add('hidden');
+    $('reset-request-form').classList.add('hidden');
+    $('reset-complete').classList.remove('hidden');
+    return true;
+  }
+  async function setRecoveredPassword(event) {
+    event.preventDefault();
+    const password = $('new-password').value;
+    const confirm = $('confirm-password').value;
+    if (password.length < 12) {
+      setText('reset-complete-message', 'Use at least 12 characters.');
+      return;
+    }
+    if (password !== confirm) {
+      setText('reset-complete-message', 'Passwords do not match.');
+      return;
+    }
+    const button = $('reset-complete-form').querySelector('button');
+    button.disabled = true;
+    setText('reset-complete-message', 'Updating your password...');
+    try {
+      await authFetch('/auth/v1/user', {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer ' + await accessToken() },
+        body: JSON.stringify({ password }),
+      });
+      $('new-password').value = '';
+      $('confirm-password').value = '';
+      try {
+        await authFetch('/auth/v1/logout', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + await accessToken() },
+        });
+      } catch {}
+      session = null;
+      saveSession();
+      $('reset-complete').classList.add('hidden');
+      $('login-form').classList.remove('hidden');
+      $('forgot-password').classList.remove('hidden');
+      showDashboard(false);
+      setText('login-error', 'Password updated. Sign in using your registered email and new password.');
+    } catch (error) {
+      setText('reset-complete-message', 'Password update failed: ' + formatError(error));
+    } finally { button.disabled = false; }
+  }
+
   async function logout() {
     if (session) {
       try {
@@ -307,6 +397,10 @@
   }
   function listen() {
     $('login-form').addEventListener('submit',login);
+    $('forgot-password').addEventListener('click', () => showRecoveryRequest(true));
+    $('reset-cancel').addEventListener('click', () => showRecoveryRequest(false));
+    $('reset-request-form').addEventListener('submit', requestPasswordReset);
+    $('reset-complete-form').addEventListener('submit', setRecoveredPassword);
     $('logout').addEventListener('click',logout);
     $('refresh').addEventListener('click',()=>reloadAll().catch(e=>setText('queue-note','Refresh failed: '+formatError(e))));
     $('filter').addEventListener('change',()=>{page=0;loadQueue().catch(e=>setText('queue-note',formatError(e)));});
@@ -337,6 +431,8 @@
       if(!res.ok) throw new Error('Site connection is not configured.');
       cfg=await res.json();
       if(!cfg.supabaseUrl || !cfg.publishableKey) throw new Error('Supabase project connection missing.');
+      // Handle an authenticated Supabase recovery redirect before restoring an old session.
+      if (await recoveryFromLink()) return;
       try {session=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');}catch{session=null;}
       if(session) {
         try {
