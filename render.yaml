@@ -85,6 +85,12 @@ services:
       # How many days an unused staff form link can still match. Empty keeps 7.
       - key: BOOKING_STAFF_LINK_DAYS
         sync: false
+      # Send one signed link after a staff form-link echo. Empty stays on.
+      - key: BOOKING_AUTO_PERSONAL_LINK
+        sync: false
+      # Saved-reply phrases that count as a form link, separated by |. Empty keeps the default.
+      - key: BOOKING_LINK_TRIGGER_PHRASES
+        sync: false
       - key: BOOKING_BOT_KEY
         sync: false
       - key: BOOKING_FORM_ORIGINS

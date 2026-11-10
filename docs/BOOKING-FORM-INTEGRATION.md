@@ -54,6 +54,19 @@ one open link is confirmed only when the names do not clash. Initials such as
 `BOOKING_PHONE_MATCH` still does not match a phone that was never sent the link.
 `BOOKING_STAFF_LINK_MATCH` empty stays on.
 
+The same recording happens when the echo has no URL but contains a phrase from
+`BOOKING_LINK_TRIGGER_PHRASES` (separated by `|`, default `eto po ang schedule form niyo`).
+Matching ignores case, extra spaces, punctuation, and emoji. A URL still counts
+on its own.
+
+When that staff echo is recorded and the customer messaged within the reply
+window, the bot sends one signed link from the same Page:
+`👇 Booking link po ninyo: <link>`.
+A repeat within 10 minutes does not send another. The bot's own echo of that
+message is not recorded. `BOOKING_AUTO_PERSONAL_LINK` empty stays on. This send
+ignores `BOT_ENABLED` and does not change the switch. A submit that carries a
+valid signed token still matches that token first.
+
 ## What the customer receives
 
 Regular (`willingToWait=yes`, or service REGULAR):

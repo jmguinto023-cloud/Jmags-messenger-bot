@@ -358,6 +358,38 @@ function textHasFormLink(text, cfg) {
   });
 }
 
+const PERSONAL_LINK_LEAD = '👇 Booking link po ninyo:';
+
+function personalFormLinkText(link) {
+  return `${PERSONAL_LINK_LEAD} ${link}`;
+}
+
+function isPersonalFormLinkText(text) {
+  return String(text || '').trimStart().startsWith(PERSONAL_LINK_LEAD);
+}
+
+function normalizeTriggerText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function textHasLinkTrigger(text, cfg) {
+  const hay = normalizeTriggerText(text);
+  if (!hay) return false;
+  const phrases = ((cfg && cfg.bookingLinkTriggerPhrases) || [])
+    .map(normalizeTriggerText)
+    .filter(Boolean);
+  return phrases.some((phrase) => hay.includes(phrase));
+}
+
+function textIsStaffFormSignal(text, cfg) {
+  if (!text || isPersonalFormLinkText(text)) return false;
+  return textHasFormLink(text, cfg) || textHasLinkTrigger(text, cfg);
+}
+
 function nameTokens(name) {
   return cleanName(name).toLowerCase().replace(/[^a-zñ\s]/gi, ' ').split(/\s+/)
     .filter((word) => word.length >= 3 && !['po', 'sir', 'maam', 'mam', 'the'].includes(word));
@@ -676,7 +708,8 @@ module.exports = {
   isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
   parseNetlifySubmission, identityFrom, normalizeMobile, mobileLast4, matchMobile,
-  textHasFormLink, namesRoughlyMatch, phonesInText, pickStaffLink, staffNeedReason,
+  textHasFormLink, textHasLinkTrigger, textIsStaffFormSignal, normalizeTriggerText,
+  personalFormLinkText, isPersonalFormLinkText, namesRoughlyMatch, phonesInText, pickStaffLink, staffNeedReason,
   matchJobMobile, outsideWindowError, deliveryKeys, deliveryHold, markPending,
   markSent, markSkipped, releasePending, firstSkip, REF_PARAM,
 };

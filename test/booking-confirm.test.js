@@ -555,7 +555,7 @@ test('confirm goes only to the submitter and does not turn any switch on', async
   } finally { await s.close(); }
 });
 
-function echo(psid, body, pageId = PAGE) {
+function echo(psid, body, pageId = PAGE, appId = '999') {
   return {
     object: 'page',
     entry: [{
@@ -565,11 +565,89 @@ function echo(psid, body, pageId = PAGE) {
         sender: { id: pageId },
         recipient: { id: psid },
         timestamp: Date.now(),
-        message: { mid: `echo.${++n}`, is_echo: true, app_id: '999', text: body },
+        message: { mid: `echo.${++n}`, is_echo: true, app_id: appId, text: body },
       }],
     }],
   };
 }
+const confirmMsgs = (mock) => mock.calls.messages.filter((m) => m.message && /Salamat po sa booking/.test(m.message.text));
+const SAVED_REPLY = 'Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊';
+const personalMsgs = (mock) => mock.calls.messages.filter((m) => m.message && String(m.message.text).startsWith('👇 Booking link po ninyo:'));
+
+test('the saved-reply phrase matches after normalizing case, spaces, punctuation, and emoji', () => {
+  const phrases = { bookingLinkTriggerPhrases: ['eto po ang schedule form niyo'] };
+  assert.equal(bc.textHasFormLink(SAVED_REPLY, cfg), false);
+  assert.equal(bc.textHasLinkTrigger(SAVED_REPLY, phrases), true);
+  assert.equal(bc.textHasLinkTrigger('ETO   PO ang schedule-form niyo!!!', phrases), true);
+  assert.equal(bc.textHasLinkTrigger('thanks po', phrases), false);
+  assert.equal(bc.textIsStaffFormSignal(bc.personalFormLinkText(`${FORM}?token=abc`), { ...phrases, bookingFormUrl: FORM }), false);
+});
+
+test('a staff saved reply with no URL sends one signed booking link', async () => {
+  const s = await setup();
+  const notes = [];
+  s.app.bot.log.info = (...a) => notes.push(a.map(String).join(' '));
+  try {
+    const psid = '5550004411';
+    s.app.cfg.botEnabled = false;
+    s.app.bot.store.addTurn(psid, 'user', 'hello po', Date.now());
+    await s.webhook(echo(psid, SAVED_REPLY));
+    assert.equal(personalMsgs(s.mock).length, 1);
+    assert.equal(personalMsgs(s.mock)[0].recipient.id, psid);
+    const url = personalMsgs(s.mock)[0].message.text.slice('👇 Booking link po ninyo: '.length);
+    const parsed = new URL(url);
+    assert.deepEqual(bc.readToken(s.app.cfg, parsed.searchParams.get('token')), { psid, page: 'sanpablo' });
+    assert.equal(bc.readRef(s.app.cfg, parsed.searchParams.get('ref')), psid);
+    assert.equal(parsed.searchParams.get('page'), 'sanpablo');
+    assert.equal(s.app.store.data.formLinkSends.filter((row) => row.psid === psid).length, 1);
+    assert.equal(s.app.cfg.botEnabled, false);
+    assert.equal((s.mock.calls.switches || []).length, 0);
+    assert.ok(notes.some((line) => line.includes('personal form link sent sanpablo') && line.includes('4411') && !line.includes(psid)));
+
+    await s.webhook(echo(psid, 'Eto po ang schedule form niyo!!!'));
+    assert.equal(personalMsgs(s.mock).length, 1);
+    assert.equal(s.app.store.data.formLinkSends.filter((row) => row.psid === psid).length, 2);
+
+    const own = '5550004412';
+    s.app.bot.store.addTurn(own, 'user', 'hi', Date.now());
+    const before = s.mock.calls.messages.length;
+    await s.webhook(echo(own, SAVED_REPLY, PAGE, '1'));
+    assert.equal(s.mock.calls.messages.length, before);
+    assert.equal(s.app.store.data.formLinkSends.some((row) => row.psid === own), false);
+
+    await s.webhook(echo(psid, personalMsgs(s.mock)[0].message.text));
+    assert.equal(personalMsgs(s.mock).length, 1);
+    assert.equal(s.app.store.data.formLinkSends.filter((row) => row.psid === psid).length, 2);
+
+    const oldId = '5550004413';
+    s.app.bot.store.addTurn(oldId, 'user', 'hi', Date.now() - 3 * 86400e3);
+    s.app.bot.store.thread(oldId).lastUserTs = Date.now() - 3 * 86400e3;
+    await s.webhook(echo(oldId, SAVED_REPLY));
+    assert.equal(s.mock.calls.messages.some((m) => m.recipient.id === oldId), false);
+    assert.equal(s.app.store.data.formLinkSends.some((row) => row.psid === oldId), true);
+    assert.ok(notes.some((line) => line.includes('personal form link skipped') && line.includes('4413') && line.includes('outside 24h window') && !line.includes(oldId)));
+
+    const urlPsid = '5550004414';
+    s.app.bot.store.addTurn(urlPsid, 'user', 'hi', Date.now());
+    await s.webhook(echo(urlPsid, 'https://jmagscutomerform.netlify.app'));
+    assert.equal(personalMsgs(s.mock).filter((m) => m.recipient.id === urlPsid).length, 1);
+  } finally { await s.close(); }
+
+  const cavite = await setup({ CAVITE_PAGE_ACCESS_TOKEN: 'CAV-TOKEN' });
+  try {
+    const cavPsid = '5550004415';
+    const cav = cavite.app.cfg.pages.find((p) => p.key === 'cavite');
+    await withPage(cav, () => cavite.app.bot.store.addTurn(cavPsid, 'user', 'hi', Date.now()));
+    cavite.app.cfg.botEnabled = false;
+    await cavite.webhook(echo(cavPsid, SAVED_REPLY, CAVITE));
+    const msg = personalMsgs(cavite.mock)[0];
+    assert.equal(msg.recipient.id, cavPsid);
+    assert.equal(new URL(msg.message.text.slice('👇 Booking link po ninyo: '.length)).searchParams.get('page'), 'cavite');
+    assert.ok(cavite.mock.calls.pages.some((p) => p.kind === 'message' && p.token === 'CAV-TOKEN' && p.path.includes(CAVITE)));
+    assert.equal(cavite.app.store.data.formLinkSends[0].pageKey, 'cavite');
+    assert.equal(cavite.app.cfg.botEnabled, false);
+  } finally { await cavite.close(); }
+});
 
 test('the live calendar date 11/12/26 is included, including from the details text', () => {
   const fromField = bc.parseNetlifySubmission({
@@ -649,8 +727,8 @@ test('a stored name of JM AG still confirms the one chat that has the form phone
     }, 'sub-jm-ag');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, true);
-    assert.equal(s.mock.calls.messages[0].recipient.id, psid);
-    assert.match(sentTexts(s.mock)[0], /Jhon Michael Angelo Guinto/);
+    assert.equal(confirmMsgs(s.mock)[0].recipient.id, psid);
+    assert.match(confirmMsgs(s.mock)[0].message.text, /Jhon Michael Angelo Guinto/);
     assert.equal(s.app.store.data.formLinkSends.find((row) => row.psid === psid).consumedAt > 0, true);
     assert.ok(notes.some((line) => line.includes('staff form link recorded sanpablo') && line.includes('9161') && !line.includes(psid)));
     assert.ok(notes.some((line) => line.includes('booking staff-link sanpablo') && line.includes('9161') && line.includes('accepted: unique mobile')));
@@ -669,7 +747,7 @@ test('a stored name of JM AG still confirms the one chat that has the form phone
       }, 'sub-marvin');
       const blocked = await postHook(clash, rawClash, { 'X-Webhook-Signature': jws(rawClash) });
       assert.equal(blocked.body.sent, true);
-      assert.equal(clash.mock.calls.messages[0].recipient.id, other);
+      assert.equal(confirmMsgs(clash.mock)[0].recipient.id, other);
       assert.ok(clashNotes.some((line) => line.includes('accepted: unique mobile (name differs)') && line.includes('6278') && !line.includes(other)));
       assert.equal(clashNotes.some((line) => line.includes('09170006278')), false);
       assert.equal(clash.app.store.data.formLinkSends.find((row) => row.psid === other).consumedAt > 0, true);
@@ -691,8 +769,8 @@ test('a staff form-link echo confirms only that chat, then the chatbot stays sil
     }, 'sub-staff-1');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, true);
-    assert.match(sentTexts(s.mock)[0], /sa Huwebes, Nov 12/);
-    assert.equal(s.mock.calls.messages[0].recipient.id, psid);
+    assert.match(confirmMsgs(s.mock)[0].message.text, /sa Huwebes, Nov 12/);
+    assert.equal(confirmMsgs(s.mock)[0].recipient.id, psid);
     assert.equal(s.app.store.data.formLinkSends.find((row) => row.psid === psid).consumedAt > 0, true);
 
     t.pausedUntil = 0;
@@ -754,7 +832,7 @@ test('Marvin is not confirmed when that chat never typed the mobile, and two mob
       assert.equal(flagged.body.sent, false);
       assert.match(flagged.body.reason, /6278/);
       assert.match(flagged.body.reason, /1002/);
-      assert.equal(sentTexts(both.mock).length, 0);
+      assert.equal(confirmMsgs(both.mock).length, 0);
 
       const named = await setup();
       try {
@@ -771,8 +849,8 @@ test('Marvin is not confirmed when that chat never typed the mobile, and two mob
         }, 'sub-name-tie');
         const picked = await postHook(named, rawNamed, { 'X-Webhook-Signature': jws(rawNamed) });
         assert.equal(picked.body.sent, true);
-        assert.equal(named.mock.calls.messages[0].recipient.id, ana);
-        assert.equal(named.mock.calls.messages.some((m) => m.recipient.id === juan), false);
+        assert.equal(confirmMsgs(named.mock).length, 1);
+        assert.equal(confirmMsgs(named.mock)[0].recipient.id, ana);
       } finally { await named.close(); }
     } finally { await both.close(); }
   } finally { await s.close(); }
@@ -798,7 +876,8 @@ test('two staff-link chats with the same mobile are not messaged, and a chat tha
     assert.match(out.body.reason, /1001/);
     assert.match(out.body.reason, /1002/);
     assert.equal(out.body.reason.includes(a), false);
-    assert.equal(sentTexts(s.mock).length, 0);
+    assert.equal(confirmMsgs(s.mock).length, 0);
+    assert.equal(s.mock.calls.messages.some((m) => m.recipient.id === stranger), false);
     assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
 
     const onlyStranger = await setup();
