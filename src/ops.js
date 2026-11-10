@@ -3,6 +3,7 @@
 // Persisted on store.data.ops inside DATA_DIR/state.json. No customer rows live in git.
 
 const { chatCustomerName, summarizeConversation } = require('./summary');
+const { threadCardId } = require('./form-link-card');
 const { inboxLinks, genericInboxUrl } = require('./inbox-link');
 const { statusLine } = require('./schedule');
 const { currentPage } = require('./pages');
@@ -983,13 +984,20 @@ function hotLeads(threads, reviews, now, cfg) {
     if (!info) continue;
     const psid = (thread && thread.psid) || key;
     const pageId = (thread && thread.pageId) || (cfg && cfg.pageId) || '';
-    const review = (reviews || []).find((r) => r && r.psid === psid && (!thread.pageId || !r.pageId || r.pageId === thread.pageId) && (r.conversationLink || r.conversationId));
+    const sameChat = (r) => r && String(r.psid) === String(psid) && (!thread.pageId || !r.pageId || r.pageId === thread.pageId);
+    const named = (reviews || []).find(sameChat);
+    const review = (reviews || []).find((r) => sameChat(r) && (r.conversationLink || r.conversationId));
     let href = '';
     if (review) href = inboxLinks(pageId, review).messenger || '';
     // A raw PSID in the page HTML is a customer id. Without a stored thread link, open the Page inbox.
     if (!href) href = genericInboxUrl(pageId);
     const mins = info.since ? Math.max(0, Math.round((now - info.since) / 60000)) : 0;
+    const phoneBlob = (thread.history || []).filter((h) => h && h.role === 'user').map((h) => h.content || '').join('\n');
+    const phoneHit = phoneBlob.match(/(?:\+63|0)9\d{9}/);
     rows.push({
+      cardId: threadCardId(key),
+      name: (named && named.customerName) || '',
+      phoneLast4: phoneHit ? phoneHit[0].replace(/\D/g, '').slice(-4) : '',
       last4: String(psid).slice(-4),
       reason: info.reason,
       href,
@@ -1056,6 +1064,7 @@ function aiHandoffs(threads, jobs) {
     const psid = (thread && thread.psid) || key;
     const job = (jobs || []).find((item) => item.psid === psid && (!thread.pageId || !item.pageId || item.pageId === thread.pageId));
     rows.push({
+      cardId: threadCardId(key),
       last4: String(psid).slice(-4),
       name: job && job.customerName ? job.customerName : 'Chat',
       reason: thread.handoffReason || 'AI unavailable',

@@ -184,6 +184,7 @@ function shell(body) {
 <body>
 ${body}
 <script src="/ops.js"></script>
+<script src="/copy-form-link.js"></script>
 </body>
 </html>`;
 }
@@ -410,11 +411,11 @@ function todayTab(view) {
   const feed = activity.map((job) => `<li><b>${job.status === 'Completed' ? 'Marked job done' : 'Added a job'}: ${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">${esc(ago(job.updatedAt || job.createdAt, view.now))}</div></li>`).join('');
   const flags = `${view.dailyOn ? '' : '<p class="note" id="daily-flag">Daily status updates are off.</p>'}${view.deliveryOn ? '' : '<p class="note" id="delivery-flag">Delivery notifications are off.</p>'}`;
   const notice = SMS_NOTICES[view.notice] ? `<p class="note" data-sms-notice="${esc(view.notice)}">${esc(SMS_NOTICES[view.notice])}</p>` : '';
-  const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div></li>`).join('');
+  const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div>${row.cardId ? `<p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.cardId)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>` : ''}</li>`).join('');
   const ivan = ivanRows ? `<section class="card" id="ai-handoffs"><header><h2>Needs Ivan</h2><span class="meta">The AI could not answer</span></header><ul>${ivanRows}</ul></section>` : '';
   const leads = view.hotLeads || [];
-  const leadItems = leads.map((row) => `<li data-hot-lead="${esc(row.last4)}"><b>···${esc(row.last4)}</b> · ${esc(row.reason)}<div class="meta">${esc(row.waitLabel)} <a class="linkish" href="${esc(row.href)}" target="_blank" rel="noopener">Open chat</a></div></li>`).join('');
-  const hot = `<section class="card" id="hot-leads"><header><h2>Hot leads</h2><span class="meta">${leads.length} oldest first</span></header>${leadItems ? `<ul>${leadItems}</ul>` : '<p class="empty">No hot leads.</p>'}</section>`;
+  const leadItems = leads.map((row) => `<li data-hot-lead="${esc(row.last4)}"><b>${row.name ? `${esc(row.name)} · ` : ''}···${esc(row.last4)}</b>${row.phoneLast4 ? ` <span class="meta">phone ••${esc(row.phoneLast4)}</span>` : ''} · ${esc(row.reason)}<div class="meta">${esc(row.waitLabel)} <a class="linkish" href="${esc(row.href)}" target="_blank" rel="noopener">Open chat</a></div>${row.cardId ? `<p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.cardId)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>` : ''}</li>`).join('');
+  const hot = `<section class="card" id="hot-leads"><header><h2>Hot leads</h2><span class="meta">${leads.length} oldest first</span></header><input class="search" type="search" placeholder="Search name or last 4" data-filter="#hot-leads [data-hot-lead]">${leadItems ? `<ul>${leadItems}</ul>` : '<p class="empty">No hot leads.</p>'}</section>`;
   return `<section>
     ${flags}
     ${notice}
@@ -547,7 +548,8 @@ function jobFields(job, view) {
     ${field('Status note for customer', `<textarea name="statusNote" rows="2">${esc(j.statusNote || '')}</textarea>`)}
     ${field('Notes', `<textarea name="notes" rows="2">${esc(j.notes || '')}</textarea>`)}
     ${j.id ? `<p class="meta">Messenger chat: <span data-messenger="${esc(linked)}">${linked}</span></p>
-      ${field('Messenger chat', `<select name="review">${chatOptions}</select>`)}
+      ${field('Messenger chat', `<select id="review-pick-${esc(j.id)}" name="review">${chatOptions}</select>`)}
+      <p><button type="button" class="ghost copy-form-link" data-card-source="review-pick-${esc(j.id)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>
       <input type="hidden" name="link" value="1">` : ''}`;
 }
 

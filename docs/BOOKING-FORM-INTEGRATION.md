@@ -28,8 +28,12 @@ Example:
 https://jmagscutomerform.netlify.app/?psid=1234567890&page=sanpablo&token=v1.sanpablo.1234567890.SIGNATURE&ref=1234567890.SIGNATURE
 ```
 
-The bot adds these whenever it sends `BOOKING_FORM_URL`. Staff who need a link for
-one known PSID, while logged into the dashboard or with the admin token:
+The bot adds these whenever it sends `BOOKING_FORM_URL`. On each video card, hot lead, and linked job chat, **Copy form link** asks
+`POST /dashboard/api/booking-link` with that card's id. The server looks up the
+PSID and Page and returns the signed link. The card HTML does not include the
+PSID. Copying the link does not send a message and does not change the chat.
+Staff who need a link from outside those cards, while logged into the dashboard
+or with the admin token:
 
 ```text
 GET /admin/booking-link?psid=PSID&page=sanpablo
@@ -176,7 +180,7 @@ fires when Netlify accepts the submission, including when the Supabase call fail
 ## What stays quiet
 
 - No SMS from this path.
-- No second chat after the confirm, including when the Page switch is on.
+- No chatbot reply after the confirm and AGREE, with `BOT_ENABLED` on or off. That chat stays booking-silent until staff explicitly clear `bookingStaffOnly`. Copying a link does not start that silence and does not send anything.
 - No untagged send outside 24 hours.
 - No message except to the one PSID on a valid token or signed `ref`.
 - Sending the confirm does not turn `BOT_ENABLED` or a Page switch on. Other customers stay on the normal switch.
