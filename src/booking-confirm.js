@@ -681,8 +681,17 @@ function liveRow(row, now) {
   return row;
 }
 
+function retryableSkip(reason) {
+  const text = String(reason || '');
+  return text === 'outside 24h window'
+    || text === 'no page token'
+    || text === 'no messenger identity'
+    || /^Booking needs staff\b/.test(text);
+}
+
 // sent and in-flight stop a second send. An outside-window skip does not:
 // a later retry can send once the customer is inside the window again.
+// A needs-staff skip also does not: the browser confirm may arrive after the notification.
 function deliveryHold(store, spec, now) {
   pruneDeliveries(store, now);
   const all = bucket(store);
@@ -695,8 +704,8 @@ function deliveryHold(store, spec, now) {
     if (row.status === 'pending' && now - row.at < PENDING_MS) return { action: 'stop', reason: 'in flight' };
     // These can become sendable on a later retry (customer messages again, or the
     // Page token is added). A bad token stays a hard stop.
-    if (row.status === 'skipped' && (row.reason === 'outside 24h window' || row.reason === 'no page token')) {
-      if (row.notified) outsideNotified = true;
+    if (row.status === 'skipped' && retryableSkip(row.reason)) {
+      if (row.notified && (row.reason === 'outside 24h window' || row.reason === 'no page token')) outsideNotified = true;
       continue;
     }
     if (row.status === 'skipped') return { action: 'stop', reason: row.reason || 'already handled' };
@@ -748,7 +757,8 @@ function firstSkip(store, id, reason, now) {
 
 module.exports = {
   makeRef, readRef, makeToken, readToken, bookingFormLink, personalizeFormUrls,
-  plainFormUrl, expandShortLink, shortLinkHtml, identityFieldSummary, SHORT_LINK_MS,
+  plainFormUrl, expandShortLink, shortLinkHtml, identityFieldSummary, retryableSkip, SHORT_LINK_MS,
+  PAIR_WINDOW_MS: 3 * 60 * 1000,
   normalizePageKey, pageRecord, normalizeWait, bookingKind, confirmText, agreeAckText,
   isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,

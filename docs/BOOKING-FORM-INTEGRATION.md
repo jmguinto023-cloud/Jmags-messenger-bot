@@ -67,9 +67,13 @@ The link in that message is `PUBLIC_BASE_URL/b/<code>` (Render's
 `RENDER_EXTERNAL_URL` when `PUBLIC_BASE_URL` is empty). The code lasts 7 days in
 `state.json`. Opening it returns a small page that navigates to the full signed
 form URL, so Messenger's in-app browser keeps `psid`, `page`, `token`, and `ref`.
-An unknown or expired code goes to the plain form. The form's own browser call
-sends the signed `ref` but not the date; that chat is remembered until the
-Netlify notification arrives with the date.
+An unknown or expired code goes to the plain form. The form's own browser call sends the signed `ref` but not the date, and the
+Netlify notification has the date but often no token. Whichever arrives first
+is held for 3 minutes and paired by booking id, name, or mobile. One confirm
+goes out as soon as both the chat and the date are known. If the date never
+arrives, the confirm is sent without a date. Staff are not flagged while a
+pair is still waiting. The form source is the live Netlify page, not a repo
+this account can edit.
 A repeat within 10 minutes does not send another. The bot's own echo of that
 message is not recorded. `BOOKING_AUTO_PERSONAL_LINK` empty stays on. This send
 ignores `BOT_ENABLED` and does not change the switch. A submit that carries a

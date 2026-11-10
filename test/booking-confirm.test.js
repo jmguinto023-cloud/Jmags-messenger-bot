@@ -409,7 +409,10 @@ test('a forged token or a matching phone does not get a message', async () => {
     }, 'sub-phone');
     const ok = await postHook(s, plain, {}, HOOK);
     assert.equal(ok.body.sent, false);
-    assert.match(ok.body.reason, /Booking needs staff/);
+    assert.equal(ok.body.reason, 'waiting for messenger identity');
+    assert.equal(sentTexts(s.mock).length, 0);
+    const settled = await endPairWindow(s);
+    assert.match(settled.map((row) => row.reason || '').join(' '), /Booking needs staff/);
     assert.equal(sentTexts(s.mock).length, 0);
     assert.notEqual(s.app.bot.store.thread(psid).bookingSource, 'phone');
   } finally { await s.close(); }
@@ -426,7 +429,10 @@ test('a stored job phone does not receive the confirm', async () => {
     }, 'sub-job');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.match(out.body.reason, /Booking needs staff/);
+    assert.equal(out.body.reason, 'waiting for messenger identity');
+    assert.equal(sentTexts(s.mock).length, 0);
+    const settled = await endPairWindow(s);
+    assert.match(settled.map((row) => row.reason || '').join(' '), /Booking needs staff/);
     assert.equal(sentTexts(s.mock).length, 0);
   } finally { await s.close(); }
 });
@@ -442,7 +448,10 @@ test('two chats with the same mobile are not messaged', async () => {
     const raw = submission({ name: 'Duo', willingToWait: 'yes', pdate: '2026-11-12', mobile: '09190001111' }, 'sub-duo');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.match(out.body.reason, /Booking needs staff/);
+    assert.equal(out.body.reason, 'waiting for messenger identity');
+    assert.equal(sentTexts(s.mock).length, 0);
+    const settled = await endPairWindow(s);
+    assert.match(settled.map((row) => row.reason || '').join(' '), /Booking needs staff/);
     assert.equal(sentTexts(s.mock).length, 0);
     const listed = await fetch(`${s.base}/admin/booking-confirms`);
     assert.equal(listed.status, 401);
@@ -583,6 +592,11 @@ function regularText(name, date) {
 }
 const SAVED_REPLY = 'Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊';
 const personalMsgs = (mock) => mock.calls.messages.filter((m) => m.message && String(m.message.text).startsWith('👇 Booking link po ninyo:'));
+async function endPairWindow(s) {
+  const start = s.app.bot.now();
+  s.app.bot.now = () => start + bc.PAIR_WINDOW_MS + 50;
+  return s.app.bot.flushBookingPairs();
+}
 async function shortLinkTarget(shortUrl) {
   const res = await fetch(shortUrl);
   assert.equal(res.status, 200);
@@ -591,6 +605,64 @@ async function shortLinkTarget(shortUrl) {
   assert.ok(found, html.slice(0, 200));
   return new URL(JSON.parse(found[1]));
 }
+
+test('a form notification and a browser confirm pair in either order', async () => {
+  const noticeFirst = await setup();
+  const notes = [];
+  noticeFirst.app.bot.log.info = (...a) => notes.push(a.map(String).join(' '));
+  try {
+    const psid = '4882959418499161';
+    noticeFirst.app.bot.store.thread(psid).lastUserTs = Date.now();
+    const raw = submission({
+      name: 'Jhon Michael Angelo Guinto', mobile: '09170009161', willingToWait: 'yes', pdate: '11/11/26',
+    }, 'sub-order-notice');
+    const held = await postHook(noticeFirst, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(held.body.sent, false);
+    assert.equal(held.body.reason, 'waiting for messenger identity');
+    assert.equal(confirmMsgs(noticeFirst.mock).length, 0);
+    bc.firstSkip(noticeFirst.app.store, 'sub:sub-order-notice', 'Booking needs staff: sanpablo ··9161 Someone', Date.now());
+    const ref = bc.makeRef(noticeFirst.app.cfg, psid);
+    const browser = await noticeFirst.submit({ ref, name: 'Jhon Michael Angelo Guinto', wait: 'yes', bookingId: 'BK-order' });
+    assert.equal((await browser.json()).sent, true);
+    assert.equal(confirmMsgs(noticeFirst.mock)[0].message.text, regularText('Jhon Michael Angelo Guinto', prettyDate('2026-11-11')));
+    assert.equal(confirmMsgs(noticeFirst.mock)[0].recipient.id, psid);
+    assert.ok(notes.some((line) => line.includes('paired with notice') && line.includes('9161') && !line.includes(psid)));
+  } finally { await noticeFirst.close(); }
+
+  const identFirst = await setup();
+  try {
+    const psid = '5550006278';
+    identFirst.app.bot.store.thread(psid).lastUserTs = Date.now();
+    const ref = bc.makeRef(identFirst.app.cfg, psid);
+    const browser = await identFirst.submit({ ref, name: 'Mark Ivan', wait: 'yes', bookingId: 'BK-ident' });
+    const waited = await browser.json();
+    assert.equal(waited.sent, false);
+    assert.equal(waited.reason, 'waiting for form date');
+    const raw = submission({
+      name: 'Mark Ivan', willingToWait: 'yes', pdate: '11/10/26',
+    }, 'sub-order-ident');
+    const out = await postHook(identFirst, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, true);
+    assert.equal(confirmMsgs(identFirst.mock)[0].recipient.id, psid);
+    assert.match(confirmMsgs(identFirst.mock)[0].message.text, /sa Martes, Nov 10/);
+    const quiet = identFirst.mock.calls.messages.length;
+    await endPairWindow(identFirst);
+    assert.equal(identFirst.mock.calls.messages.length, quiet);
+  } finally { await identFirst.close(); }
+
+  const dateNever = await setup();
+  try {
+    const psid = '5550004419';
+    dateNever.app.bot.store.thread(psid).lastUserTs = Date.now();
+    const ref = bc.makeRef(dateNever.app.cfg, psid);
+    const browser = await dateNever.submit({ ref, name: 'Liza Ramos', wait: 'yes' });
+    assert.equal((await browser.json()).sent, false);
+    const settled = await endPairWindow(dateNever);
+    assert.equal(settled[0].sent, true);
+    assert.equal(confirmMsgs(dateNever.mock)[0].message.text, regularText('Liza Ramos'));
+    assert.match(confirmMsgs(dateNever.mock)[0].message.text, /kayo ng "REGULAR SERVICE"/);
+  } finally { await dateNever.close(); }
+});
 
 test('a short link still confirms the chat when the form notification has no token', async () => {
   const s = await setup();
@@ -872,8 +944,12 @@ test('Marvin is not confirmed when that chat never typed the mobile, and two mob
     }, 'sub-marvin-staff-phone');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.match(out.body.reason, /Booking needs staff/);
-    assert.match(out.body.reason, /6278/);
+    assert.equal(out.body.reason, 'waiting for messenger identity');
+    assert.equal(sentTexts(s.mock).length, 0);
+    const settled = await endPairWindow(s);
+    const why = settled.map((row) => row.reason || '').join(' ');
+    assert.match(why, /Booking needs staff/);
+    assert.match(why, /6278/);
     assert.equal(sentTexts(s.mock).length, 0);
     assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
 
@@ -892,8 +968,11 @@ test('Marvin is not confirmed when that chat never typed the mobile, and two mob
       }, 'sub-marvin-two');
       const flagged = await postHook(both, rawBoth, { 'X-Webhook-Signature': jws(rawBoth) });
       assert.equal(flagged.body.sent, false);
-      assert.match(flagged.body.reason, /6278/);
-      assert.match(flagged.body.reason, /1002/);
+      assert.equal(flagged.body.reason, 'waiting for messenger identity');
+      const settledBoth = await endPairWindow(both);
+      const bothWhy = settledBoth.map((row) => row.reason || '').join(' ');
+      assert.match(bothWhy, /6278/);
+      assert.match(bothWhy, /1002/);
       assert.equal(confirmMsgs(both.mock).length, 0);
 
       const named = await setup();
@@ -934,10 +1013,13 @@ test('two staff-link chats with the same mobile are not messaged, and a chat tha
     }, 'sub-two');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.match(out.body.reason, /Booking needs staff/);
-    assert.match(out.body.reason, /1001/);
-    assert.match(out.body.reason, /1002/);
-    assert.equal(out.body.reason.includes(a), false);
+    assert.equal(out.body.reason, 'waiting for messenger identity');
+    const settled = await endPairWindow(s);
+    const why = settled.map((row) => row.reason || '').join(' ');
+    assert.match(why, /Booking needs staff/);
+    assert.match(why, /1001/);
+    assert.match(why, /1002/);
+    assert.equal(why.includes(a), false);
     assert.equal(confirmMsgs(s.mock).length, 0);
     assert.equal(s.mock.calls.messages.some((m) => m.recipient.id === stranger), false);
     assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);

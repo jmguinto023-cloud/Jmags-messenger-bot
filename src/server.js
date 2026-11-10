@@ -259,22 +259,11 @@ function createServer({ cfg, bot, log }) {
         }
         try {
           const date = bookingConfirm.submissionDate(body, body);
-          // The live form's browser call sends ref, name, and wait, but not pdate.
-          // Remember the chat so the Netlify notification, which has the date, can still
-          // find it when the hidden token fields did not survive the short-link hop.
-          if (!date) {
-            bot.notePendingFormConfirm(psid, name, wait);
-            log.info(`booking browser confirm ${String(psid).slice(-4)} ref=ok date=absent`);
-            return reply(200, { ok: true, sent: false, reason: 'date arrives with the form notification', messengerUrl: '' });
-          }
-          const r = await bot.sendBookingConfirm(psid, {
-            name,
-            wait,
-            date,
+          const r = await bot.receiveBrowserConfirm({
+            psid, name, wait, date,
             bookingId: String(body.bookingId || '').slice(0, 40),
-            source: 'form',
           });
-          return reply(200, { ok: true, sent: r.sent, reason: r.reason || '', messengerUrl: '' });
+          return reply(200, { ok: true, sent: Boolean(r.sent), reason: r.reason || '', messengerUrl: '' });
         } catch (e) {
           log.warn('booking submitted handler failed', e.message);
           return reply(200, { ok: true, sent: false, reason: 'send failed', messengerUrl: '' });

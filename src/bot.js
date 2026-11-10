@@ -1179,7 +1179,10 @@ class Bot {
       bookingId: opts.bookingId || '',
     });
     const held = bookingConfirm.deliveryHold(this.store, keys, now);
-    if (held.action === 'stop') return { sent: false, reason: held.reason, duplicate: true };
+    if (held.action === 'stop') {
+      this.log.info(`booking confirm not sent to ${short(psid)}: ${held.reason}`);
+      return { sent: false, reason: held.reason, duplicate: true };
+    }
 
     const existing = this.store.findThread(psid);
     const last = (existing && existing.lastUserTs) || 0;
@@ -1270,6 +1273,8 @@ class Bot {
       payload = Object.fromEntries(new URLSearchParams(text));
     }
     const sub = bookingConfirm.parseNetlifySubmission(payload);
+    const fieldNames = Object.keys((payload && payload.data) || payload || {}).filter((key) => !/bot-field|password|token|ref|psid/i.test(key));
+    this.log.info(`booking webhook fields ${fieldNames.sort().join(',') || 'none'} ${bookingConfirm.identityFieldSummary(sub)}`);
     if (!sub.submissionId) {
       sub.submissionId = crypto.createHash('sha256').update(Buffer.isBuffer(raw) ? raw : Buffer.from(text)).digest('hex').slice(0, 32);
     }
@@ -1293,6 +1298,12 @@ class Bot {
     } else {
       this.log.info(`booking webhook identity ${fields}`);
     }
+    if (who.hold) {
+      this.rememberBookingNotice(sub, kind, who.staffReason);
+      this.armPairTimer();
+      this.log.info(`booking notice held ${fields} date=${sub.date ? 'present' : 'absent'} waiting for identity`);
+      return { status: 200, body: { ok: true, sent: false, reason: 'waiting for messenger identity' } };
+    }
     if (who.error) {
       const fresh = bookingConfirm.firstSkip(this.store, `sub:${sub.submissionId}`, who.error, this.now());
       if (fresh) {
@@ -1309,10 +1320,12 @@ class Bot {
       name: sub.name,
       wait: kind,
       date: sub.date,
-      bookingId: sub.bookingId,
+      bookingId: sub.bookingId || who.bookingId || '',
       submissionId: sub.submissionId,
       source: who.via === 'staff-link' ? 'staff-link' : (who.via === 'browser-confirm' ? 'browser-confirm' : 'netlify'),
     });
+    if (!result.sent) this.log.info(`booking confirm not sent after match: ${result.reason || 'not sent'} ${short(who.psid)}`);
+    else this.clearBookingPairs({ name: sub.name, bookingId: sub.bookingId || who.bookingId, psid: who.psid });
     if (result.sent && who.entryIds) this.consumeFormLinks(who.entryIds, sub.submissionId);
     if (result.retry) return { status: 502, body: { ok: false, sent: false, reason: result.reason || 'send failed' } };
     return { status: 200, body: { ok: true, sent: Boolean(result.sent), reason: result.reason || '' } };
@@ -1323,17 +1336,20 @@ class Bot {
     const ident = bookingConfirm.identityFrom(this.cfg, sub);
     if (ident.error) return { error: ident.error };
     if (!ident.psid) {
-      const pending = this.takePendingFormConfirm(sub.name);
+      const pending = this.takePendingFormConfirm(sub);
       if (pending) {
         const page = bookingConfirm.pageRecord(this.cfg, pending.page);
-        if (page) return { psid: pending.psid, page, via: 'browser-confirm' };
+        if (page) return { psid: pending.psid, page, via: 'browser-confirm', bookingId: pending.bookingId || '' };
       }
-      if (!this.cfg.bookingStaffLinkMatch) return { error: 'no messenger identity' };
-      const picked = await this.matchStaffFormLink(sub);
-      if (!picked.match) return { error: picked.reason || 'no messenger identity' };
-      const page = bookingConfirm.pageRecord(this.cfg, picked.match.pageKey);
-      if (!page) return { error: 'no page token' };
-      return { psid: picked.match.psid, page, via: 'staff-link', entryIds: picked.match.entryIds || [] };
+      if (this.cfg.bookingStaffLinkMatch) {
+        const picked = await this.matchStaffFormLink(sub);
+        if (picked.match) {
+          const page = bookingConfirm.pageRecord(this.cfg, picked.match.pageKey);
+          if (page) return { psid: picked.match.psid, page, via: 'staff-link', entryIds: picked.match.entryIds || [] };
+        }
+        return { hold: true, staffReason: picked.reason || 'no messenger identity' };
+      }
+      return { hold: true, staffReason: 'no messenger identity' };
     }
     if (ident.page) {
       const page = bookingConfirm.pageRecord(this.cfg, ident.page);
@@ -1345,41 +1361,253 @@ class Bot {
     return { psid: ident.psid, page: hits[0].page, via: ident.via };
   }
 
-  notePendingFormConfirm(psid, name, wait) {
-    const hits = this.threadsForPsid(psid);
-    let pageName = hits.length === 1 ? pageKey(hits[0].page) : '';
-    if (!pageName) {
-      const links = Object.values(this.store.data.shortLinks || {}).filter((row) => row && String(row.psid) === String(psid));
-      links.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      pageName = (links[0] && links[0].page) || 'sanpablo';
-    }
+  pairWindowMs() {
+    return bookingConfirm.PAIR_WINDOW_MS;
+  }
+
+  bookingHold() {
+    const bag = this.store.data.bookingHolds ||= { notices: [], idents: [] };
+    bag.notices ||= [];
+    bag.idents ||= [];
+    return bag;
+  }
+
+  freshHoldRows(rows) {
     const now = this.now();
-    const list = (this.store.data.pendingFormConfirms || []).filter((row) => row && now - row.at < 30 * 60 * 1000);
-    list.push({
-      psid: String(psid),
-      page: pageName,
-      name: bookingConfirm.cleanName(name),
-      wait: bookingConfirm.normalizeWait(wait) || '',
-      at: now,
+    return (rows || []).filter((row) => row && now - row.at <= this.pairWindowMs());
+  }
+
+  pageNameForPsid(psid) {
+    const hits = this.threadsForPsid(psid);
+    if (hits.length === 1) return pageKey(hits[0].page);
+    const links = Object.values(this.store.data.shortLinks || {}).filter((row) => row && String(row.psid) === String(psid));
+    links.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return (links[0] && links[0].page) || 'sanpablo';
+  }
+
+  holdNamesMatch(a, b) {
+    const left = bookingConfirm.cleanName(a).toLowerCase();
+    const right = bookingConfirm.cleanName(b).toLowerCase();
+    return Boolean(left) && left === right;
+  }
+
+  holdWaitsMatch(a, b) {
+    if (!a || !b) return true;
+    return a === b;
+  }
+
+  identMatchesNotice(ident, notice) {
+    if (!this.holdWaitsMatch(ident.wait, notice.wait)) return false;
+    if (ident.bookingId && notice.bookingId) return ident.bookingId === notice.bookingId;
+    if (this.holdNamesMatch(ident.name, notice.name)) return true;
+    const phone = bookingConfirm.normalizeMobile(notice.mobile);
+    if (!phone) return false;
+    const page = bookingConfirm.pageRecord(this.cfg, ident.page);
+    if (!page) return false;
+    let hit = false;
+    withPage(page, () => {
+      const thread = this.store.findThread(ident.psid) || {};
+      const typed = (thread.history || []).filter((row) => row && row.role === 'user').map((row) => row.content || '').join('\n');
+      hit = bookingConfirm.phonesInText(typed).includes(phone);
     });
-    this.store.data.pendingFormConfirms = list.slice(-200);
+    return hit;
+  }
+
+  takeOne(rows, pred) {
+    const hits = rows.filter(pred);
+    if (hits.length !== 1) return null;
+    return hits[0];
+  }
+
+  rememberBookingNotice(sub, kind, staffReason) {
+    const bag = this.bookingHold();
+    bag.notices = this.freshHoldRows(bag.notices);
+    bag.notices.push({
+      submissionId: sub.submissionId || '',
+      bookingId: sub.bookingId || '',
+      name: bookingConfirm.cleanName(sub.name),
+      mobile: bookingConfirm.normalizeMobile(sub.mobile),
+      date: sub.date || '',
+      wait: kind,
+      staffReason: staffReason || '',
+      at: this.now(),
+    });
+    bag.notices = bag.notices.slice(-200);
     this.store.flushNow();
   }
 
-  takePendingFormConfirm(name) {
-    const want = bookingConfirm.cleanName(name).toLowerCase();
-    const now = this.now();
-    const fresh = (this.store.data.pendingFormConfirms || []).filter((row) => row && now - row.at <= 15 * 60 * 1000);
-    this.store.data.pendingFormConfirms = fresh;
-    if (!want) return null;
-    const hits = fresh.filter((row) => bookingConfirm.cleanName(row.name).toLowerCase() === want);
-    if (hits.length !== 1) {
+  rememberBookingIdent({ psid, name, wait, bookingId }) {
+    const bag = this.bookingHold();
+    bag.idents = this.freshHoldRows(bag.idents);
+    bag.idents.push({
+      psid: String(psid),
+      page: this.pageNameForPsid(psid),
+      name: bookingConfirm.cleanName(name),
+      wait: bookingConfirm.normalizeWait(wait) || '',
+      bookingId: String(bookingId || '').slice(0, 80),
+      at: this.now(),
+    });
+    bag.idents = bag.idents.slice(-200);
+    this.store.flushNow();
+  }
+
+  takePendingFormConfirm(sub) {
+    const bag = this.bookingHold();
+    bag.idents = this.freshHoldRows(bag.idents);
+    const notice = {
+      name: sub && sub.name,
+      bookingId: sub && sub.bookingId,
+      mobile: sub && sub.mobile,
+      wait: bookingConfirm.bookingKind(sub) || (sub && sub.wait) || '',
+    };
+    const hit = this.takeOne(bag.idents, (ident) => this.identMatchesNotice(ident, notice));
+    if (!hit) {
       this.store.flushNow();
       return null;
     }
-    this.store.data.pendingFormConfirms = fresh.filter((row) => row !== hits[0]);
+    bag.idents = bag.idents.filter((row) => row !== hit);
     this.store.flushNow();
-    return hits[0];
+    return hit;
+  }
+
+  takeMatchingNotice({ name, bookingId, wait }) {
+    const bag = this.bookingHold();
+    bag.notices = this.freshHoldRows(bag.notices);
+    const ident = { name, bookingId, wait, page: '', psid: '' };
+    const hit = this.takeOne(bag.notices, (notice) => this.identMatchesNotice(ident, notice));
+    if (!hit) {
+      this.store.flushNow();
+      return null;
+    }
+    bag.notices = bag.notices.filter((row) => row !== hit);
+    this.store.flushNow();
+    return hit;
+  }
+
+  clearBookingPairs({ name, bookingId, psid } = {}) {
+    const bag = this.bookingHold();
+    bag.idents = bag.idents.filter((row) => {
+      if (psid && row.psid === String(psid)) return false;
+      if (bookingId && row.bookingId && row.bookingId === bookingId) return false;
+      if (name && this.holdNamesMatch(row.name, name)) return false;
+      return true;
+    });
+    bag.notices = bag.notices.filter((row) => {
+      if (bookingId && row.bookingId && row.bookingId === bookingId) return false;
+      if (name && this.holdNamesMatch(row.name, name)) return false;
+      return true;
+    });
+    this.store.flushNow();
+  }
+
+  armPairTimer() {
+    if (this.pairTimer) clearTimeout(this.pairTimer);
+    const bag = this.bookingHold();
+    const rows = [...bag.notices, ...bag.idents];
+    if (!rows.length) {
+      this.pairTimer = null;
+      return;
+    }
+    const due = Math.min(...rows.map((row) => row.at + this.pairWindowMs()));
+    const wait = Math.max(0, due - this.now());
+    this.pairTimer = setTimeout(() => {
+      this.pairTimer = null;
+      this.flushBookingPairs().catch((e) => this.log.error('booking pair flush failed', e.message));
+    }, wait);
+    if (this.pairTimer.unref) this.pairTimer.unref();
+  }
+
+  async receiveBrowserConfirm({ psid, name, wait, date, bookingId }) {
+    const page = bookingConfirm.pageRecord(this.cfg, this.pageNameForPsid(psid));
+    const notice = this.takeMatchingNotice({ name, bookingId, wait });
+    const when = date || (notice && notice.date) || '';
+    if (when || !notice) {
+      if (when) {
+        const result = await this.sendBookingConfirm(psid, {
+          page, name, wait, date: when,
+          bookingId: bookingId || (notice && notice.bookingId) || '',
+          submissionId: (notice && notice.submissionId) || '',
+          source: notice ? 'paired' : 'form',
+        });
+        if (result.sent) this.clearBookingPairs({ name, bookingId, psid });
+        else this.log.info(`booking confirm not sent after match: ${result.reason || 'not sent'} ${short(psid)}`);
+        if (notice) this.log.info(`booking browser confirm ${short(psid)} paired with notice`);
+        return result;
+      }
+    }
+    if (notice && !when) {
+      const result = await this.sendBookingConfirm(psid, {
+        page, name, wait, date: '',
+        bookingId: bookingId || notice.bookingId || '',
+        submissionId: notice.submissionId || '',
+        source: 'paired',
+      });
+      this.log.info(`booking browser confirm ${short(psid)} paired with notice date=absent: ${result.sent ? 'sent' : (result.reason || 'not sent')}`);
+      if (result.sent) this.clearBookingPairs({ name, bookingId, psid });
+      return result;
+    }
+    this.rememberBookingIdent({ psid, name, wait, bookingId });
+    this.armPairTimer();
+    this.log.info(`booking browser confirm ${short(psid)} ref=ok date=absent waiting for form notification`);
+    return { sent: false, reason: 'waiting for form date' };
+  }
+
+  async flushBookingPairs() {
+    const bag = this.bookingHold();
+    const now = this.now();
+    const window = this.pairWindowMs();
+    const expiredIdents = bag.idents.filter((row) => now - row.at >= window);
+    const expiredNotices = bag.notices.filter((row) => now - row.at >= window);
+    bag.idents = bag.idents.filter((row) => now - row.at < window);
+    bag.notices = bag.notices.filter((row) => now - row.at < window);
+    this.store.flushNow();
+    const results = [];
+    for (const ident of expiredIdents) {
+      const page = bookingConfirm.pageRecord(this.cfg, ident.page);
+      this.log.info(`booking pair window ended ${short(ident.psid)} date=absent, sending without date`);
+      const result = await this.sendBookingConfirm(ident.psid, {
+        page, name: ident.name, wait: ident.wait, date: '',
+        bookingId: ident.bookingId || '', source: 'browser-confirm',
+      });
+      if (!result.sent) this.log.info(`booking confirm not sent after match: ${result.reason || 'not sent'} ${short(ident.psid)}`);
+      results.push(result);
+    }
+    for (const notice of expiredNotices) {
+      const sub = {
+        name: notice.name, mobile: notice.mobile, date: notice.date,
+        willingToWait: notice.wait, bookingId: notice.bookingId, submissionId: notice.submissionId,
+      };
+      let sent = false;
+      let reason = notice.staffReason || 'no messenger identity';
+      if (this.cfg.bookingStaffLinkMatch) {
+        const picked = await this.matchStaffFormLink(sub);
+        if (picked.match) {
+          const page = bookingConfirm.pageRecord(this.cfg, picked.match.pageKey);
+          const result = await this.sendBookingConfirm(picked.match.psid, {
+            page, name: notice.name, wait: notice.wait, date: notice.date,
+            bookingId: notice.bookingId, submissionId: notice.submissionId, source: 'staff-link',
+          });
+          sent = Boolean(result.sent);
+          reason = result.reason || '';
+          if (sent && picked.match.entryIds) this.consumeFormLinks(picked.match.entryIds, notice.submissionId);
+          if (!sent) this.log.info(`booking confirm not sent after match: ${reason || 'not sent'} ${short(picked.match.psid)}`);
+          results.push(result);
+          continue;
+        }
+        reason = picked.reason || reason;
+      }
+      const fresh = bookingConfirm.firstSkip(this.store, `sub:${notice.submissionId}`, reason, now);
+      if (fresh) {
+        await this.flagBookingStaff('', null, {
+          name: notice.name, wait: notice.wait, date: notice.date, reason,
+          mobileLast4: bookingConfirm.mobileLast4(notice.mobile),
+        });
+      }
+      this.log.warn(`booking webhook not sent: ${reason}`);
+      results.push({ sent, reason });
+    }
+    if (bag.notices.length || bag.idents.length) this.armPairTimer();
+    return results;
   }
 
   noteStaffFormLink(psid, source) {
