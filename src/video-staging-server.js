@@ -28,7 +28,7 @@ const INDEX = `<!doctype html>
 <body><h1>JMAGS Video AI — Safe Test</h1><p>This staging page runs a synthetic video through FFmpeg and a simulated AI reply. No customers, Meta credentials, or production messages are involved.</p>
 <p><strong>No account or password required.</strong> This demo analyzes a generated test pattern only. It cannot access Messenger videos or contact customers.</p>
 <button id="run">Run free demo test</button><pre id="result">Ready — click the button to run a safe sample test.</pre>
-<script>document.getElementById('run').onclick=async()=>{const result=document.getElementById('result');result.textContent='Testing synthetic video…';try{const r=await fetch('/api/demo',{method:'POST'});const body=await r.json();result.textContent=(r.ok?'TEST PASSED\n':'TEST ERROR\n')+JSON.stringify(body,null,2)}catch(e){result.textContent='Connection error: '+e.message}}</script></body></html>`;
+<script>document.getElementById('run').onclick=async()=>{const result=document.getElementById('result');result.textContent='Testing synthetic video…';try{const r=await fetch('/api/demo',{method:'POST'});const body=await r.json();result.textContent=(r.ok?'TEST PASSED: ':'TEST ERROR: ')+JSON.stringify(body,null,2)}catch(e){result.textContent='Connection error: '+e.message}}</script></body></html>`;
 
 function createStagingServer({ token = process.env.VIDEO_STAGING_ADMIN_TOKEN || '',
   selfTest = runSyntheticVideoSelfTest, clock = () => Date.now(), cooldownMs = 10000 } = {}) {
