@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1712">
+  <meta name="description" content="Private JMAGS verified TV-repair video knowledge depot.">
+  <title>JMAGS · AI Video Training Depot</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="logo">J</div>
+    <div class="brandname"><b>JMAGS</b><span>AI REPAIR KNOWLEDGE</span></div>
+    <span class="environment">PRIVATE DEPOT</span>
+    <button id="logout" class="text-button hidden">Sign out</button>
+  </header>
+
+  <main>
+    <section id="login" class="login-panel">
+      <span class="eyebrow">YOUR TRAINING WORKSPACE</span>
+      <h1>Teach your AI with real repair cases.</h1>
+      <p class="muted">Sign in with your authorized JMAGS Operations / Supabase account. Customer video links and labels are private.</p>
+      <form id="login-form" class="login-card">
+        <label for="email">Account email</label>
+        <input id="email" type="email" autocomplete="username" required placeholder="your JMAGS account">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+        <button class="button primary" type="submit">Sign in to training depot</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+      <div class="notice"><b>Protected records.</b> Only approved JMAGS users can access source links or change training labels. No AI messages are sent from this page.</div>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="heading">
+        <div>
+          <span class="eyebrow">VIDEO TRAINING / REPAIR INTELLIGENCE</span>
+          <h1>Your AI training depot</h1>
+          <p class="muted">Label actual TV faults. Verified cases become permanent reference examples for JMAGS's future AI assistant.</p>
+        </div>
+        <div class="heading-actions">
+          <button class="button secondary" id="refresh" type="button">↻ Refresh videos</button>
+        </div>
+      </div>
+      <section class="stats" aria-label="Training video counts">
+        <div class="stat"><span>Total videos</span><strong id="count-all">—</strong><small>Messenger references</small></div>
+        <div class="stat"><span>To label</span><strong id="count-unlabeled">—</strong><small>Needs your teaching</small></div>
+        <div class="stat"><span>Draft labels</span><strong id="count-draft">—</strong><small>Work in progress</small></div>
+        <div class="stat"><span>Verified knowledge</span><strong id="count-verified">—</strong><small>Technician-confirmed</small></div>
+      </section>
+      <div class="notice notice-privacy">
+        <b>Media preservation status: references only.</b> The original Messenger URLs may expire. No customer videos have been downloaded into permanent storage by this depot. Archive originals only with appropriate customer permission and a retention policy.
+      </div>
+      <div class="workspace">
+        <section class="queue">
+          <div class="panel-header"><h2>Incoming video queue</h2><span id="queue-count">—</span></div>
+          <div class="toolbar">
+            <select id="filter" aria-label="Filter labels">
+              <option value="unlabeled">Awaiting labels</option>
+              <option value="draft">Draft labels</option>
+              <option value="verified">Verified cases</option>
+              <option value="all">All videos</option>
+            </select>
+            <input id="search" type="search" placeholder="Search brand, model or fault">
+          </div>
+          <p class="muted small" id="queue-note">Only private source references are displayed. Choose a video to label.</p>
+          <div id="queue-list" class="video-list" aria-live="polite"></div>
+          <div class="pager">
+            <button class="button secondary" id="previous" type="button">← Previous</button>
+            <span id="page-label">Page 1</span>
+            <button class="button secondary" id="next" type="button">Next →</button>
+          </div>
+        </section>
+
+        <section class="editor" id="editor">
+          <div id="empty-case" class="empty">
+            <div class="empty-icon">▣</div>
+            <h2>Select a video to teach the AI</h2>
+            <p>Record the actual diagnosis and whether the television could be repaired. Your verified labels are saved in Supabase, not just in this chat.</p>
+          </div>
+          <form id="case-form" class="hidden">
+            <div class="panel-header">
+              <div><span class="eyebrow">REPAIR CASE</span><h2 id="case-title">Video case</h2></div>
+              <button type="button" class="close" id="close-case" aria-label="Close case">×</button>
+            </div>
+            <p class="small muted" id="case-date"></p>
+            <div class="case-source">
+              <span>Original Messenger video reference</span>
+              <div class="source-actions">
+                <a href="#" id="open-video" target="_blank" rel="noopener noreferrer">Open original video ↗</a>
+                <span id="source-warning" class="small">Link may expire</span>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>TV brand
+                <input id="brand" maxlength="100" placeholder="e.g. TCL, Samsung, LG">
+              </label>
+              <label>Model number
+                <input id="model" maxlength="100" placeholder="Full model from rear label">
+              </label>
+              <label>Screen size (inches)
+                <input id="screen_size_inches" type="number" min="1" max="120" placeholder="e.g. 55">
+              </label>
+              <label>Repairability
+                <select id="repairable">
+                  <option value="">Not assessed</option>
+                  <option value="true">Yes — repairable</option>
+                  <option value="false">No — not repairable</option>
+                </select>
+              </label>
+            </div>
+            <label>Symptoms visible in the video
+              <textarea id="visible_symptoms" rows="3" maxlength="5000" placeholder="What do you actually see? Lines, no power, flicker, logo, sound?"></textarea>
+            </label>
+            <label>Initial suspected cause (unconfirmed)
+              <textarea id="suspected_fault" rows="2" maxlength="5000" placeholder="What we thought before testing"></textarea>
+            </label>
+            <label>Confirmed defective component / real cause
+              <textarea id="confirmed_fault" rows="3" maxlength="5000" placeholder="Only enter what you verified on the bench"></textarea>
+            </label>
+            <label>Repair performed / tests and measurements
+              <textarea id="repair_action" rows="3" maxlength="5000" placeholder="How did the technician confirm or repair it?"></textarea>
+            </label>
+            <label>Final outcome
+              <select id="repair_outcome">
+                <option value="unassessed">Not yet assessed</option>
+                <option value="repaired">Successfully repaired</option>
+                <option value="not_repaired">Attempted but not fixed</option>
+                <option value="not_repairable">Not economically / technically repairable</option>
+                <option value="needs_parts">Awaiting parts</option>
+                <option value="customer_declined">Customer declined</option>
+              </select>
+            </label>
+            <label>Trainer notes / visual clues for future AI comparisons
+              <textarea id="reviewer_notes" rows="3" maxlength="5000" placeholder="Teach the AI how to distinguish this fault from similar-looking problems."></textarea>
+            </label>
+            <label>Customer permission for future AI processing / video archiving
+              <select id="consent_status">
+                <option value="not_recorded">Not recorded (default)</option>
+                <option value="customer_consented">Customer consent verified and recorded</option>
+                <option value="withdrawn">Permission withdrawn</option>
+              </select>
+            </label>
+            <div class="actions">
+              <button type="button" class="button secondary" id="save-draft">Save as draft</button>
+              <button type="button" class="button primary" id="save-verified">Mark verified & save knowledge</button>
+            </div>
+            <div id="save-message" role="status" class="small"></div>
+            <div class="history-section">
+              <h3>Teaching history</h3>
+              <div id="history" class="small muted">Changes you save will appear here.</div>
+            </div>
+          </form>
+        </section>
+      </div>
+      <footer><b>JMAGS AI Memory</b> · Verified repairs are stored in Supabase. AI retrieval and automatic customer diagnosis remain disabled until separately tested and approved.</footer>
+    </section>
+  </main>
+</div>
+</body></html>
