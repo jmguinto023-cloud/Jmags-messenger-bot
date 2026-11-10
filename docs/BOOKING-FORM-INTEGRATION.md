@@ -45,12 +45,14 @@ promise to message whoever typed a PSID into the form.
 
 Staff can also paste the plain link `https://jmagscutomerform.netlify.app` in the
 Page inbox. The bot records that chat when the echo contains that host. On submit,
-with no signed token, a mobile the customer typed in exactly one open link from
-the last `BOOKING_STAFF_LINK_DAYS` (default 7) is confirmed even when the form
-name and the Facebook name differ. If several open links have that mobile, the
-name picks one chat; if it cannot, staff get a flag. With no mobile in the chat,
-one open link is confirmed only when the names do not clash. Initials such as
-`JM AG` are not a clash. A used link is not reused.
+with no signed token, a chat is eligible only when the customer messaged within
+Meta's reply window and the unused link is newer than
+`BOOKING_STAFF_LINK_MAX_AGE_HOURS` (default 24). A mobile the customer typed in
+exactly one of those chats is confirmed even when the names differ. If several
+eligible chats have that mobile, the name picks one; if it cannot, staff get
+`Booking needs staff: no recent in-window chat matched`. With no mobile, a chat
+is confirmed only when the names positively match (shared words or initials such
+as `JM AG`). A blank or short name is not enough. A used link is not reused.
 `BOOKING_PHONE_MATCH` still does not match a phone that was never sent the link.
 `BOOKING_STAFF_LINK_MATCH` empty stays on.
 

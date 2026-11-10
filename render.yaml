@@ -82,7 +82,10 @@ services:
       # Match a submit to a chat that was sent the plain form link. Empty stays on.
       - key: BOOKING_STAFF_LINK_MATCH
         sync: false
-      # How many days an unused staff form link can still match. Empty keeps 7.
+      # Unused form links older than this many hours are not candidates. Empty keeps 24.
+      - key: BOOKING_STAFF_LINK_MAX_AGE_HOURS
+        sync: false
+      # How far back a too-old link is still explained in the match log. Empty keeps 7.
       - key: BOOKING_STAFF_LINK_DAYS
         sync: false
       - key: BOOKING_BOT_KEY

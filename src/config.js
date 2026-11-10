@@ -91,6 +91,9 @@ function loadConfig(env = process.env) {
     bookingPhoneMatch: bool(env.BOOKING_PHONE_MATCH, false),
     // Match a form to a chat only after staff or the bot sent that chat the form link.
     bookingStaffLinkMatch: bool(env.BOOKING_STAFF_LINK_MATCH, true),
+    // Unused links older than this are not candidates. Empty keeps 24 hours.
+    bookingStaffLinkMaxAgeHours: num(env.BOOKING_STAFF_LINK_MAX_AGE_HOURS, 24),
+    // How far back a too-old link is still explained in the match log. Empty keeps 7 days.
     bookingStaffLinkDays: num(env.BOOKING_STAFF_LINK_DAYS, 7),
     // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
     bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),

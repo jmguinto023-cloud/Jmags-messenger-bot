@@ -600,7 +600,12 @@ test('a unique mobile overrides a name clash, and two mobiles use the name as a 
   const only = [{ ...live[0], phones: ['09170000000'] }];
   const anyPhone = bc.pickStaffLink(only, { name: 'Jhon Michael Angelo Guinto', mobile: '09998887777' });
   assert.equal(anyPhone.match.psid, '5550009161');
-  assert.equal(anyPhone.decisions[0].why, 'accepted: only open staff link, name does not clash');
+  assert.equal(anyPhone.decisions[0].why, 'accepted: only open staff link, name matches');
+  const shortName = [{ ...live[0], phones: [], names: ['JM'], label: 'JM' }];
+  const unknown = bc.pickStaffLink(shortName, { name: 'Jhon Michael Angelo Guinto', mobile: '' });
+  assert.equal(unknown.match, null);
+  assert.equal(unknown.reason, bc.STAFF_LINK_NO_MATCH);
+  assert.equal(unknown.decisions[0].why, 'rejected: name does not match');
 
   const marvin = [{
     psid: '5550006278', pageKey: 'sanpablo', entryIds: ['m'],
@@ -720,11 +725,55 @@ test('a staff form-link echo confirms only that chat, then the chatbot stays sil
   } finally { await s.close(); }
 });
 
+test('an old inbound is rejected before matching, even when the form link was sent today', async () => {
+  const s = await setup();
+  const notes = [];
+  s.app.bot.log.info = (...a) => notes.push(a.map(String).join(' '));
+  try {
+    const psid = '5550004762';
+    const old = Date.now() - 7 * 86400e3;
+    s.app.bot.store.addTurn(psid, 'user', '09174762000', old);
+    s.app.bot.store.thread(psid).lastUserTs = old;
+    s.app.bot.store.thread(psid).profileName = 'Mark Ivan';
+    await s.webhook(echo(psid, 'https://jmagscutomerform.netlify.app'));
+    const raw = submission({
+      name: 'Mark Ivan', mobile: '09174762000', willingToWait: 'yes', pdate: '11/12/26',
+    }, 'sub-old-window');
+    const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
+    assert.equal(out.body.sent, false);
+    assert.equal(out.body.reason, bc.STAFF_LINK_NO_MATCH);
+    assert.equal(sentTexts(s.mock).length, 0);
+    assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
+    assert.ok(notes.some((line) => line.includes('rejected: outside 24h window') && line.includes('4762') && !line.includes(psid)));
+    assert.equal(notes.some((line) => line.includes('09174762000')), false);
+
+    const fresh = await setup();
+    const freshNotes = [];
+    fresh.app.bot.log.info = (...a) => freshNotes.push(a.map(String).join(' '));
+    try {
+      const recent = '5550004763';
+      fresh.app.bot.store.addTurn(recent, 'user', 'Ako si Mark Ivan', Date.now());
+      fresh.app.bot.store.thread(recent).profileName = 'Mark Ivan';
+      await fresh.webhook(echo(recent, 'https://jmagscutomerform.netlify.app'));
+      fresh.app.store.data.formLinkSends[0].sentAt = Date.now() - 25 * 3600e3;
+      const stale = submission({
+        name: 'Mark Ivan', willingToWait: 'yes', pdate: '11/12/26',
+      }, 'sub-stale-link');
+      const aged = await postHook(fresh, stale, { 'X-Webhook-Signature': jws(stale) });
+      assert.equal(aged.body.sent, false);
+      assert.equal(aged.body.reason, bc.STAFF_LINK_NO_MATCH);
+      assert.equal(sentTexts(fresh.mock).length, 0);
+      assert.ok(freshNotes.some((line) => line.includes('rejected: form link older than 24h') && line.includes('4763') && !line.includes(recent)));
+    } finally { await fresh.close(); }
+  } finally { await s.close(); }
+});
+
 test('Marvin is not confirmed when that chat never typed the mobile, and two mobiles stay flagged', async () => {
   const s = await setup();
   try {
     const psid = '5550006278';
     s.app.bot.store.addTurn(psid, 'assistant', 'number ninyo po 09170006278', Date.now());
+    s.app.bot.store.thread(psid).lastUserTs = Date.now();
     s.app.bot.store.thread(psid).profileName = 'John Michael Angelo Guinto';
     await s.webhook(echo(psid, 'https://jmagscutomerform.netlify.app'));
     const raw = submission({
@@ -732,8 +781,7 @@ test('Marvin is not confirmed when that chat never typed the mobile, and two mob
     }, 'sub-marvin-staff-phone');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.match(out.body.reason, /Booking needs staff/);
-    assert.match(out.body.reason, /6278/);
+    assert.equal(out.body.reason, bc.STAFF_LINK_NO_MATCH);
     assert.equal(sentTexts(s.mock).length, 0);
     assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
 
@@ -752,8 +800,7 @@ test('Marvin is not confirmed when that chat never typed the mobile, and two mob
       }, 'sub-marvin-two');
       const flagged = await postHook(both, rawBoth, { 'X-Webhook-Signature': jws(rawBoth) });
       assert.equal(flagged.body.sent, false);
-      assert.match(flagged.body.reason, /6278/);
-      assert.match(flagged.body.reason, /1002/);
+      assert.equal(flagged.body.reason, bc.STAFF_LINK_NO_MATCH);
       assert.equal(sentTexts(both.mock).length, 0);
 
       const named = await setup();
@@ -794,9 +841,7 @@ test('two staff-link chats with the same mobile are not messaged, and a chat tha
     }, 'sub-two');
     const out = await postHook(s, raw, { 'X-Webhook-Signature': jws(raw) });
     assert.equal(out.body.sent, false);
-    assert.match(out.body.reason, /Booking needs staff/);
-    assert.match(out.body.reason, /1001/);
-    assert.match(out.body.reason, /1002/);
+    assert.equal(out.body.reason, bc.STAFF_LINK_NO_MATCH);
     assert.equal(out.body.reason.includes(a), false);
     assert.equal(sentTexts(s.mock).length, 0);
     assert.equal(s.app.store.data.formLinkSends.every((row) => !row.consumedAt), true);
