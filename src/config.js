@@ -100,6 +100,8 @@ function loadConfig(env = process.env) {
     bookingAutoPersonalLink: bool(env.BOOKING_AUTO_PERSONAL_LINK, true),
     // Saved-reply text that counts as sending the form, even with no URL. | separated.
     bookingLinkTriggerPhrases: phraseList(env.BOOKING_LINK_TRIGGER_PHRASES, ['eto po ang schedule form niyo']),
+    // Host for /b/<code> links. Render sets RENDER_EXTERNAL_URL. PUBLIC_BASE_URL wins when both are set.
+    publicBaseUrl: String(env.PUBLIC_BASE_URL || env.RENDER_EXTERNAL_URL || 'https://jmags-messenger-bot.onrender.com').trim().replace(/\/$/, ''),
     // Optional short key added as &b= so the form knows which Page's bot to call (e.g. sp, cavite).
     bookingBotKey: String(env.BOOKING_BOT_KEY || '').trim(),
     // Sites allowed to call POST /booking/submitted. Empty = the BOOKING_FORM_URL origin only.

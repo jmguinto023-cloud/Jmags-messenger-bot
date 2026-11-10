@@ -234,6 +234,39 @@ class Store {
   deletionStatus(code) {
     return (this.data.deletionCodes || {})[String(code || '')] || null;
   }
+  pruneShortLinks(now = Date.now(), maxAgeMs = 7 * 86400e3) {
+    const all = this.data.shortLinks ||= {};
+    for (const [code, row] of Object.entries(all)) {
+      if (!row || !row.createdAt || now - row.createdAt > maxAgeMs) delete all[code];
+    }
+  }
+  saveShortLink(row, now = Date.now(), maxAgeMs = 7 * 86400e3) {
+    this.data.shortLinks ||= {};
+    this.pruneShortLinks(now, maxAgeMs);
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let code = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const bytes = crypto.randomBytes(8);
+      code = '';
+      for (let i = 0; i < 8; i++) code += alphabet[bytes[i] % alphabet.length];
+      if (!this.data.shortLinks[code]) break;
+    }
+    this.data.shortLinks[code] = {
+      psid: String(row.psid || ''),
+      page: String(row.page || ''),
+      token: String(row.token || ''),
+      ref: String(row.ref || ''),
+      createdAt: now,
+    };
+    this.flushNow();
+    return code;
+  }
+  readShortLink(code, now = Date.now(), maxAgeMs = 7 * 86400e3) {
+    this.pruneShortLinks(now, maxAgeMs);
+    const row = (this.data.shortLinks || {})[String(code || '')];
+    if (!row || !row.createdAt || now - row.createdAt > maxAgeMs) return null;
+    return row;
+  }
   flushNow() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this.flush();
@@ -266,6 +299,11 @@ class Store {
     }
     if (Array.isArray(this.data.formLinkSends)) {
       this.data.formLinkSends = this.data.formLinkSends.filter((row) => !row || row.psid !== key);
+    }
+    if (this.data.shortLinks) {
+      for (const [code, row] of Object.entries(this.data.shortLinks)) {
+        if (row && row.psid === key) delete this.data.shortLinks[code];
+      }
     }
     if (this.data.ops && Array.isArray(this.data.ops.jobs)) {
       for (const job of this.data.ops.jobs) {

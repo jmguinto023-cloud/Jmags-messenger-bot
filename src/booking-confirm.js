@@ -87,6 +87,32 @@ function readToken(cfg, token) {
   return { psid: m[2], page: m[1] };
 }
 
+const SHORT_LINK_MS = 7 * 86400e3;
+
+function plainFormUrl(cfg) {
+  try {
+    const u = new URL(String((cfg && cfg.bookingFormUrl) || 'https://jmagscutomerform.netlify.app/'));
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return 'https://jmagscutomerform.netlify.app/';
+  }
+}
+
+function expandShortLink(cfg, row) {
+  if (!row || !row.psid || !row.page) return plainFormUrl(cfg);
+  const base = String((cfg && cfg.bookingFormUrl) || '').trim();
+  if (!base) return plainFormUrl(cfg);
+  let u;
+  try { u = new URL(base); } catch { return plainFormUrl(cfg); }
+  u.searchParams.set('psid', String(row.psid));
+  u.searchParams.set('page', String(row.page));
+  if (row.token) u.searchParams.set('token', String(row.token));
+  if (row.ref) u.searchParams.set('ref', String(row.ref));
+  return u.toString();
+}
+
 function bookingFormLink(cfg, psid, page, extra = {}) {
   const base = String((cfg && cfg.bookingFormUrl) || '').trim();
   const key = normalizePageKey(page);
@@ -704,10 +730,11 @@ function firstSkip(store, id, reason, now) {
 
 module.exports = {
   makeRef, readRef, makeToken, readToken, bookingFormLink, personalizeFormUrls,
+  plainFormUrl, expandShortLink, SHORT_LINK_MS,
   normalizePageKey, pageRecord, normalizeWait, bookingKind, confirmText, agreeAckText,
   isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
-  parseNetlifySubmission, identityFrom, normalizeMobile, mobileLast4, matchMobile,
+  parseNetlifySubmission, submissionDate, identityFrom, normalizeMobile, mobileLast4, matchMobile,
   textHasFormLink, textHasLinkTrigger, textIsStaffFormSignal, normalizeTriggerText,
   personalFormLinkText, isPersonalFormLinkText, namesRoughlyMatch, phonesInText, pickStaffLink, staffNeedReason,
   matchJobMobile, outsideWindowError, deliveryKeys, deliveryHold, markPending,
