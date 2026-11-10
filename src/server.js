@@ -77,8 +77,10 @@ function createServer({ cfg, bot, log }) {
     if (shortCode) {
       const row = bot.store.readShortLink(shortCode[1], bot.now(), bookingConfirm.SHORT_LINK_MS);
       const target = row ? bookingConfirm.expandShortLink(cfg, row) : bookingConfirm.plainFormUrl(cfg);
-      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
-      return res.end();
+      // An HTML navigation keeps the signed query string in Messenger's in-app browser.
+      // A 302 Location to another site was arriving at the form with no psid, token, or ref.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(bookingConfirm.shortLinkHtml(target));
     }
 
     if (req.method === 'GET' && url.pathname === '/') {
@@ -251,12 +253,18 @@ function createServer({ cfg, bot, log }) {
         if (!wait) return reply(400, { ok: false, error: 'wait must be yes or no' });
         const name = bookingConfirm.cleanName(body.name);
         const psid = bookingConfirm.readRef(cfg, body.ref);
-        if (!psid) return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl: '' });
+        if (!psid) {
+          log.info(`booking browser confirm ref=${body.ref ? 'rejected' : 'absent'}`);
+          return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl: '' });
+        }
         try {
           const date = bookingConfirm.submissionDate(body, body);
           // The live form's browser call sends ref, name, and wait, but not pdate.
-          // Sending now would block the Netlify notification, which does have the date.
+          // Remember the chat so the Netlify notification, which has the date, can still
+          // find it when the hidden token fields did not survive the short-link hop.
           if (!date) {
+            bot.notePendingFormConfirm(psid, name, wait);
+            log.info(`booking browser confirm ${String(psid).slice(-4)} ref=ok date=absent`);
             return reply(200, { ok: true, sent: false, reason: 'date arrives with the form notification', messengerUrl: '' });
           }
           const r = await bot.sendBookingConfirm(psid, {

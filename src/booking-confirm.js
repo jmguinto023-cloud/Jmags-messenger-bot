@@ -100,6 +100,19 @@ function plainFormUrl(cfg) {
   }
 }
 
+function shortLinkHtml(target) {
+  const href = JSON.stringify(String(target || plainFormUrl()));
+  const safe = String(target || plainFormUrl()).replace(/[&<>"]/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+  }[ch]));
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Booking form</title><script>location.replace(${href});</script></head><body><p><a href="${safe}">Continue to the booking form</a></p></body></html>`;
+}
+
+function identityFieldSummary(sub) {
+  const row = sub || {};
+  return `token=${row.token ? 'present' : 'absent'} ref=${row.ref ? 'present' : 'absent'} psid=${row.psid ? 'present' : 'absent'}`;
+}
+
 function expandShortLink(cfg, row) {
   if (!row || !row.psid || !row.page) return plainFormUrl(cfg);
   const base = String((cfg && cfg.bookingFormUrl) || '').trim();
@@ -735,7 +748,7 @@ function firstSkip(store, id, reason, now) {
 
 module.exports = {
   makeRef, readRef, makeToken, readToken, bookingFormLink, personalizeFormUrls,
-  plainFormUrl, expandShortLink, SHORT_LINK_MS,
+  plainFormUrl, expandShortLink, shortLinkHtml, identityFieldSummary, SHORT_LINK_MS,
   normalizePageKey, pageRecord, normalizeWait, bookingKind, confirmText, agreeAckText,
   isAgree, referralRef, parseReferralRef, messengerConfirmUrl, referralFromEvent,
   originAllowed, cleanName, prettyBookingDate, authorizeNetlify, verifyNetlifyJws,
