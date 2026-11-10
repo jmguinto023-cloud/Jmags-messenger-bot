@@ -68,6 +68,7 @@ function createServer({ cfg, bot, log }) {
         activeNow: activeNow(cfg, now),
         llmErrors: bot.llm ? bot.llm.errors : 0,
         llmLastError: bot.llm ? bot.llm.lastError : '',
+        bookingWebhook: cfg.netlifyWebhookSecret ? 'configured' : 'missing',
       });
     }
 
@@ -125,16 +126,51 @@ function createServer({ cfg, bot, log }) {
     if (req.method === 'GET' && url.pathname === '/admin/booking-confirms') {
       if (!dashOk(cfg, req)) return send(401, 'Unauthorized');
       const rows = Object.entries(bot.store.data.threads || {})
-        .filter(([, t]) => t && t.bookingConfirmSentAt)
+        .filter(([, t]) => t && (t.bookingConfirmSentAt || t.bookingNeedsStaff || t.bookingConfirmed))
         .map(([id, t]) => ({
-          psidLast4: String(id).slice(-4), name: t.bookingName || '', wait: t.bookingWait || '',
-          priority: Boolean(t.bookingPriority), bookingId: t.bookingId || '', source: t.bookingSource || '',
-          sentAt: new Date(t.bookingConfirmSentAt).toISOString(),
+          psidLast4: String(t.psid || id).slice(-4),
+          name: t.bookingName || '',
+          wait: t.bookingWait || '',
+          date: t.bookingDate || '',
+          priority: Boolean(t.bookingPriority),
+          bookingId: t.bookingId || '',
+          submissionId: t.bookingSubmissionId || '',
+          source: t.bookingSource || '',
+          page: t.bookingPage || '',
+          sentAt: t.bookingConfirmSentAt ? new Date(t.bookingConfirmSentAt).toISOString() : '',
           confirmed: Boolean(t.bookingConfirmed),
           confirmedAt: t.bookingConfirmedAt ? new Date(t.bookingConfirmedAt).toISOString() : '',
-        }))
-        .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+          needsStaff: Boolean(t.bookingNeedsStaff),
+          reason: t.bookingNeedsStaffReason || '',
+        }));
+      const alerts = (bot.store.data.bookingAlerts || []).map((a) => ({
+        psidLast4: '',
+        name: a.name || '',
+        wait: '',
+        date: '',
+        priority: false,
+        bookingId: '',
+        submissionId: '',
+        source: 'unmatched',
+        page: a.page || '',
+        sentAt: '',
+        confirmed: false,
+        confirmedAt: '',
+        needsStaff: true,
+        reason: a.reason || '',
+        at: a.at ? new Date(a.at).toISOString() : '',
+      }));
+      rows.push(...alerts);
+      rows.sort((a, b) => String(b.sentAt || b.at || '').localeCompare(String(a.sentAt || a.at || '')));
       return sendJson(200, rows);
+    }
+    if (req.method === 'GET' && url.pathname === '/admin/booking-link') {
+      if (!dashOk(cfg, req)) return send(401, 'Unauthorized');
+      const psid = String(url.searchParams.get('psid') || '').trim();
+      const page = bookingConfirm.normalizePageKey(url.searchParams.get('page') || 'sanpablo');
+      const link = bookingConfirm.bookingFormLink(cfg, psid, page);
+      if (!link) return sendJson(400, { ok: false, error: 'psid and page=sanpablo|cavite are required' });
+      return sendJson(200, { ok: true, page, url: link });
     }
     if (req.method === 'GET' && url.pathname === '/admin/paused') {
       if (!authorized(cfg, req)) return send(403, 'Forbidden');
@@ -162,7 +198,25 @@ function createServer({ cfg, bot, log }) {
       return sendJson(200, { enabled, publicKey: enabled ? cfg.vapidPublicKey : '' });
     }
 
-    // Booking form → Messenger confirmation. Called by the customer form after submit.
+    // Netlify form notification. One Messenger confirmation per submission.
+    if (url.pathname === '/booking/netlify') {
+      if (req.method !== 'POST') return send(405, 'POST only');
+      const chunks = [];
+      let size = 0;
+      req.on('data', (c) => { size += c.length; if (size > 2e5) req.destroy(); else chunks.push(c); });
+      req.on('end', async () => {
+        try {
+          const result = await bot.ingestNetlifyBooking(Buffer.concat(chunks), req.headers, url.searchParams.get('key') || '');
+          return sendJson(result.status, result.body);
+        } catch (e) {
+          log.warn('booking webhook failed', e.message);
+          return sendJson(502, { ok: false, sent: false, reason: 'send failed' });
+        }
+      });
+      return;
+    }
+
+    // Legacy browser call from the live form (only when Supabase returns a booking id).
     if (url.pathname === '/booking/submitted') {
       const origin = req.headers.origin || '';
       const cors = bookingConfirm.originAllowed(cfg, origin)
@@ -191,7 +245,13 @@ function createServer({ cfg, bot, log }) {
         const psid = bookingConfirm.readRef(cfg, body.ref);
         if (!psid) return reply(200, { ok: true, sent: false, reason: body.ref ? 'invalid ref' : 'no ref', messengerUrl });
         try {
-          const r = await bot.sendBookingConfirm(psid, { name, wait, bookingId: String(body.bookingId || '').slice(0, 40), source: 'form' });
+          const r = await bot.sendBookingConfirm(psid, {
+            name,
+            wait,
+            date: body.pdate || body.date || '',
+            bookingId: String(body.bookingId || '').slice(0, 40),
+            source: 'form',
+          });
           return reply(200, { ok: true, sent: r.sent, reason: r.reason || '', messengerUrl: r.sent ? '' : messengerUrl });
         } catch (e) {
           log.warn('booking submitted handler failed', e.message);

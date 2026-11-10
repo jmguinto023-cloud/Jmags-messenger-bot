@@ -136,7 +136,7 @@ function formUrlFor(base, thread, psid) {
   if (!psid || !link) return link;
   const url = new URL(link);
   url.searchParams.set('psid', psid);
-  // ref is the signed thread id added when the message is sent. A raw PSID here would not verify.
+  // send() adds page and the signed token. A raw PSID on its own is not accepted.
   return url.toString();
 }
 
