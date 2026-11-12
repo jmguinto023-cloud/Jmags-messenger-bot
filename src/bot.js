@@ -34,6 +34,7 @@ const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./
 const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
+const inquiryReminder = require('./inquiry-reminder');
 const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng Jmags Appliances ang inquire nyo about sa TV nila. Maari po ba namin mahingi agad ang mga sumusunod upang mareplayan po agad kayo. 🙂
 
 ➡️ SIZE NG TV:
@@ -348,6 +349,16 @@ class Bot {
     t.followupFails = 0;
     t.followupNextAt = 0;
     if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, ev.message.mid, ts));
+    if (this.cfg.mainFirstInquiryEnabled && currentPage()?.primary && t.firstInquirySentAt
+        && !t.firstInquiryReminderAttempt && ev.message?.mid && !t.firstInquiryComplete) {
+      t.firstInquiryComplete = inquiryReminder.recordEvidence(t, t.history);
+      // The newest incoming event owns the debounce, including media and staff-only threads.
+      t.firstInquiryLatestMid = ev.message.mid;
+      if (!isStandby && !t.firstInquiryComplete && ts > t.firstInquirySentAt
+          && !ev.message.attachments?.length && inquiryReminder.plainFollowup(spoken)) {
+        this.safe(() => this.remindFirstInquiry(psid, t, ev.message.mid, ts));
+      }
+    }
     if (t.awaitingAgree && !media.length && bookingConfirm.isAgree(spoken)) {
       await this.onBookingAgree(psid, t, ts, isStandby);
       return;
@@ -531,7 +542,9 @@ class Bot {
         t.firstInquiryAttempt = mid;
         this.store.flushNow();
         await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
-        this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, this.now(), { provider: 'main-first-inquiry', history: false });
+        t.firstInquirySentAt = this.now();
+        t.firstInquiryComplete = inquiryReminder.recordEvidence(t, t.history);
+        this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, t.firstInquirySentAt, { provider: 'main-first-inquiry', history: false });
         this.log.info('Main Branch first-inquiry greeting sent');
         return;
       }
@@ -539,6 +552,19 @@ class Bot {
     } catch (err) {
       this.log.warn(`Main Branch first-inquiry greeting could not be verified or sent (HTTP ${err.status || 'unknown'})`);
     }
+  }
+
+  async remindFirstInquiry(psid, t, mid, ts) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    if (t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
+        || t.optedOut || t.standby || t.handedOff || t.bookingStaffOnly || t.bookingDone
+        || t.bookingFormSent || t.gateClosed || this.humanPaused(t)
+        || this.lastHumanAt(t) >= t.firstInquirySentAt || this.now() - ts >= this.cfg.replyWindowHours * HOUR) return;
+    t.firstInquiryReminderAttempt = mid;
+    this.store.flushNow();
+    await this.graph.sendText(psid, inquiryReminder.REMINDER);
+    this.store.addTurn(psid, 'assistant', inquiryReminder.REMINDER, this.now(), { provider: 'main-first-inquiry-reminder', history: false });
+    this.log.info('Main Branch first-inquiry reminder sent');
   }
 
   // '' when this Page's ops switch is on. Unreadable is off (fail closed).
