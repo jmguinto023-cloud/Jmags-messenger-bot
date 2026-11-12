@@ -932,3 +932,43 @@ test('existing customer who sends video does not receive missing-video reminder'
     assert.equal(s.mock.calls.llm.length, 0, 'continuous AI still disabled');
   } finally { await s.close(); }
 });
+
+
+test('old booking form and old handoff do not block a new existing-customer TV reminder', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const old = Date.now() - 2 * 86400e3;
+    s.app.store.addTurn('old-booking-tv', 'user', 'May booking po ako noon', old);
+    const t = s.app.store.thread('old-booking-tv');
+    t.bookingFormSent = true;
+    t.formSentAt = old;
+    t.bookingDone = true;
+    t.bookingDoneAt = old;
+    t.bookingStaffOnly = true;
+    t.bookingConfirmedAt = old;
+    t.handedOff = true;
+    t.handoffAt = old;
+    await s.post(MAIN, 'old-booking-tv', 'Hello po, may sira akong TV.');
+    await s.post(MAIN, 'old-booking-tv', 'May power siya pero walang display.');
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].message.text, require('../src/inquiry-reminder').REMINDER);
+    assert.equal(s.mock.calls.llm.length, 0);
+    await s.post(MAIN, 'old-booking-tv', 'Magkano po?');
+    assert.equal(s.mock.calls.messages.length, 1, 'no duplicate reminder after old flags');
+  } finally { await s.close(); }
+});
+
+test('current booking handoff still blocks existing-customer missing-video reminder', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const old = Date.now() - 5 * 60e3;
+    s.app.store.addTurn('current-booking-tv', 'user', 'Old customer chat', old);
+    const t = s.app.store.thread('current-booking-tv');
+    await s.post(MAIN, 'current-booking-tv', 'Hello po, may sira akong TV.');
+    t.bookingStaffOnly = true;
+    t.bookingConfirmedAt = Date.now();
+    await s.post(MAIN, 'current-booking-tv', 'Magkano po?');
+    assert.equal(s.mock.calls.messages.length, 0, 'active booking remains staff-only');
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
