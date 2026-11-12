@@ -42,9 +42,9 @@ const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng J
 ➡️ ISSUE NG TV:
 ➡️ REPAIRED O HINDI PA: (YES/NO)
 ➡️ KAILAN NASIRA?:
+➡️ TAGASAAN PO SILA?:
 
-At pinaka Importante sa lahat ay makapag send po
-Kayo ng VIDEO ng ACTUAL issue ng TV after mafill up ang form. 
+At pinaka Importante sa lahat ay makapag send po Kayo ng VIDEO ng ACTUAL issue ng TV after mafill up ang form. 
 
 Kailangan po namin lahat ito para mareplayan agad kayo ng mabilis dahil sa dami po ng volume ng Inquiries maraming Salamat po 🙂`;
 const {
