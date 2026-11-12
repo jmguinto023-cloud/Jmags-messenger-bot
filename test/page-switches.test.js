@@ -873,3 +873,29 @@ test('real customer home-service spelling works once when monitor and ref answer
     assert.equal(s.mock.calls.llm.length, 0);
   } finally { await s.close(); }
 });
+
+
+test('a technical second reply after staff clarification gets the missing-video reminder once', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { 'video-lead': { id: 'video-lead-thread' } };
+    s.mock.state.threadMessages = {
+      'video-lead-thread': [{ id: 'sw.1', from: { id: 'video-lead' } }],
+    };
+    await s.post(MAIN, 'video-lead', 'Hello po, nag inquire ako sa ad');
+    assert.equal(s.mock.calls.messages.length, 1, 'first inquiry form sent');
+    const t = s.app.store.thread('video-lead');
+    // Simulate a staff reply: the continuous AI is paused but the one-time
+    // video reminder must still be able to send.
+    t.lastHumanEchoAt = Date.now();
+    t.pausedUntil = Date.now() + 30 * 60 * 1000;
+    await s.post(MAIN, 'video-lead', '55"\\nSHARP\\nBLANCO NO VIDEO\\nNO\\nSEPTEMBER\\nPASIG CITY');
+    assert.equal(s.mock.calls.messages.length, 1, 'do not interrupt the first detail reply');
+    await s.post(MAIN, 'video-lead', 'may power siya walang lumabas sa screen');
+    assert.equal(s.mock.calls.messages.length, 2, 'remind after second reply without video');
+    assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
+    await s.post(MAIN, 'video-lead', 'wala pa rin po');
+    assert.equal(s.mock.calls.messages.length, 2, 'never repeat the reminder');
+    assert.equal(s.mock.calls.llm.length, 0, 'continuous chatbot remains off');
+  } finally { await s.close(); }
+});
