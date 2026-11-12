@@ -136,6 +136,88 @@ test('initial click-to-Messenger ad postback sends intake once, referral-only ta
   } finally { await s.close(); }
 });
 
+test('an old Messenger or Facebook ad customer gets a fresh welcome, but a recent repeat does not', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const old = new Date(Date.now() - 70 * 86400e3).toISOString();
+    const recent = new Date(Date.now() - 2 * 86400e3).toISOString();
+    const row = (id, from, created_time) => ({ id, from: { id: from }, ...(created_time ? { created_time } : {}) });
+    s.mock.state.conversations = {
+      old: { id: 'old-customer-chat' }, ad: { id: 'old-ad-chat' }, recent: { id: 'recent-customer-chat' },
+    };
+    s.mock.state.threadMessages = {
+      'old-customer-chat': [row('sw.1', 'old'), row('old-jan', 'old', old)],
+      'old-ad-chat': [row('page-welcome', MAIN), row('sw.2', 'ad'), row('ad-old', 'ad', old)],
+      'recent-customer-chat': [row('sw.3', 'recent'), row('yesterday', 'recent', recent)],
+    };
+    await s.post(MAIN, 'old', 'Magkano po parepair sa TV?');
+    await s.post(MAIN, 'ad', 'TV po repair?', [], { referral: { source: 'ADS', ad_id: '123' } });
+    await s.post(MAIN, 'recent', 'Follow up po?');
+    await s.post(MAIN, 'old', 'Hello po ulit');
+    await s.post(CAVITE_PAGE_ID, 'different', 'Magkano po?');
+    assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id), ['old', 'ad']);
+    assert.ok(s.mock.calls.messages.every(m => m.message.text.includes('➡️ TAGASAAN PO SILA?:')));
+    assert.equal(s.app.store.thread('old').returnInquiryStartedAt > 0, true);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('returning inquiry starts a fresh once-only reminder without relying on old details or booking', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const sevenWeeksAgo = Date.now() - 49 * 86400e3;
+    const older = new Date(sevenWeeksAgo).toISOString();
+    s.mock.state.conversations = { old: { id: 'returning-with-history' } };
+    s.mock.state.threadMessages = {
+      'returning-with-history': [
+        { id: 'sw.1', from: { id: 'old' } },
+        { id: 'historic', from: { id: 'old' }, created_time: older },
+      ],
+    };
+    const t = s.app.store.thread('old');
+    t.lastUserTs = sevenWeeksAgo;
+    t.firstInquirySentAt = sevenWeeksAgo;
+    t.firstInquiryAttempt = 'historic';
+    t.firstInquiryReminderAttempt = 'past-reminder';
+    t.firstInquiryComplete = true;
+    t.firstInquiryFacts = { video: true, brand: true, size: true, issue: true, repaired: true, when: true };
+    t.history = [{ role: 'user', content: 'Samsung 55 inches, no power, hindi pa repaired, kahapon, sent video and details', ts: sevenWeeksAgo }];
+    t.bookingFormSent = true;
+    t.formSentAt = sevenWeeksAgo;
+    t.bookingDone = true;
+    t.bookingDoneAt = sevenWeeksAgo;
+    t.bookingStaffOnly = true;
+    t.bookingConfirmedAt = sevenWeeksAgo;
+    t.handedOff = true;
+    t.handoffAt = sevenWeeksAgo;
+    await s.post(MAIN, 'old', 'Magkano po parepair sa TV?');
+    assert.equal(s.mock.calls.messages.length, 1, 'returning intake delivered');
+    assert.equal(t.firstInquiryComplete, false, 'historic intake does not complete the new request');
+    assert.equal(t.firstInquiryReminderAttempt, null, 'old reminder marker reset');
+    assert.equal(t.bookingFormSent, true, 'historic booking remains intact');
+    await s.post(MAIN, 'old', 'Hello po?');
+    await s.post(MAIN, 'old', 'Follow up po ulit?');
+    assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id), ['old', 'old']);
+    assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('Graph does not classify returning without a verifiable old message time', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { uncertain: { id: 'uncertain-chat' } };
+    s.mock.state.threadMessages = {
+      'uncertain-chat': [
+        { id: 'sw.1', from: { id: 'uncertain' } },
+        { id: 'old-unverified', from: { id: 'uncertain' } },
+      ],
+    };
+    await s.post(MAIN, 'uncertain', 'Hello');
+    assert.equal(s.mock.calls.messages.length, 0);
+  } finally { await s.close(); }
+});
+
 test('private owner test sends each fixed template once on an old chat without enabling ordinary replies', async () => {
   const s = await setup({
     BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true',
