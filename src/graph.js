@@ -69,14 +69,19 @@ class Graph {
   // A Page can send its own instant reply before a customer's first message.
   // Page-authored welcome messages do NOT make that customer a returning customer.
   // Only an earlier customer-authored message does. Never guess from partial history.
-  async firstInquiryStatus(psid, mid, { adPostback = false } = {}) {
+  async firstInquiryStatus(psid, mid, { adPostback = false, returningAfterMs = 0, currentTs = Date.now() } = {}) {
     const threads = await this.call('GET', `${this.pageNode()}/conversations`, {
       params: { platform: 'messenger', user_id: psid, fields: 'id', limit: '2' },
     });
     if (!threads.data?.length) return 'pending';
     if (threads.data.length !== 1 || threads.paging?.next) return 'existing';
     const convoId = String(threads.data[0].id);
-    const base = { fields: 'id,from', limit: '100' };
+    const base = { fields: 'id,from,created_time', limit: '100' };
+    const priorStatus = (row) => {
+      const prior = Date.parse(String(row.created_time || ''));
+      return returningAfterMs > 0 && Number.isFinite(prior)
+        && currentTs - prior >= returningAfterMs && prior > 0 ? 'returning' : 'existing';
+    };
     let params = base;
     let seenCurrent = false;
     // Meta lists newest to oldest. Continue past Page welcome/away replies
@@ -88,11 +93,13 @@ class Graph {
         // A first ad postback is a customer-initiated interaction that may not
         // be indexed in the Graph message list. With no earlier customer text,
         // the existing Page-generated welcome should not suppress it.
-        if (adPostback) return 'existing';
+        if (adPostback) return priorStatus(row);
         if (String(row.id || '') === String(mid)) {
           seenCurrent = true;
         } else if (seenCurrent) {
-          return 'existing'; // an older customer message exists
+          // Latest earlier customer message determines whether this is a
+          // renewed inquiry, or an ongoing discussion. Missing times fail closed.
+          return priorStatus(row);
         }
       }
       if (!messages.paging?.next) return adPostback || seenCurrent ? 'first' : 'pending';

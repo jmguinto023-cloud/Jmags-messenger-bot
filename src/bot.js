@@ -388,9 +388,16 @@ class Bot {
     // Never send on a referral-only event: a customer must actually interact.
     const adPostback = adInquiry && !!ev.postback && !ev.message;
     const firstInquiryMid = ev.message?.mid || (adPostback ? `ad-postback:${ts}` : '');
+    const returnGap = this.cfg.mainReturnInquiryDays * 86400e3;
+    const lastCustomerTs = Number(t.lastUserTs) || 0;
+    const lastWelcomeTs = Math.max(Number(t.firstInquirySentAt) || 0, Number(t.returnInquiryAttemptAt) || 0);
+    const dormantReturn = lastCustomerTs > 0 && ts - lastCustomerTs >= returnGap
+      && (!lastWelcomeTs || ts - lastWelcomeTs >= returnGap);
     const firstInquiry = this.cfg.mainFirstInquiryEnabled && currentPage()?.primary
-      // The Page may have echoed an automated welcome before any customer text.
-      && firstInquiryMid && !isStandby && !t.lastUserTs && !t.firstInquiryAttempt;
+      // A past customer can receive a fresh intake after a genuine idle period.
+      // A Page-authored automatic welcome is not a customer inquiry.
+      && firstInquiryMid && !isStandby
+      && ((!lastCustomerTs && !t.firstInquiryAttempt) || dormantReturn);
     this.store.addTurn(psid, 'user', logText, ts);
     if (optOutReason(spoken)) {
       t.optedOut = true;
@@ -403,10 +410,11 @@ class Bot {
     t.followupFails = 0;
     t.followupNextAt = 0;
     if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, firstInquiryMid, ts,
-      { adInquiry, adPostback }));
+      { adInquiry, adPostback, previousCustomerTs: lastCustomerTs }));
     if (this.cfg.mainFirstInquiryEnabled && currentPage()?.primary && t.firstInquirySentAt
         && !t.firstInquiryReminderAttempt && ev.message?.mid && !t.firstInquiryComplete) {
-      t.firstInquiryComplete = inquiryReminder.recordEvidence(t, t.history);
+      t.firstInquiryComplete = inquiryReminder.recordEvidence(t,
+        t.returnInquiryStartedAt ? t.history.filter(h => h.ts >= t.returnInquiryStartedAt) : t.history);
       // The newest incoming event owns the debounce, including media and staff-only threads.
       t.firstInquiryLatestMid = ev.message.mid;
       if (!isStandby && !t.firstInquiryComplete && ts > t.firstInquirySentAt
@@ -447,6 +455,7 @@ class Bot {
     t.standby = false;
     if (t.bookingFormSent && isFilledUp(text)) {
       t.bookingDone = true;
+      t.bookingDoneAt = ts;
       this.store.save();
     }
     const now = this.now();
@@ -580,8 +589,16 @@ class Bot {
 
   // Separate from conversational AI. The branch can enable this single fixed reply
   // while the ordinary reply and follow-up switches remain off.
-  async greetFirstInquiry(psid, t, mid, ts, { adInquiry = false, adPostback = false } = {}) {
-    const held = () => t.optedOut || t.standby || t.handedOff || t.bookingStaffOnly
+  async greetFirstInquiry(psid, t, mid, ts, {
+    adInquiry = false, adPostback = false, previousCustomerTs = 0,
+  } = {}) {
+    const returnGap = this.cfg.mainReturnInquiryDays * 86400e3;
+    const oldHandoff = t.handoffAt && ts - Number(t.handoffAt) >= returnGap;
+    const oldBooking = t.bookingConfirmedAt && ts - Number(t.bookingConfirmedAt) >= returnGap;
+    // Expired handoffs/old bookings must not permanently exclude customers.
+    // Still respect an active staff conversation, opt-out, standby and closed gate.
+    const held = () => t.optedOut || t.standby
+      || (t.handedOff && !oldHandoff) || (t.bookingStaffOnly && !oldBooking)
       || t.gateClosed || this.humanPaused(t) || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
     if (held()) return;
     try {
@@ -595,7 +612,9 @@ class Bot {
         if (held()) return;
         let status;
         try {
-          status = await this.graph.firstInquiryStatus(psid, mid, { adPostback });
+          status = await this.graph.firstInquiryStatus(psid, mid, {
+            adPostback, returningAfterMs: returnGap, currentTs: ts,
+          });
         } catch (err) {
           const code = Number(err.status) || 0;
           // Transient Meta/API failures can recover without risking a duplicate
@@ -608,19 +627,32 @@ class Bot {
           continue;
         }
         if (status === 'existing') return;
-        if (status !== 'first') continue;
-        if (held() || t.firstInquiryAttempt) return;
-        // Commit the attempt before sending. A restart or uncertain Send API
-        // outcome must never cause a second greeting.
-        t.firstInquiryAttempt = mid;
+        if (status !== 'first' && status !== 'returning') continue;
+        const returning = status === 'returning';
+        if (held()) return;
+        if (!returning && t.firstInquiryAttempt) return;
+        if (returning && ((t.returnInquiryAttemptAt && ts - t.returnInquiryAttemptAt < returnGap)
+          || (t.firstInquirySentAt && ts - t.firstInquirySentAt < returnGap))) return;
+        // Commit each attempt before sending; uncertain Meta sends are not retried.
+        if (returning) t.returnInquiryAttemptAt = ts;
+        else t.firstInquiryAttempt = mid;
         this.store.flushNow();
         await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
         t.firstInquirySentAt = this.now();
-        t.firstInquiryComplete = inquiryReminder.recordEvidence(t, t.history);
-        this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, t.firstInquirySentAt, { provider: 'main-first-inquiry', history: false });
-        this.log.info(adInquiry
-          ? 'Main Branch ad first-inquiry greeting sent'
-          : 'Main Branch first-inquiry greeting sent');
+        if (returning) {
+          t.returnInquiryStartedAt = ts;
+          t.firstInquiryReminderAttempt = null;
+          t.firstInquiryFacts = {};
+          t.firstInquiryLatestMid = '';
+        }
+        const currentHistory = returning ? t.history.filter(h => h.ts >= ts) : t.history;
+        t.firstInquiryComplete = inquiryReminder.recordEvidence(t, currentHistory);
+        this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, t.firstInquirySentAt, {
+          provider: returning ? 'main-returning-inquiry' : 'main-first-inquiry', history: false,
+        });
+        this.log.info(returning
+          ? (adInquiry ? 'Main Branch returning ad inquiry greeting sent' : 'Main Branch returning inquiry greeting sent')
+          : (adInquiry ? 'Main Branch ad first-inquiry greeting sent' : 'Main Branch first-inquiry greeting sent'));
         return;
       }
       this.log.warn(adInquiry
@@ -633,9 +665,16 @@ class Bot {
 
   async remindFirstInquiry(psid, t, mid, ts) {
     await new Promise(resolve => setTimeout(resolve, 1500));
+    // A booking/form from a past conversation must not permanently suppress
+    // this session's one-time reminder; current bookings still take priority.
+    const start = Number(t.returnInquiryStartedAt) || 0;
+    const formCurrent = t.bookingFormSent && (!start || Number(t.formSentAt) >= start);
+    const bookingCurrent = t.bookingDone && (!start || Number(t.bookingDoneAt) >= start);
+    const bookingStaffCurrent = t.bookingStaffOnly && (!start || Number(t.bookingConfirmedAt) >= start);
+    const handoffCurrent = t.handedOff && (!start || Number(t.handoffAt) >= start);
     if (t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
-        || t.optedOut || t.standby || t.handedOff || t.bookingStaffOnly || t.bookingDone
-        || t.bookingFormSent || t.gateClosed || this.humanPaused(t)
+        || t.optedOut || t.standby || handoffCurrent || bookingStaffCurrent || bookingCurrent
+        || formCurrent || t.gateClosed || this.humanPaused(t)
         || this.lastHumanAt(t) >= t.firstInquirySentAt || this.now() - ts >= this.cfg.replyWindowHours * HOUR) return;
     t.firstInquiryReminderAttempt = mid;
     this.store.flushNow();

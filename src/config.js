@@ -127,6 +127,8 @@ function loadConfig(env = process.env) {
     botTestChatCode: env.BOT_TEST_CHAT_CODE || '', // private simulation code; Render only
     botEnabled: bool(env.BOT_ENABLED, false),
     mainFirstInquiryEnabled: bool(env.MAIN_FIRST_INQUIRY_ENABLED, false),
+    // Re-send the fixed intake only when a previous customer returns after this many idle days.
+    mainReturnInquiryDays: Math.max(1, Math.min(90, num(env.MAIN_RETURN_INQUIRY_DAYS, 7))),
     // Private, owner-only dry-run of the two fixed messages on a returning account.
     // Keep the Page-scoped PSID in Render environment variables, never in GitHub.
     mainWelcomeTestPsid: String(env.MAIN_WELCOME_TEST_PSID || '').trim(),
