@@ -246,9 +246,12 @@ test('Cavite new direct and ad customers receive same fixed intake with Main cha
       ['cavite-new', 'cavite-ad', 'cavite-return']);
     assert.ok(s.mock.calls.messages.every(m => m.message.text.includes('➡️ TAGASAAN PO SILA?:')));
     assert.equal(s.mock.calls.llm.length, 0);
-    const caviteSends = s.mock.calls.pages.filter(p =>
+    const caviteGraph = s.mock.calls.pages.filter(p =>
       p.token === 'CAVITE_TOKEN' && p.kind === 'message');
-    assert.equal(caviteSends.length, 3, 'send through Cavite Page token only');
+    assert.ok(caviteGraph.length >= 3, 'Cavite Page token used for its Graph send and history calls');
+    assert.equal(s.mock.calls.pages.filter(p =>
+      p.token === 'MAIN_TOKEN' && p.kind === 'message').length, 0,
+    'never use the Main Page token for Cavite Graph messages');
   } finally { await s.close(); }
 });
 
