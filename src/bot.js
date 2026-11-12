@@ -334,6 +334,46 @@ class Bot {
       psid, text: spoken, ts, now: this.now(), isStandby,
       hasMedia: Boolean(media.length), forceReason,
     })) return;
+    // Owner-only, explicit, one-time live Messenger test for an existing thread.
+    // It is independent of first-customer detection and of the ordinary bot.
+    // The PSID is kept in Render, never embedded in repository code.
+    const ownerWelcomeTest = this.cfg.mainFirstInquiryEnabled && !this.cfg.botEnabled
+      && this.cfg.mainWelcomeTestPsid && String(psid) === this.cfg.mainWelcomeTestPsid
+      && currentPage()?.primary && !isStandby && ev.message?.mid
+      && !media.length && !forceReason
+      && this.now() - ts < this.cfg.replyWindowHours * HOUR
+      && ts - this.now() < 120000;
+    const ownerCommand = spoken.trim().toUpperCase();
+    if (ownerWelcomeTest && (ownerCommand === 'JMAGS TEST WELCOME' || ownerCommand === 'JMAGS TEST REMINDER')) {
+      const own = this.store.thread(psid);
+      if (own.optedOut) return;
+      const welcome = ownerCommand === 'JMAGS TEST WELCOME';
+      if (welcome && !own.ownerWelcomeTestAttempt) {
+        own.ownerWelcomeTestAttempt = String(ev.message.mid);
+        this.store.flushNow(); // never duplicate a possibly accepted Send API call
+        try {
+          await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
+          own.ownerWelcomeTestSentAt = this.now();
+          this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, own.ownerWelcomeTestSentAt,
+            { provider: 'main-owner-test-welcome', history: false });
+          this.log.info('Main Branch owner welcome test sent');
+        } catch (err) {
+          this.log.warn(`Main Branch owner welcome test send failed (HTTP ${Number(err.status) || 'network'})`);
+        }
+      } else if (!welcome && own.ownerWelcomeTestSentAt && !own.ownerWelcomeTestReminderAttempt) {
+        own.ownerWelcomeTestReminderAttempt = String(ev.message.mid);
+        this.store.flushNow();
+        try {
+          await this.graph.sendText(psid, inquiryReminder.REMINDER);
+          this.store.addTurn(psid, 'assistant', inquiryReminder.REMINDER, this.now(),
+            { provider: 'main-owner-test-reminder', history: false });
+          this.log.info('Main Branch owner reminder test sent');
+        } catch (err) {
+          this.log.warn(`Main Branch owner reminder test send failed (HTTP ${Number(err.status) || 'network'})`);
+        }
+      }
+      return; // no ordinary customer AI, booking, or follow-up is touched
+    }
     const t = this.store.thread(psid);
     const firstInquiry = this.cfg.mainFirstInquiryEnabled && currentPage()?.primary
       // The Page may have echoed an automated welcome before any customer text.

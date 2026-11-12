@@ -78,6 +78,44 @@ test('standalone main greeting runs once for concurrent first messages even with
   } finally { await s.close(); }
 });
 
+test('private owner test sends each fixed template once on an old chat without enabling ordinary replies', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true',
+    MAIN_WELCOME_TEST_PSID: 'owner-test-id',
+  });
+  try {
+    const t = s.app.store.thread('owner-test-id');
+    t.lastUserTs = Date.now() - 86400000;
+    t.history = [{ role: 'user', content: 'Previously inquired', ts: t.lastUserTs }];
+    t.bookingFormSent = true;
+    t.bookingStaffOnly = true;
+    t.handedOff = true;
+    await s.post(MAIN, 'owner-test-id', 'Hello magkano magpagawa?');
+    assert.equal(s.mock.calls.messages.length, 0, 'ordinary returning inquiry stays silent');
+    // A normal returning-customer event may expire an old handoff; establish
+    // a fresh staff handoff specifically to verify test commands do not clear it.
+    t.handedOff = true;
+    t.handoffAt = Date.now();
+    await s.post(MAIN, 'someone-else', 'JMAGS TEST WELCOME');
+    await s.post(CAVITE_PAGE_ID, 'owner-test-id', 'JMAGS TEST WELCOME');
+    assert.equal(s.mock.calls.messages.length, 0, 'test commands never work for other accounts or Cavite');
+    await s.post(MAIN, 'owner-test-id', 'JMAGS TEST REMINDER');
+    assert.equal(s.mock.calls.messages.length, 0, 'reminder requires first test welcome');
+    await s.post(MAIN, 'owner-test-id', 'JMAGS TEST WELCOME');
+    await s.post(MAIN, 'owner-test-id', 'JMAGS TEST WELCOME');
+    await s.post(MAIN, 'owner-test-id', 'JMAGS TEST REMINDER');
+    await s.post(MAIN, 'owner-test-id', 'JMAGS TEST REMINDER');
+    assert.equal(s.mock.calls.messages.length, 2, 'each template sent once');
+    assert.deepEqual(s.mock.calls.messages.map(x => x.recipient.id), ['owner-test-id', 'owner-test-id']);
+    assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(t.bookingFormSent, true);
+    assert.equal(t.bookingStaffOnly, true);
+    assert.equal(t.handedOff, true);
+  } finally { await s.close(); }
+});
+
 test('native Page welcome before first inbound does not suppress the separate JMAGS intake', async () => {
   const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
   try {
