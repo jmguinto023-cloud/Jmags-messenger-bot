@@ -937,7 +937,7 @@ test('existing customer who sends video does not receive missing-video reminder'
 test('old booking form and old handoff do not block a new existing-customer TV reminder', async () => {
   const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
   try {
-    const old = Date.now() - 10 * 86400e3;
+    const old = Date.now() - 2 * 86400e3;
     s.app.store.addTurn('old-booking-tv', 'user', 'May booking po ako noon', old);
     const t = s.app.store.thread('old-booking-tv');
     t.bookingFormSent = true;
