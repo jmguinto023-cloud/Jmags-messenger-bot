@@ -638,7 +638,8 @@ class Bot {
     const oldBooking = t.bookingConfirmedAt && ts - Number(t.bookingConfirmedAt) >= returnGap;
     // Expired handoffs/old bookings must not permanently exclude customers.
     // Still respect an active staff conversation, opt-out, standby and closed gate.
-    const held = () => t.optedOut || t.standby
+    const held = () => Number(t.applianceQuickReplyMutedAt) >= ts
+      || t.optedOut || t.standby
       || (t.handedOff && !oldHandoff) || (t.bookingStaffOnly && !oldBooking)
       || t.gateClosed || this.humanPaused(t) || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
     if (held()) return;
@@ -713,7 +714,8 @@ class Bot {
     const bookingCurrent = t.bookingDone && (!start || Number(t.bookingDoneAt) >= start);
     const bookingStaffCurrent = t.bookingStaffOnly && (!start || Number(t.bookingConfirmedAt) >= start);
     const handoffCurrent = t.handedOff && (!start || Number(t.handoffAt) >= start);
-    if (t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
+    if (Number(t.applianceQuickReplyMutedAt) >= ts
+        || t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
         || t.optedOut || t.standby || handoffCurrent || bookingStaffCurrent || bookingCurrent
         || formCurrent || t.gateClosed || this.humanPaused(t)
         || this.lastHumanAt(t) >= t.firstInquirySentAt || this.now() - ts >= this.cfg.replyWindowHours * HOUR) return;
