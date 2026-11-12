@@ -66,23 +66,45 @@ class Graph {
   typingOn(psid) {
     return this.call('POST', `${this.pageNode()}/messages`, { body: { recipient: { id: psid }, sender_action: 'typing_on' } });
   }
-  // Check unfiltered Messenger history, including attachment-only messages.
-  // A missing conversation or MID can mean the inbox hasn't indexed the webhook yet.
+  // A Page can send its own instant reply before a customer's first message.
+  // Page-authored welcome messages do NOT make that customer a returning customer.
+  // Only an earlier customer-authored message does. Never guess from partial history.
   async firstInquiryStatus(psid, mid) {
     const threads = await this.call('GET', `${this.pageNode()}/conversations`, {
       params: { platform: 'messenger', user_id: psid, fields: 'id', limit: '2' },
     });
     if (!threads.data?.length) return 'pending';
     if (threads.data.length !== 1 || threads.paging?.next) return 'existing';
-    const messages = await this.call('GET', `${encodeURIComponent(threads.data[0].id)}/messages`, {
-      params: { fields: 'id,from', limit: '50' },
-    });
-    const rows = messages.data || [];
-    if (messages.paging?.next) return 'existing';
-    if (!rows.some(row => row.id === mid)) return 'pending';
-    // Meta returns newest first. A burst of new messages can follow the initial one.
-    const oldest = rows.at(-1);
-    return oldest.id === mid && oldest.from?.id === psid ? 'first' : 'existing';
+    const convoId = String(threads.data[0].id);
+    const base = { fields: 'id,from', limit: '100' };
+    let params = base;
+    let seenCurrent = false;
+    // Meta lists newest to oldest. Continue past Page welcome/away replies
+    // to prove the current MID really is the oldest customer message.
+    for (let page = 0; page < 10; page++) {
+      const messages = await this.call('GET', `${encodeURIComponent(convoId)}/messages`, { params });
+      for (const row of messages.data || []) {
+        if (String(row.from?.id || '') !== String(psid)) continue;
+        if (String(row.id || '') === String(mid)) {
+          seenCurrent = true;
+        } else if (seenCurrent) {
+          return 'existing'; // an older customer message exists
+        }
+      }
+      if (!messages.paging?.next) return seenCurrent ? 'first' : 'pending';
+      // Use a fresh authenticated Graph call, never fetch an arbitrary next URL.
+      let next;
+      try { next = new URL(messages.paging.next); } catch { return 'pending'; }
+      const graphOrigin = new URL(this.cfg.graphBase).origin;
+      if (next.origin !== graphOrigin || !decodeURIComponent(next.pathname).endsWith(`/${convoId}/messages`)) {
+        return 'pending';
+      }
+      const after = messages.paging?.cursors?.after || next.searchParams.get('after');
+      const pageNumber = next.searchParams.get('page'); // also used by local Meta mock
+      if (!after && !pageNumber) return 'pending';
+      params = { ...base, ...(after ? { after } : { page: pageNumber }) };
+    }
+    return 'pending'; // history too long to prove this is the first inquiry
   }
   async sendText(psid, text) {
     // Messenger text limit is 2000 characters; split long replies on line breaks.
