@@ -478,7 +478,7 @@ class Bot {
       const startedAt = Number(t.returningTvVideoStartedAt) || 0;
       const attemptedAt = Number(t.returningTvVideoReminderAttemptAt) || 0;
       const eligible = !attemptedAt || ts - attemptedAt >= returnGap;
-      if (tvRepairRequest && eligible && (!startedAt || ts - startedAt >= returnGap)) {
+      if (tvRepairRequest && !videoReceived && eligible && (!startedAt || ts - startedAt >= returnGap)) {
         t.returningTvVideoStartedAt = ts;
         t.returningTvVideoReceived = false;
         t.returningTvVideoLatestMid = '';
@@ -759,8 +759,11 @@ class Bot {
     await new Promise(resolve => setTimeout(resolve, 1500));
     const page = currentPage();
     const startedAt = Number(t.returningTvVideoStartedAt) || 0;
+    const gapMs = (page?.key === 'cavite' ? this.cfg.caviteReturnInquiryDays
+      : this.cfg.mainReturnInquiryDays) * 86400e3;
+    const attemptAt = Number(t.returningTvVideoReminderAttemptAt) || 0;
     const blocked = t.returningTvVideoLatestMid !== mid
-      || t.returningTvVideoReminderAttemptAt || t.returningTvVideoReceived
+      || (attemptAt && this.now() - attemptAt < gapMs) || t.returningTvVideoReceived
       || !startedAt || t.firstInquirySentAt || t.optedOut || t.standby
       || t.handedOff || t.bookingStaffOnly || t.bookingDone || t.gateClosed
       || t.bookingFormSent || Number(t.applianceQuickReplyMutedAt) >= ts
