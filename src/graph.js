@@ -69,7 +69,7 @@ class Graph {
   // A Page can send its own instant reply before a customer's first message.
   // Page-authored welcome messages do NOT make that customer a returning customer.
   // Only an earlier customer-authored message does. Never guess from partial history.
-  async firstInquiryStatus(psid, mid) {
+  async firstInquiryStatus(psid, mid, { adPostback = false } = {}) {
     const threads = await this.call('GET', `${this.pageNode()}/conversations`, {
       params: { platform: 'messenger', user_id: psid, fields: 'id', limit: '2' },
     });
@@ -85,13 +85,17 @@ class Graph {
       const messages = await this.call('GET', `${encodeURIComponent(convoId)}/messages`, { params });
       for (const row of messages.data || []) {
         if (String(row.from?.id || '') !== String(psid)) continue;
+        // A first ad postback is a customer-initiated interaction that may not
+        // be indexed in the Graph message list. With no earlier customer text,
+        // the existing Page-generated welcome should not suppress it.
+        if (adPostback) return 'existing';
         if (String(row.id || '') === String(mid)) {
           seenCurrent = true;
         } else if (seenCurrent) {
           return 'existing'; // an older customer message exists
         }
       }
-      if (!messages.paging?.next) return seenCurrent ? 'first' : 'pending';
+      if (!messages.paging?.next) return adPostback || seenCurrent ? 'first' : 'pending';
       // Use a fresh authenticated Graph call, never fetch an arbitrary next URL.
       let next;
       try { next = new URL(messages.paging.next); } catch { return 'pending'; }
