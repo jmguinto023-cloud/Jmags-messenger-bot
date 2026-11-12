@@ -35,6 +35,7 @@ const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
 const inquiryReminder = require('./inquiry-reminder');
+const applianceOneTime = require('./appliance-one-time');
 const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng Jmags Appliances ang inquire nyo about sa TV nila. Maari po ba namin mahingi agad ang mga sumusunod upang mareplayan po agad kayo. 🙂
 
 ➡️ SIZE NG TV:
@@ -383,6 +384,8 @@ class Bot {
       return; // no ordinary customer AI, booking, or follow-up is touched
     }
     const t = this.store.thread(psid);
+    const applianceTypes = this.cfg.applianceOneTimeReplyEnabled && ev.message?.mid
+      && !media.length && !forceReason ? applianceOneTime.match(spoken) : [];
     const adInquiry = isAdInquiry(ev);
     // A click-to-Messenger ad can arrive as a first postback instead of text.
     // Never send on a referral-only event: a customer must actually interact.
@@ -413,6 +416,37 @@ class Bot {
     }
     t.followupFails = 0;
     t.followupNextAt = 0;
+    if (applianceTypes.length) {
+      // This path is deliberately independent of BOT_ENABLED and Page bot_switches.
+      // It does not start the continuous LLM, TV intake, booking or reminders.
+      t.applianceQuickReplyMutedAt = ts;
+      this.cancelPending(psid);
+      this.bump(psid); // invalidate any earlier conversational reply in flight
+      const allowed = !isStandby && !t.optedOut && !t.gateClosed && !t.bookingStaffOnly
+        && !t.handedOff && !this.humanPaused(t)
+        && (!this.cfg.testPsids.length || this.cfg.testPsids.includes(psid))
+        && this.now() - ts < this.cfg.replyWindowHours * HOUR && ts - this.now() < 120000;
+      if (allowed) {
+        const already = t.applianceQuickReplyAttempts ||= {};
+        const fresh = applianceTypes.filter(type => !already[type]);
+        if (fresh.length) {
+          for (const type of fresh) already[type] = String(ev.message.mid);
+          this.store.flushNow(); // at-most-once even if Meta's send response is uncertain
+          try {
+            const answer = applianceOneTime.response(fresh);
+            await this.graph.sendText(psid, answer);
+            this.store.addTurn(psid, 'assistant', answer, this.now(), {
+              provider: 'appliance-one-time', history: false,
+            });
+            this.log.info(`appliance one-time reply sent on ${page?.key || 'page'}`);
+          } catch (err) {
+            this.log.warn(`appliance one-time reply failed (HTTP ${Number(err.status) || 'network'})`);
+          }
+        }
+      }
+      this.store.save();
+      return;
+    }
     if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, firstInquiryMid, ts,
       { adInquiry, adPostback, previousCustomerTs: lastCustomerTs }));
     if (fixedIntakeEnabled && t.firstInquirySentAt
@@ -604,7 +638,8 @@ class Bot {
     const oldBooking = t.bookingConfirmedAt && ts - Number(t.bookingConfirmedAt) >= returnGap;
     // Expired handoffs/old bookings must not permanently exclude customers.
     // Still respect an active staff conversation, opt-out, standby and closed gate.
-    const held = () => t.optedOut || t.standby
+    const held = () => Number(t.applianceQuickReplyMutedAt) >= ts
+      || t.optedOut || t.standby
       || (t.handedOff && !oldHandoff) || (t.bookingStaffOnly && !oldBooking)
       || t.gateClosed || this.humanPaused(t) || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
     if (held()) return;
@@ -679,7 +714,8 @@ class Bot {
     const bookingCurrent = t.bookingDone && (!start || Number(t.bookingDoneAt) >= start);
     const bookingStaffCurrent = t.bookingStaffOnly && (!start || Number(t.bookingConfirmedAt) >= start);
     const handoffCurrent = t.handedOff && (!start || Number(t.handoffAt) >= start);
-    if (t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
+    if (Number(t.applianceQuickReplyMutedAt) >= ts
+        || t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
         || t.optedOut || t.standby || handoffCurrent || bookingStaffCurrent || bookingCurrent
         || formCurrent || t.gateClosed || this.humanPaused(t)
         || this.lastHumanAt(t) >= t.firstInquirySentAt || this.now() - ts >= this.cfg.replyWindowHours * HOUR) return;
@@ -2663,6 +2699,7 @@ class Bot {
 
   followUpSkip(psid, t, now, windowMs, { ignorePending = false } = {}) {
     if (!ignorePending && t.followupPending) return 'already sending a follow-up';
+    if (t.applianceQuickReplyMutedAt && t.applianceQuickReplyMutedAt >= (t.lastUserTs || 0)) return 'one-time appliance reply: no AI follow-up';
     const last = (t.history || [])[(t.history || []).length - 1];
     const catching = this.shouldCatchHotLead(t, now, last);
     if (!catching && (t.followupCount || 0) >= this.cfg.followupMax) return 'follow-up limit reached';

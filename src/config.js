@@ -127,6 +127,9 @@ function loadConfig(env = process.env) {
     botTestChatCode: env.BOT_TEST_CHAT_CODE || '', // private simulation code; Render only
     botEnabled: bool(env.BOT_ENABLED, false),
     mainFirstInquiryEnabled: bool(env.MAIN_FIRST_INQUIRY_ENABLED, false),
+    // Fixed monitor/ref/microwave answers work even when the continuous AI bot is off.
+    // Can be disabled independently without altering the first-time greeting.
+    applianceOneTimeReplyEnabled: bool(env.APPLIANCE_ONE_TIME_REPLY_ENABLED, true),
     // Cavite's fixed intake is independent of Main and the ordinary chatbot.
     // It is off by default until the Cavite Page token is configured.
     caviteFirstInquiryEnabled: bool(env.CAVITE_FIRST_INQUIRY_ENABLED, false),
