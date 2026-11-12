@@ -605,3 +605,66 @@ test('HTTP failure from Supabase is off until the cache expires', async () => {
     assert.equal(s.mock.calls.messages.length, 0, 'the failed read stays cached');
   } finally { await s.close(); }
 });
+
+
+test('one-time monitor and appliance replies stay separate from TV intake and AI bot', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true',
+    CAVITE_FIRST_INQUIRY_ENABLED: 'true',
+  });
+  try {
+    await s.post(MAIN, 'specific-repair', 'Gumagawa ba kayo ng monitor?');
+    await s.post(MAIN, 'specific-repair', 'Nagawa gawa ba kayo ng monitor?');
+    await s.post(MAIN, 'specific-repair', 'Nagawa ba kayo microwave oven?');
+    await s.post(MAIN, 'specific-repair', 'Gumagawa ba kayo ref?');
+    const texts = s.mock.calls.messages.map(c => c.message.text);
+    assert.deepEqual(texts, [
+      require('../src/appliance-one-time').REPLIES.monitor,
+      require('../src/appliance-one-time').REPLIES.other,
+    ]);
+    assert.equal(s.mock.calls.llm.length, 0, 'continuous LLM was never called');
+    assert.ok(texts.every(text => !text.includes('SIZE NG TV') && !text.includes('schedule')));
+    assert.deepEqual(Object.keys(s.app.store.thread('specific-repair').applianceQuickReplyAttempts).sort(),
+      ['monitor', 'other']);
+    assert.match(s.app.bot.followUpSkip('specific-repair', s.app.store.thread('specific-repair'),
+      Date.now(), 23 * 3600e3), /one-time appliance reply/);
+  } finally { await s.close(); }
+});
+
+test('appliance replies work on Cavite with separate per-Page dedupe, even when conversational replies are on', async () => {
+  const s = await setup({ BOT_ENABLED: 'true', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    await s.post(CAVITE_PAGE_ID, 'customer1', 'Nagawa ba kayo ng ref?');
+    await s.post(CAVITE_PAGE_ID, 'customer1', 'Nagawa ba kayo microwave oven?');
+    await s.post(MAIN, 'customer1', 'Gumagawa ba kayo ng monitor?');
+    assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [
+      require('../src/appliance-one-time').REPLIES.other,
+      require('../src/appliance-one-time').REPLIES.monitor,
+    ]);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('one-time appliance replies honor opt-out and active human handoff', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const t = s.app.store.thread('do-not-disturb');
+    t.handedOff = true;
+    t.handoffAt = Date.now();
+    await s.post(MAIN, 'do-not-disturb', 'Gumagawa ba kayo ng monitor?');
+    await s.post(MAIN, 'opted', 'stop');
+    await s.post(MAIN, 'opted', 'Nagawa ba kayo ng ref?');
+    assert.equal(s.mock.calls.messages.length, 0);
+  } finally { await s.close(); }
+});
+
+test('appliance intent ignores existing repair status questions and can be independently disabled', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', APPLIANCE_ONE_TIME_REPLY_ENABLED: 'false' });
+  try {
+    await s.post(MAIN, 'one', 'Gumagawa ba kayo ng monitor?');
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.deepEqual(require('../src/appliance-one-time').match('Nagawa na ba ang ref ko?'), []);
+    assert.deepEqual(require('../src/appliance-one-time').match('Nagawa ba kayo ng ref?'), ['other']);
+    assert.deepEqual(require('../src/appliance-one-time').match('nagagawa po ba microwave oven'), ['other']);
+  } finally { await s.close(); }
+});
