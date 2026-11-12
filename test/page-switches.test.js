@@ -37,11 +37,11 @@ async function setup(extraEnv = {}) {
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   let n = 0;
-  const post = async (pageId, psid, text) => {
+  const post = async (pageId, psid, text, attachments = []) => {
     const ts = Date.now() + (++n);
     const raw = JSON.stringify({
       object: 'page',
-      entry: [{ id: pageId, time: ts, messaging: [{ sender: { id: psid }, recipient: { id: pageId }, timestamp: ts, message: { mid: `sw.${n}`, text } }] }],
+      entry: [{ id: pageId, time: ts, messaging: [{ sender: { id: psid }, recipient: { id: pageId }, timestamp: ts, message: { mid: `sw.${n}`, text, attachments } }] }],
     });
     const res = await fetch(`${base}/webhook`, {
       method: 'POST',
@@ -69,10 +69,30 @@ test('standalone main greeting runs once for concurrent first messages even with
     await s.post(MAIN, 'fresh', 'Still here');
     await s.post(MAIN, 'old', 'Returning customer');
     await s.post(CAVITE_PAGE_ID, 'other', 'Hi');
-    assert.equal(s.mock.calls.messages.length, 1);
-    assert.equal(s.mock.calls.messages[0].recipient.id, 'fresh');
+    await s.post(MAIN, 'fresh', 'Magkano po?');
+    assert.equal(s.mock.calls.messages.length, 2);
+    assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id), ['fresh', 'fresh']);
+    assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
     assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
     assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('a customer sending details and video receives no reminder, including after a later follow-up', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { done: { id: 'done-chat' } };
+    s.mock.state.threadMessages = { 'done-chat': [{ id: 'sw.1', from: { id: 'done' } }] };
+    await s.post(MAIN, 'done', 'Hello po');
+    await s.post(MAIN, 'done', 'Samsung 55 inches, walang display. Hindi pa narepair. Kahapon.');
+    assert.equal(s.mock.calls.messages.length, 1);
+    await Promise.all([
+      s.post(MAIN, 'done', 'Hello?'),
+      s.post(MAIN, 'done', '', [{ type: 'video', payload: { url: 'https://example.test/tv.mp4' } }]),
+    ]);
+    await s.post(MAIN, 'done', 'Any update?');
+    assert.equal(s.app.store.thread('done').firstInquiryComplete, true);
+    assert.equal(s.mock.calls.messages.length, 1);
   } finally { await s.close(); }
 });
 
