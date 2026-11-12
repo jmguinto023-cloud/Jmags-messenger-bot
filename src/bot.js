@@ -388,12 +388,16 @@ class Bot {
     // Never send on a referral-only event: a customer must actually interact.
     const adPostback = adInquiry && !!ev.postback && !ev.message;
     const firstInquiryMid = ev.message?.mid || (adPostback ? `ad-postback:${ts}` : '');
-    const returnGap = this.cfg.mainReturnInquiryDays * 86400e3;
+    const page = currentPage();
+    const fixedIntakeEnabled = !!(page && ((page.primary && this.cfg.mainFirstInquiryEnabled)
+      || (page.key === 'cavite' && this.cfg.caviteFirstInquiryEnabled)));
+    const returnGap = (page?.key === 'cavite'
+      ? this.cfg.caviteReturnInquiryDays : this.cfg.mainReturnInquiryDays) * 86400e3;
     const lastCustomerTs = Number(t.lastUserTs) || 0;
     const lastWelcomeTs = Math.max(Number(t.firstInquirySentAt) || 0, Number(t.returnInquiryAttemptAt) || 0);
     const dormantReturn = lastCustomerTs > 0 && ts - lastCustomerTs >= returnGap
       && (!lastWelcomeTs || ts - lastWelcomeTs >= returnGap);
-    const firstInquiry = this.cfg.mainFirstInquiryEnabled && currentPage()?.primary
+    const firstInquiry = fixedIntakeEnabled
       // A past customer can receive a fresh intake after a genuine idle period.
       // A Page-authored automatic welcome is not a customer inquiry.
       && firstInquiryMid && !isStandby
@@ -411,7 +415,7 @@ class Bot {
     t.followupNextAt = 0;
     if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, firstInquiryMid, ts,
       { adInquiry, adPostback, previousCustomerTs: lastCustomerTs }));
-    if (this.cfg.mainFirstInquiryEnabled && currentPage()?.primary && t.firstInquirySentAt
+    if (fixedIntakeEnabled && t.firstInquirySentAt
         && !t.firstInquiryReminderAttempt && ev.message?.mid && !t.firstInquiryComplete) {
       t.firstInquiryComplete = inquiryReminder.recordEvidence(t,
         t.returnInquiryStartedAt ? t.history.filter(h => h.ts >= t.returnInquiryStartedAt) : t.history);
@@ -592,7 +596,10 @@ class Bot {
   async greetFirstInquiry(psid, t, mid, ts, {
     adInquiry = false, adPostback = false, previousCustomerTs = 0,
   } = {}) {
-    const returnGap = this.cfg.mainReturnInquiryDays * 86400e3;
+    const page = currentPage();
+    const branch = page?.key === 'cavite' ? 'Cavite' : 'Main Branch';
+    const returnGap = (page?.key === 'cavite'
+      ? this.cfg.caviteReturnInquiryDays : this.cfg.mainReturnInquiryDays) * 86400e3;
     const oldHandoff = t.handoffAt && ts - Number(t.handoffAt) >= returnGap;
     const oldBooking = t.bookingConfirmedAt && ts - Number(t.bookingConfirmedAt) >= returnGap;
     // Expired handoffs/old bookings must not permanently exclude customers.
@@ -620,10 +627,10 @@ class Bot {
           // Transient Meta/API failures can recover without risking a duplicate
           // because no Send API call has been attempted yet.
           if (code && code < 500 && code !== 429) {
-            this.log.warn(`Main Branch first-inquiry history denied (HTTP ${code})`);
+            this.log.warn(`${branch} first-inquiry history denied (HTTP ${code})`);
             return;
           }
-          this.log.warn(`Main Branch first-inquiry history retry (HTTP ${code || 'network'}, ${String(err.name || 'Error').slice(0, 40)})`);
+          this.log.warn(`${branch} first-inquiry history retry (HTTP ${code || 'network'}, ${String(err.name || 'Error').slice(0, 40)})`);
           continue;
         }
         if (status === 'existing') return;
@@ -651,15 +658,15 @@ class Bot {
           provider: returning ? 'main-returning-inquiry' : 'main-first-inquiry', history: false,
         });
         this.log.info(returning
-          ? (adInquiry ? 'Main Branch returning ad inquiry greeting sent' : 'Main Branch returning inquiry greeting sent')
-          : (adInquiry ? 'Main Branch ad first-inquiry greeting sent' : 'Main Branch first-inquiry greeting sent'));
+          ? (adInquiry ? `${branch} returning ad inquiry greeting sent` : `${branch} returning inquiry greeting sent`)
+          : (adInquiry ? `${branch} ad first-inquiry greeting sent` : `${branch} first-inquiry greeting sent`));
         return;
       }
       this.log.warn(adInquiry
-        ? 'Main Branch ad first-inquiry greeting skipped: inbox history unavailable'
-        : 'Main Branch first-inquiry greeting skipped: inbox history unavailable');
+        ? `${branch} ad first-inquiry greeting skipped: inbox history unavailable`
+        : `${branch} first-inquiry greeting skipped: inbox history unavailable`);
     } catch (err) {
-      this.log.warn(`Main Branch first-inquiry greeting could not be verified or sent (HTTP ${err.status || 'unknown'})`);
+      this.log.warn(`${branch} first-inquiry greeting could not be verified or sent (HTTP ${err.status || 'unknown'})`);
     }
   }
 
@@ -680,7 +687,7 @@ class Bot {
     this.store.flushNow();
     await this.graph.sendText(psid, inquiryReminder.REMINDER);
     this.store.addTurn(psid, 'assistant', inquiryReminder.REMINDER, this.now(), { provider: 'main-first-inquiry-reminder', history: false });
-    this.log.info('Main Branch first-inquiry reminder sent');
+    this.log.info(`${currentPage()?.key === 'cavite' ? 'Cavite' : 'Main Branch'} first-inquiry reminder sent`);
   }
 
   // '' when this Page's ops switch is on. Unreadable is off (fail closed).
