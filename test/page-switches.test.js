@@ -78,6 +78,41 @@ test('standalone main greeting runs once for concurrent first messages even with
   } finally { await s.close(); }
 });
 
+test('native Page welcome before first inbound does not suppress the separate JMAGS intake', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const row = (id, sender) => ({ id, from: { id: sender } });
+    s.mock.state.conversations = { newbie: { id: 'welcome-chat' }, returning: { id: 'return-chat' } };
+    s.mock.state.threadMessages = {
+      'welcome-chat': [row('auto-after', MAIN), row('sw.1', 'newbie'), row('auto-before', MAIN)],
+      'return-chat': [row('sw.2', 'returning'), row('auto-before', MAIN), row('old-inquiry', 'returning')],
+    };
+    // The welcome echo was saved before the customer's first typed inquiry.
+    s.app.store.addTurn('newbie', 'assistant', 'Facebook instant reply', Date.now());
+    await s.post(MAIN, 'newbie', 'Hello po');
+    await s.post(MAIN, 'returning', 'Hello again');
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].recipient.id, 'newbie');
+    assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('Page-only history is accepted across pages, but older customer messages are not', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const row = (id, sender) => ({ id, from: { id: sender } });
+    s.mock.state.conversations = { fresh: { id: 'paged-fresh' }, old: { id: 'paged-old' } };
+    s.mock.state.messagePages = {
+      'paged-fresh': [[row('auto-after', MAIN), row('start', 'fresh')], [row('auto-earlier', MAIN)]],
+      'paged-old': [[row('current', 'old')], [row('older-inquiry', 'old')]],
+    };
+    assert.equal(await withPage(mainPage, () => s.app.graph.firstInquiryStatus('fresh', 'start')), 'first');
+    assert.equal(await withPage(mainPage, () => s.app.graph.firstInquiryStatus('old', 'current')), 'existing');
+    assert.equal(await withPage(mainPage, () => s.app.graph.firstInquiryStatus('fresh', 'not-indexed')), 'pending');
+  } finally { await s.close(); }
+});
+
 test('a customer sending details and video receives no reminder, including after a later follow-up', async () => {
   const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
   try {
