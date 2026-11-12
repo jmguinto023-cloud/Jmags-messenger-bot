@@ -92,6 +92,10 @@ test('private owner test sends each fixed template once on an old chat without e
     t.handedOff = true;
     await s.post(MAIN, 'owner-test-id', 'Hello magkano magpagawa?');
     assert.equal(s.mock.calls.messages.length, 0, 'ordinary returning inquiry stays silent');
+    // A normal returning-customer event may expire an old handoff; establish
+    // a fresh staff handoff specifically to verify test commands do not clear it.
+    t.handedOff = true;
+    t.handoffAt = Date.now();
     await s.post(MAIN, 'someone-else', 'JMAGS TEST WELCOME');
     await s.post(CAVITE_PAGE_ID, 'owner-test-id', 'JMAGS TEST WELCOME');
     assert.equal(s.mock.calls.messages.length, 0, 'test commands never work for other accounts or Cavite');
