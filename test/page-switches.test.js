@@ -899,3 +899,36 @@ test('a technical second reply after staff clarification gets the missing-video 
     assert.equal(s.mock.calls.llm.length, 0, 'continuous chatbot remains off');
   } finally { await s.close(); }
 });
+
+
+test('existing customer fresh TV inquiry gets one video reminder even when conversational AI is off', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.app.store.addTurn('existing-tv', 'user', 'Gumagawa ba kayo ng refrigerator?', Date.now() - 5 * 60 * 1000);
+    const t = s.app.store.thread('existing-tv');
+    t.lastHumanEchoAt = Date.now();
+    t.pausedUntil = Date.now() + 30 * 60 * 1000;
+    await s.post(MAIN, 'existing-tv', 'Hello po, may sira akong TV.');
+    assert.equal(s.mock.calls.messages.length, 0, 'do not send another first-time welcome to an existing customer');
+    await s.post(MAIN, 'existing-tv', 'May power siya pero walang lumalabas sa screen.');
+    assert.equal(s.mock.calls.messages.length, 1, 'one-time reminder sent despite staff pause and AI off');
+    assert.equal(s.mock.calls.messages[0].message.text, require('../src/inquiry-reminder').REMINDER);
+    await s.post(MAIN, 'existing-tv', 'Magkano po?');
+    assert.equal(s.mock.calls.messages.length, 1, 'no duplicate reminder');
+    assert.equal(s.mock.calls.llm.length, 0, 'continuous chatbot remains off');
+  } finally { await s.close(); }
+});
+
+test('existing customer who sends video does not receive missing-video reminder', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.app.store.addTurn('existing-with-video', 'user', 'Saan shop niyo?', Date.now() - 5 * 60 * 1000);
+    await s.post(MAIN, 'existing-with-video', 'Hello po, may sira akong TV.');
+    await s.post(MAIN, 'existing-with-video', '', [
+      { type: 'video', payload: { url: 'https://example.com/issue.mp4' } },
+    ]);
+    await s.post(MAIN, 'existing-with-video', 'Magkano po?');
+    assert.equal(s.mock.calls.messages.length, 0, 'video already submitted, no reminder');
+    assert.equal(s.mock.calls.llm.length, 0, 'continuous AI still disabled');
+  } finally { await s.close(); }
+});
