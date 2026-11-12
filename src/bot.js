@@ -762,14 +762,29 @@ class Bot {
     const gapMs = (page?.key === 'cavite' ? this.cfg.caviteReturnInquiryDays
       : this.cfg.mainReturnInquiryDays) * 86400e3;
     const attemptAt = Number(t.returningTvVideoReminderAttemptAt) || 0;
-    const blocked = t.returningTvVideoLatestMid !== mid
-      || (attemptAt && this.now() - attemptAt < gapMs) || t.returningTvVideoReceived
-      || !startedAt || t.firstInquirySentAt || t.optedOut || t.standby
-      || t.handedOff || t.bookingStaffOnly || t.bookingDone || t.gateClosed
-      || t.bookingFormSent || Number(t.applianceQuickReplyMutedAt) >= ts
-      || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
-    if (blocked) {
-      this.log.info(`existing TV reminder skipped for ${short(psid)} on ${page?.key || 'page'}`);
+    // A past form link, booking or staff handoff must not permanently silence
+    // a new TV inquiry. Current-session actions still take priority.
+    // An active flag with no reliable timestamp is treated conservatively.
+    const activeSince = (flag, at) => Boolean(flag)
+      && (!Number.isFinite(Number(at)) || Number(at) <= 0 || Number(at) >= startedAt);
+    const skipReason = t.returningTvVideoLatestMid !== mid ? 'a newer incoming message'
+      : (attemptAt && this.now() - attemptAt < gapMs) ? 'already attempted this period'
+      : t.returningTvVideoReceived ? 'video received'
+      : !startedAt ? 'no new TV inquiry'
+      : t.firstInquirySentAt ? 'first-time intake takes priority'
+      : t.optedOut ? 'customer opted out'
+      : t.standby ? 'another app owns the conversation'
+      : activeSince(t.handedOff, t.handoffAt) ? 'current staff handoff'
+      : activeSince(t.bookingStaffOnly, t.bookingConfirmedAt) ? 'current booking staff handoff'
+      : activeSince(t.bookingDone, t.bookingDoneAt) ? 'current completed booking'
+      : t.gateClosed ? 'closed quote gate'
+      : activeSince(t.bookingFormSent, t.formSentAt) ? 'current booking form'
+      : Number(t.applianceQuickReplyMutedAt) >= ts ? 'one-time FAQ took priority'
+      : this.now() - ts >= this.cfg.replyWindowHours * HOUR ? 'outside 24h messaging window'
+      : '';
+    if (skipReason) {
+      // Diagnostic only: never log PSIDs or conversation text.
+      this.log.info(`existing TV reminder skipped for ${short(psid)} on ${page?.key || 'page'}: ${skipReason}`);
       return;
     }
     // No automatic retry after an ambiguous Meta send: at most once per inquiry.
