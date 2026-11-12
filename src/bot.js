@@ -469,8 +469,14 @@ class Bot {
         t.returnInquiryStartedAt ? t.history.filter(h => h.ts >= t.returnInquiryStartedAt) : t.history);
       // The newest incoming event owns the debounce, including media and staff-only threads.
       t.firstInquiryLatestMid = ev.message.mid;
+      // A customer may answer a staff diagnostic question after providing the form
+      // details. On their second post-welcome message, remind once if the actual
+      // issue video is still missing, even when the text contains new TV details.
+      const postWelcomeReplies = t.history.filter(h =>
+        h.role === 'user' && Number(h.ts) > Number(t.firstInquirySentAt)).length;
       if (!isStandby && !t.firstInquiryComplete && ts > t.firstInquirySentAt
-          && !ev.message.attachments?.length && inquiryReminder.plainFollowup(spoken)) {
+          && !ev.message.attachments?.length
+          && (inquiryReminder.plainFollowup(spoken) || postWelcomeReplies >= 2)) {
         this.safe(() => this.remindFirstInquiry(psid, t, ev.message.mid, ts));
       }
     }
@@ -731,8 +737,10 @@ class Bot {
     if (Number(t.applianceQuickReplyMutedAt) >= ts
         || t.firstInquiryLatestMid !== mid || t.firstInquiryReminderAttempt || t.firstInquiryComplete
         || t.optedOut || t.standby || handoffCurrent || bookingStaffCurrent || bookingCurrent
-        || formCurrent || t.gateClosed || this.humanPaused(t)
-        || this.lastHumanAt(t) >= t.firstInquirySentAt || this.now() - ts >= this.cfg.replyWindowHours * HOUR) return;
+        // This fixed one-time reminder is separate from the conversational bot.
+        // Staff clarifications must not suppress it; handoff and booking still do.
+        || formCurrent || t.gateClosed
+        || this.now() - ts >= this.cfg.replyWindowHours * HOUR) return;
     t.firstInquiryReminderAttempt = mid;
     this.store.flushNow();
     await this.graph.sendText(psid, inquiryReminder.REMINDER);
