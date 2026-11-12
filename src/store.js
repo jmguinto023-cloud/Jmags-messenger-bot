@@ -46,6 +46,23 @@ class Store {
       for (const key of ['jobs', 'payments', 'expenses', 'ads', 'parts', 'bookings', 'customers', 'otherIncome']) {
         if (!Array.isArray(ops[key])) ops[key] = [];
       }
+      // Older confirmed sends have a conversation-log receipt but only an attempt
+      // marker in state.json. An attempt alone is insufficient to send a reminder.
+      const receiptsNeeded = new Map();
+      for (const [key, t] of Object.entries(this.data.threads)) {
+        if (t.firstInquiryAttempt && !t.firstInquirySentAt && key === t.psid) {
+          receiptsNeeded.set(psidHash(key), t);
+        }
+      }
+      if (receiptsNeeded.size) {
+        for (const row of this.readConversations()) {
+          const t = receiptsNeeded.get(row.psidHash);
+          if (t && row.provider === 'main-first-inquiry' && row.role === 'assistant') {
+            t.firstInquirySentAt = Date.parse(row.timestamp);
+          }
+        }
+        this.save();
+      }
       for (const t of Object.values(this.data.threads)) {
         t.followupPending = false;
         t.videoFollowupPending = false;
