@@ -336,7 +336,8 @@ class Bot {
     })) return;
     const t = this.store.thread(psid);
     const firstInquiry = this.cfg.mainFirstInquiryEnabled && currentPage()?.primary
-      && ev.message?.mid && !isStandby && !t.lastUserTs && !t.history?.length && !t.firstInquiryAttempt;
+      // The Page may have echoed an automated welcome before any customer text.
+      && ev.message?.mid && !isStandby && !t.lastUserTs && !t.firstInquiryAttempt;
     this.store.addTurn(psid, 'user', logText, ts);
     if (optOutReason(spoken)) {
       t.optedOut = true;
@@ -530,10 +531,25 @@ class Bot {
       || t.gateClosed || this.humanPaused(t) || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
     if (held()) return;
     try {
-      for (const delay of [0, 1000, 3000]) {
+      // Let Facebook's own immediate welcome appear first; keep the JMAGS
+      // request separate, as a second welcome/intake message.
+      for (const delay of [1600, 1400, 3000]) {
         if (delay) await new Promise(resolve => setTimeout(resolve, delay));
         if (held()) return;
-        const status = await this.graph.firstInquiryStatus(psid, mid);
+        let status;
+        try {
+          status = await this.graph.firstInquiryStatus(psid, mid);
+        } catch (err) {
+          const code = Number(err.status) || 0;
+          // Transient Meta/API failures can recover without risking a duplicate
+          // because no Send API call has been attempted yet.
+          if (code && code < 500 && code !== 429) {
+            this.log.warn(`Main Branch first-inquiry history denied (HTTP ${code})`);
+            return;
+          }
+          this.log.warn(`Main Branch first-inquiry history retry (HTTP ${code || 'network'}, ${String(err.name || 'Error').slice(0, 40)})`);
+          continue;
+        }
         if (status === 'existing') return;
         if (status !== 'first') continue;
         if (held() || t.firstInquiryAttempt) return;
