@@ -471,10 +471,10 @@ class Bot {
     if (fixedIntakeEnabled && !firstInquiry && !t.firstInquirySentAt
         && ev.message?.mid && !forceReason && !isStandby) {
       const videoReceived = media.some(item => item.type === 'video')
-        || /(?:nasend|sinend|pinadala|uploaded|sent)\\s+(?:ko\\s+)?(?:na\\s+)?(?:ang\\s+)?video/i.test(spoken);
+        || /(?:nasend|sinend|pinadala|uploaded|sent)\s+(?:ko\s+)?(?:na\s+)?(?:ang\s+)?video/i.test(spoken);
       if (videoReceived) t.returningTvVideoReceived = true;
-      const tvRepairRequest = /\\b(?:tv|television)\\b/i.test(spoken)
-        && /\\b(?:sira|nasira|sirang|repair|paayos|pagawa|issue|problem|blanco|walang|ayaw)\\b/i.test(spoken);
+      const tvRepairRequest = /\b(?:tv|television)\b/i.test(spoken)
+        && /\b(?:sira|nasira|sirang|repair|paayos|pagawa|issue|problem|blanco|walang|ayaw)\b/i.test(spoken);
       const startedAt = Number(t.returningTvVideoStartedAt) || 0;
       const attemptedAt = Number(t.returningTvVideoReminderAttemptAt) || 0;
       const eligible = !attemptedAt || ts - attemptedAt >= returnGap;
