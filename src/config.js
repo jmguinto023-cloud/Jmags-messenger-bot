@@ -127,6 +127,10 @@ function loadConfig(env = process.env) {
     botTestChatCode: env.BOT_TEST_CHAT_CODE || '', // private simulation code; Render only
     botEnabled: bool(env.BOT_ENABLED, false),
     mainFirstInquiryEnabled: bool(env.MAIN_FIRST_INQUIRY_ENABLED, false),
+    // Cavite's fixed intake is independent of Main and the ordinary chatbot.
+    // It is off by default until the Cavite Page token is configured.
+    caviteFirstInquiryEnabled: bool(env.CAVITE_FIRST_INQUIRY_ENABLED, false),
+    caviteReturnInquiryDays: Math.max(1, Math.min(90, num(env.CAVITE_RETURN_INQUIRY_DAYS, 7))),
     // Re-send the fixed intake only when a previous customer returns after this many idle days.
     mainReturnInquiryDays: Math.max(1, Math.min(90, num(env.MAIN_RETURN_INQUIRY_DAYS, 7))),
     // Private, owner-only dry-run of the two fixed messages on a returning account.
