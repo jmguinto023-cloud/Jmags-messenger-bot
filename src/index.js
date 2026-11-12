@@ -37,6 +37,9 @@ if (require.main === module) {
   const livePages = (cfg.pages || []).filter((p) => p.token).map((p) => p.key).join('+') || 'none';
   const heldPages = (cfg.pages || []).filter((p) => p.id && !p.token).map((p) => p.key);
   log.info(`Main Branch first-inquiry greeting: ${cfg.mainFirstInquiryEnabled && livePages.split('+').includes('main') ? 'enabled' : 'off'}`);
+  log.info(`Cavite fixed inquiry greeting: ${cfg.caviteFirstInquiryEnabled
+    ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')
+    : 'off'}`);
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'} | pages=${livePages}${heldPages.length ? ` | no-token=${heldPages.join('+')}` : ''}`));
   if (process.env.AI_SMOKE_TEST_ON_STARTUP === 'true') {
     // Synthetic-only connectivity check. Its own guard refuses to run if

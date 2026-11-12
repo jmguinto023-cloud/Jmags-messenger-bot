@@ -218,6 +218,74 @@ test('Graph does not classify returning without a verifiable old message time', 
   } finally { await s.close(); }
 });
 
+test('Cavite new direct and ad customers receive same fixed intake with Main chatbot off', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'false',
+    CAVITE_FIRST_INQUIRY_ENABLED: 'true',
+  });
+  try {
+    const row = (id, from, created_time) => ({ id, from: { id: from }, ...(created_time ? { created_time } : {}) });
+    const old = new Date(Date.now() - 22 * 86400e3).toISOString();
+    s.mock.state.conversations = {
+      'cavite-new': { id: 'cavite-new-thread' },
+      'cavite-ad': { id: 'cavite-ad-thread' },
+      'cavite-return': { id: 'cavite-return-thread' },
+    };
+    s.mock.state.threadMessages = {
+      'cavite-new-thread': [row('page-welcome', CAVITE_PAGE_ID), row('sw.1', 'cavite-new')],
+      'cavite-ad-thread': [row('sw.2', 'cavite-ad')],
+      'cavite-return-thread': [row('sw.3', 'cavite-return'), row('old-inquiry', 'cavite-return', old)],
+    };
+    await s.post(CAVITE_PAGE_ID, 'cavite-new', 'Hello may sira TV');
+    await s.post(CAVITE_PAGE_ID, 'cavite-ad', 'Magkano pagawa TV?', [], {
+      referral: { source: 'ADS', ad_id: 'cavite-ad-123' },
+    });
+    await s.post(CAVITE_PAGE_ID, 'cavite-return', 'Hello again magkano po?');
+    await s.post(MAIN, 'main-new', 'Hello po');
+    assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id),
+      ['cavite-new', 'cavite-ad', 'cavite-return']);
+    assert.ok(s.mock.calls.messages.every(m => m.message.text.includes('➡️ TAGASAAN PO SILA?:')));
+    assert.equal(s.mock.calls.llm.length, 0);
+    const caviteGraph = s.mock.calls.pages.filter(p =>
+      p.token === 'CAVITE_TOKEN' && p.kind === 'message');
+    assert.ok(caviteGraph.length >= 3, 'Cavite Page token used for its Graph send and history calls');
+    assert.equal(s.mock.calls.pages.filter(p =>
+      p.token === 'MAIN_TOKEN' && p.kind === 'message').length, 0,
+    'never use the Main Page token for Cavite Graph messages');
+  } finally { await s.close(); }
+});
+
+test('Cavite follow-up reminder is separate, once-only, and honors completed details', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'false',
+    CAVITE_FIRST_INQUIRY_ENABLED: 'true',
+  });
+  try {
+    s.mock.state.conversations = { 'cavite-lead': { id: 'cavite-lead-thread' } };
+    s.mock.state.threadMessages = {
+      'cavite-lead-thread': [{ id: 'sw.1', from: { id: 'cavite-lead' } }],
+    };
+    await s.post(CAVITE_PAGE_ID, 'cavite-lead', 'Hello po');
+    await s.post(CAVITE_PAGE_ID, 'cavite-lead', 'Hello, magkano po?');
+    await s.post(CAVITE_PAGE_ID, 'cavite-lead', 'Follow up po?');
+    assert.equal(s.mock.calls.messages.length, 2);
+    assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('Cavite fixed intake flag defaults off and never substitutes Main Page credentials', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false', CAVITE_FIRST_INQUIRY_ENABLED: 'false',
+    MAIN_FIRST_INQUIRY_ENABLED: 'false',
+  });
+  try {
+    await s.post(CAVITE_PAGE_ID, 'quiet-cavite', 'Hello po');
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.app.cfg.caviteFirstInquiryEnabled, false);
+  } finally { await s.close(); }
+});
+
 test('private owner test sends each fixed template once on an old chat without enabling ordinary replies', async () => {
   const s = await setup({
     BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true',
