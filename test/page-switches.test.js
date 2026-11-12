@@ -795,3 +795,46 @@ test('standalone FAQ honors explicit handoff but does not mistakenly treat staff
       [require('../src/appliance-one-time').REPLIES.homeservice]);
   } finally { await s.close(); }
 });
+
+
+test('existing booked customer still gets standalone monitor FAQ once with continuous chatbot disabled', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false',
+    MAIN_FIRST_INQUIRY_ENABLED: 'true',
+  });
+  try {
+    const t = s.app.store.thread('previous-booking-monitor');
+    t.bookingStaffOnly = true;
+    t.bookingFormSent = true;
+    t.bookingDone = true;
+    t.bookingConfirmedAt = Date.now() - 3600e3;
+    t.pausedUntil = Date.now() + 30 * 60e3;
+    await s.post(MAIN, 'previous-booking-monitor', 'Gumagawa ba kayo ng monitor?');
+    await s.post(MAIN, 'previous-booking-monitor', 'Gumagawa ba kayo ng monitor?');
+    assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [
+      require('../src/appliance-one-time').REPLIES.monitor,
+    ]);
+    assert.equal(s.mock.calls.llm.length, 0, 'continuous bot still off');
+    assert.equal(t.bookingStaffOnly, true, 'staff booking restriction remains intact');
+    assert.equal(t.bookingFormSent, true, 'do not modify booking form state');
+    assert.equal(t.bookingDone, true);
+    assert.equal(t.firstInquirySentAt || 0, 0, 'TV greeting must not run');
+  } finally { await s.close(); }
+});
+
+test('separate location and home service FAQs remain available after staff-managed booking', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', CAVITE_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const page = s.app.cfg.pages.find(p => p.key === 'cavite');
+    const { withPage } = require('../src/pages');
+    withPage(page, () => { s.app.store.thread('previous-booking-faq').bookingStaffOnly = true; });
+    await s.post(CAVITE_PAGE_ID, 'previous-booking-faq', 'Saan po kayo located?');
+    await s.post(CAVITE_PAGE_ID, 'previous-booking-faq', 'Naghohome service po ba kayo?');
+    assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [
+      require('../src/appliance-one-time').REPLIES.location,
+      require('../src/appliance-one-time').REPLIES.homeservice,
+    ]);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(withPage(page, () => s.app.store.thread('previous-booking-faq').bookingStaffOnly), true);
+  } finally { await s.close(); }
+});
