@@ -77,6 +77,14 @@ const AUTOMATED_ECHO_RE = [
   /thanks for (contacting|messaging|reaching out)/i,
   /we('| a)re (currently )?away|we will get back to you|we'll get back to you/i,
 ];
+// Messenger click-to-message ad referrals may be attached to a customer text,
+// a quick reply, or a postback. A referral alone is not a customer message.
+function isAdInquiry(ev) {
+  const refs = [ev?.referral, ev?.message?.referral, ev?.postback?.referral];
+  return refs.some(r => r && typeof r === 'object'
+    && (String(r.source || '').toUpperCase() === 'ADS' || Boolean(r.ad_id)));
+}
+
 function isAutomatedEchoText(text, extra = []) {
   const s = String(text || '');
   if (!s) return false;
@@ -375,9 +383,14 @@ class Bot {
       return; // no ordinary customer AI, booking, or follow-up is touched
     }
     const t = this.store.thread(psid);
+    const adInquiry = isAdInquiry(ev);
+    // A click-to-Messenger ad can arrive as a first postback instead of text.
+    // Never send on a referral-only event: a customer must actually interact.
+    const adPostback = adInquiry && !!ev.postback && !ev.message;
+    const firstInquiryMid = ev.message?.mid || (adPostback ? `ad-postback:${ts}` : '');
     const firstInquiry = this.cfg.mainFirstInquiryEnabled && currentPage()?.primary
       // The Page may have echoed an automated welcome before any customer text.
-      && ev.message?.mid && !isStandby && !t.lastUserTs && !t.firstInquiryAttempt;
+      && firstInquiryMid && !isStandby && !t.lastUserTs && !t.firstInquiryAttempt;
     this.store.addTurn(psid, 'user', logText, ts);
     if (optOutReason(spoken)) {
       t.optedOut = true;
@@ -389,7 +402,8 @@ class Bot {
     }
     t.followupFails = 0;
     t.followupNextAt = 0;
-    if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, ev.message.mid, ts));
+    if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, firstInquiryMid, ts,
+      { adInquiry, adPostback }));
     if (this.cfg.mainFirstInquiryEnabled && currentPage()?.primary && t.firstInquirySentAt
         && !t.firstInquiryReminderAttempt && ev.message?.mid && !t.firstInquiryComplete) {
       t.firstInquiryComplete = inquiryReminder.recordEvidence(t, t.history);
@@ -566,19 +580,22 @@ class Bot {
 
   // Separate from conversational AI. The branch can enable this single fixed reply
   // while the ordinary reply and follow-up switches remain off.
-  async greetFirstInquiry(psid, t, mid, ts) {
+  async greetFirstInquiry(psid, t, mid, ts, { adInquiry = false, adPostback = false } = {}) {
     const held = () => t.optedOut || t.standby || t.handedOff || t.bookingStaffOnly
       || t.gateClosed || this.humanPaused(t) || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
     if (held()) return;
     try {
       // Let Facebook's own immediate welcome appear first; keep the JMAGS
       // request separate, as a second welcome/intake message.
-      for (const delay of [1600, 1400, 3000]) {
+      // Ad-triggered threads can appear in Meta's inbox later than ordinary
+      // chats. Retry reading history longer, but never retry an attempted send.
+      const delays = adInquiry ? [1600, 1400, 3000, 6000, 10000] : [1600, 1400, 3000];
+      for (const delay of delays) {
         if (delay) await new Promise(resolve => setTimeout(resolve, delay));
         if (held()) return;
         let status;
         try {
-          status = await this.graph.firstInquiryStatus(psid, mid);
+          status = await this.graph.firstInquiryStatus(psid, mid, { adPostback });
         } catch (err) {
           const code = Number(err.status) || 0;
           // Transient Meta/API failures can recover without risking a duplicate
@@ -601,10 +618,14 @@ class Bot {
         t.firstInquirySentAt = this.now();
         t.firstInquiryComplete = inquiryReminder.recordEvidence(t, t.history);
         this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, t.firstInquirySentAt, { provider: 'main-first-inquiry', history: false });
-        this.log.info('Main Branch first-inquiry greeting sent');
+        this.log.info(adInquiry
+          ? 'Main Branch ad first-inquiry greeting sent'
+          : 'Main Branch first-inquiry greeting sent');
         return;
       }
-      this.log.warn('Main Branch first-inquiry greeting skipped: inbox history unavailable');
+      this.log.warn(adInquiry
+        ? 'Main Branch ad first-inquiry greeting skipped: inbox history unavailable'
+        : 'Main Branch first-inquiry greeting skipped: inbox history unavailable');
     } catch (err) {
       this.log.warn(`Main Branch first-inquiry greeting could not be verified or sent (HTTP ${err.status || 'unknown'})`);
     }

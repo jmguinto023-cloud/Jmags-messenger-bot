@@ -37,11 +37,11 @@ async function setup(extraEnv = {}) {
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   let n = 0;
-  const post = async (pageId, psid, text, attachments = []) => {
+  const post = async (pageId, psid, text, attachments = [], extraMessage = {}) => {
     const ts = Date.now() + (++n);
     const raw = JSON.stringify({
       object: 'page',
-      entry: [{ id: pageId, time: ts, messaging: [{ sender: { id: psid }, recipient: { id: pageId }, timestamp: ts, message: { mid: `sw.${n}`, text, attachments } }] }],
+      entry: [{ id: pageId, time: ts, messaging: [{ sender: { id: psid }, recipient: { id: pageId }, timestamp: ts, message: { mid: `sw.${n}`, text, attachments, ...extraMessage } }] }],
     });
     const res = await fetch(`${base}/webhook`, {
       method: 'POST',
@@ -74,6 +74,62 @@ test('standalone main greeting runs once for concurrent first messages even with
     assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id), ['fresh', 'fresh']);
     assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
     assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('first-time click-to-Messenger ad lead receives same intake despite Page auto reply', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const row = (id, sender) => ({ id, from: { id: sender } });
+    s.mock.state.conversations = {
+      'ad-new': { id: 'ad-new-chat' },
+      'ad-return': { id: 'ad-return-chat' },
+    };
+    s.mock.state.threadMessages = {
+      'ad-new-chat': [row('page-auto', MAIN), row('sw.1', 'ad-new'), row('page-before', MAIN)],
+      'ad-return-chat': [row('sw.2', 'ad-return'), row('older', 'ad-return')],
+    };
+    s.app.store.addTurn('ad-new', 'assistant', 'Welcome from the Page', Date.now());
+    const referral = { source: 'ADS', type: 'OPEN_THREAD', ad_id: '1234567890' };
+    await s.post(MAIN, 'ad-new',
+      '42 inches Frestiz may guhit at itim sa harap Alabang', [], { referral });
+    await s.post(MAIN, 'ad-return', 'Magkano repair po?', [], { referral });
+    await s.post(CAVITE_PAGE_ID, 'cavite-ad', '42 inches may lines', [], { referral });
+    await s.post(MAIN, 'ad-new', 'Frestiz 42 panel issue repeated', [], { referral });
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].recipient.id, 'ad-new');
+    assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('initial click-to-Messenger ad postback sends intake once, referral-only tap does not', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const row = (id, sender) => ({ id, from: { id: sender } });
+    s.mock.state.conversations = {
+      'ad-start': { id: 'ad-postback-chat' },
+      'returning-start': { id: 'ad-old-postback-chat' },
+    };
+    s.mock.state.threadMessages = {
+      'ad-postback-chat': [row('page-welcome', MAIN)],
+      'ad-old-postback-chat': [row('historic-question', 'returning-start')],
+    };
+    const event = (psid, data) => ({
+      sender: { id: psid }, recipient: { id: MAIN }, timestamp: Date.now(), ...data,
+    });
+    const postWebhook = async (list) => {
+      s.app.bot.handleWebhook({ object: 'page', entry: [{ id: MAIN, messaging: list }] });
+      await s.app.bot.idle();
+    };
+    const referral = { source: 'ADS', ad_id: 'ad-101', type: 'OPEN_THREAD' };
+    await postWebhook([event('ad-start', { referral })]);
+    assert.equal(s.mock.calls.messages.length, 0, 'opening ad thread alone sends nothing');
+    await postWebhook([event('ad-start', { postback: { title: 'Get Started', payload: 'GET_STARTED', referral } })]);
+    await postWebhook([event('ad-start', { postback: { title: 'Get Started', payload: 'GET_STARTED', referral } })]);
+    await postWebhook([event('returning-start', { postback: { title: 'Get Started', payload: 'GET_STARTED', referral } })]);
+    assert.deepEqual(s.mock.calls.messages.map(x => x.recipient.id), ['ad-start']);
     assert.equal(s.mock.calls.llm.length, 0);
   } finally { await s.close(); }
 });
