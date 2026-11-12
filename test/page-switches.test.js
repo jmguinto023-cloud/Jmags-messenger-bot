@@ -153,7 +153,7 @@ test('an old Messenger or Facebook ad customer gets a fresh welcome, but a recen
     await s.post(MAIN, 'old', 'Magkano po parepair sa TV?');
     await s.post(MAIN, 'ad', 'TV po repair?', [], { referral: { source: 'ADS', ad_id: '123' } });
     await s.post(MAIN, 'recent', 'Follow up po?');
-    await s.post(MAIN, 'old', 'Hello po ulit');
+    await s.post(MAIN, 'old', 'Samsung 55 inches, may lines, hindi pa repaired');
     await s.post(CAVITE_PAGE_ID, 'different', 'Magkano po?');
     assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id), ['old', 'ad']);
     assert.ok(s.mock.calls.messages.every(m => m.message.text.includes('➡️ TAGASAAN PO SILA?:')));
