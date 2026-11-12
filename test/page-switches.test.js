@@ -74,6 +74,7 @@ test('standalone main greeting runs once for concurrent first messages even with
     assert.deepEqual(s.mock.calls.messages.map(m => m.recipient.id), ['fresh', 'fresh']);
     assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
     assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.match(s.mock.calls.messages[0].message.text, /➡️ TAGASAAN PO SILA\?:/);
     assert.equal(s.mock.calls.llm.length, 0);
   } finally { await s.close(); }
 });
@@ -100,6 +101,7 @@ test('first-time click-to-Messenger ad lead receives same intake despite Page au
     assert.equal(s.mock.calls.messages.length, 1);
     assert.equal(s.mock.calls.messages[0].recipient.id, 'ad-new');
     assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.match(s.mock.calls.messages[0].message.text, /➡️ TAGASAAN PO SILA\?:/);
     assert.equal(s.mock.calls.llm.length, 0);
   } finally { await s.close(); }
 });
@@ -164,6 +166,7 @@ test('private owner test sends each fixed template once on an old chat without e
     assert.equal(s.mock.calls.messages.length, 2, 'each template sent once');
     assert.deepEqual(s.mock.calls.messages.map(x => x.recipient.id), ['owner-test-id', 'owner-test-id']);
     assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.match(s.mock.calls.messages[0].message.text, /➡️ TAGASAAN PO SILA\?:/);
     assert.equal(s.mock.calls.messages[1].message.text, require('../src/inquiry-reminder').REMINDER);
     assert.equal(s.mock.calls.llm.length, 0);
     assert.equal(t.bookingFormSent, true);
@@ -188,6 +191,7 @@ test('native Page welcome before first inbound does not suppress the separate JM
     assert.equal(s.mock.calls.messages.length, 1);
     assert.equal(s.mock.calls.messages[0].recipient.id, 'newbie');
     assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.match(s.mock.calls.messages[0].message.text, /➡️ TAGASAAN PO SILA\?:/);
     assert.equal(s.mock.calls.llm.length, 0);
   } finally { await s.close(); }
 });
