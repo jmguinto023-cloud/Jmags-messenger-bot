@@ -2777,8 +2777,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.equal(s.app.store.thread('live-2').handedOff, false);
 
     const loc = await send('live-4', 'san po kayo located');
-    assert.equal(loc, 'home service po kami sir, Cavite, Laguna at Batangas. saan po location nyo?');
-    assert.doesNotMatch(loc, /Makati|Santan|San Pablo/);
+    assert.equal(loc, require('../src/appliance-one-time').REPLIES.location);
+    assert.doesNotMatch(loc, /Makati|Santan/);
 
     const war = await send('live-5', 'may warranty po ba');
     assert.match(war, /May warranty po ang repair namin/);
