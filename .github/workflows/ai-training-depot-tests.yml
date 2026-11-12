@@ -1,0 +1,21 @@
+name: JMAGS AI Training Depot tests
+on:
+  push:
+    branches: ['feature/ai-video-training-depot-20261110']
+    paths: ['depot/**','.github/workflows/ai-training-depot-tests.yml']
+  pull_request:
+    paths: ['depot/**','.github/workflows/ai-training-depot-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dashboard-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test JMAGS isolated training depot
+        run: node --test depot/test/*.test.js
