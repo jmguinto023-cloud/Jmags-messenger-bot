@@ -34,6 +34,27 @@ if (require.main === module) {
   const unpaused = app.bot.clearAutomatedPauses();
   if (unpaused.length) log.info(`resumed ${unpaused.length} chat(s) paused by automated Page echoes`);
   app.bot.startFollowups();
+  // Read-only, privacy-limited diagnostic for missing fixed TV reminders after
+  // a restart. No customer message content or full customer identifiers logged.
+  const recentReminderCutoff = Date.now() - 30 * 60 * 1000;
+  for (const t of Object.values(app.store.data.threads || {})) {
+    const startedAt = Number(t.returningTvVideoStartedAt) || 0;
+    if (!startedAt || startedAt < recentReminderCutoff || !t.returningTvVideoLatestMid
+        || t.returningTvVideoReminderAttemptAt) continue;
+    const flags = [
+      t.firstInquirySentAt ? 'first-welcome' : '',
+      t.optedOut ? 'opt-out' : '',
+      t.standby ? 'standby' : '',
+      t.handedOff ? (Number(t.handoffAt) >= startedAt ? 'current-handoff' : 'old-handoff') : '',
+      t.bookingStaffOnly ? (Number(t.bookingConfirmedAt) >= startedAt ? 'current-booking-staff' : 'old-booking-staff') : '',
+      t.bookingDone ? (Number(t.bookingDoneAt) >= startedAt ? 'current-booking-done' : 'old-booking-done') : '',
+      t.bookingFormSent ? (Number(t.formSentAt) >= startedAt ? 'current-form' : 'old-form') : '',
+      t.gateClosed ? 'closed-quote-gate' : '',
+      t.returningTvVideoReceived ? 'video-received' : '',
+      Number(t.applianceQuickReplyMutedAt) >= Number(t.lastUserTs) ? 'faq-priority' : '',
+    ].filter(Boolean);
+    log.info(`pending video reminder diagnostic …${String(t.psid || '').slice(-4)}: ${flags.join(',') || 'no-blocking-flags'}`);
+  }
   const livePages = (cfg.pages || []).filter((p) => p.token).map((p) => p.key).join('+') || 'none';
   const heldPages = (cfg.pages || []).filter((p) => p.id && !p.token).map((p) => p.key);
   log.info(`Main Branch first-inquiry greeting: ${cfg.mainFirstInquiryEnabled && livePages.split('+').includes('main') ? 'enabled' : 'off'}`);
