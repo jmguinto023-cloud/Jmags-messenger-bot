@@ -668,3 +668,42 @@ test('appliance intent ignores existing repair status questions and can be indep
     assert.deepEqual(require('../src/appliance-one-time').match('nagagawa po ba microwave oven'), ['other']);
   } finally { await s.close(); }
 });
+
+
+test('location instant answer works as first message with AI and first-intake off', async () => {
+  const s = await setup({
+    BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true',
+    APPLIANCE_ONE_TIME_REPLY_ENABLED: 'true',
+  });
+  try {
+    await s.post(MAIN, 'location-first', 'Saan po kayo located?');
+    assert.deepEqual(s.mock.calls.messages.map(call => call.message.text),
+      [require('../src/appliance-one-time').REPLIES.location]);
+    assert.equal(s.mock.calls.llm.length, 0);
+    await s.post(MAIN, 'location-first', 'Address niyo po?');
+    assert.equal(s.mock.calls.messages.length, 1, 'only one location reply to this customer');
+  } finally { await s.close(); }
+});
+
+test('middle-of-conversation location question is answered without activating AI', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'false' });
+  try {
+    await s.post(MAIN, 'location-middle', 'Hello may tanong po ako');
+    await s.post(MAIN, 'location-middle', 'Where is your shop?');
+    assert.deepEqual(s.mock.calls.messages.map(call => call.message.text),
+      [require('../src/appliance-one-time').REPLIES.location]);
+    assert.equal(s.mock.calls.llm.length, 0);
+    await s.post(CAVITE_PAGE_ID, 'location-middle', 'Location po?');
+    assert.equal(s.mock.calls.messages.length, 2, 'location reply is independent per Page');
+  } finally { await s.close(); }
+});
+
+test('location intent recognizes Tagalog and English location wording', () => {
+  const matcher = require('../src/appliance-one-time').match;
+  for (const sample of ['Saan kayo?', 'Asan po ang shop niyo?', 'Where are you located?',
+    'Address niyo po?', 'Location po', 'Paano pumunta sa shop?', 'San yung branch nyo?']) {
+    assert.deepEqual(matcher(sample), ['location'], sample);
+  }
+  assert.deepEqual(matcher('Taga San Pablo City ako'), []);
+  assert.deepEqual(matcher('Nagawa ba kayo ng ref?'), ['other']);
+});
