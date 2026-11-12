@@ -759,3 +759,39 @@ test('scheduling and non-question mentions do not trigger the new generic home-s
   assert.deepEqual(match('Nagawa ba kayo ng ref?'), ['other']);
   assert.deepEqual(match('Saan po shop nyo?'), ['location']);
 });
+
+
+test('one-time FAQs reply during a temporary human staff pause without enabling continuous bot', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const thread = s.app.store.thread('staff-conversation');
+    thread.pausedUntil = Date.now() + 30 * 60 * 1000;
+    thread.lastHumanEchoAt = Date.now();
+    await s.post(MAIN, 'staff-conversation', 'Gumagawa ba kayo ng monitor?');
+    await s.post(MAIN, 'staff-conversation', 'Gumagawa ba kayo ng monitor?');
+    assert.deepEqual(s.mock.calls.messages.map(m => m.message.text),
+      [require('../src/appliance-one-time').REPLIES.monitor]);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.equal(Boolean(thread.pausedUntil > Date.now()), true, 'staff pause must remain intact');
+    assert.equal(Boolean(thread.firstInquirySentAt), false, 'TV intake is not triggered');
+    assert.deepEqual(Object.keys(thread.applianceQuickReplyAttempts), ['monitor']);
+  } finally { await s.close(); }
+});
+
+test('standalone FAQ honors explicit handoff but does not mistakenly treat staff pause as handoff', async () => {
+  const s = await setup({ BOT_ENABLED: 'false' });
+  try {
+    const staff = s.app.store.thread('staff-handoff');
+    staff.pausedUntil = Date.now() + 30 * 60 * 1000;
+    staff.handedOff = true;
+    staff.handoffAt = Date.now();
+    await s.post(MAIN, 'staff-handoff', 'Gumagawa ba kayo ng monitor?');
+    assert.equal(s.mock.calls.messages.length, 0, 'explicit handoff suppresses reply');
+    assert.equal(staff.applianceQuickReplyAttempts?.monitor, undefined);
+    const regular = s.app.store.thread('regular-staff-pause');
+    regular.pausedUntil = Date.now() + 30 * 60 * 1000;
+    await s.post(MAIN, 'regular-staff-pause', 'Naghohome service po ba kayo?');
+    assert.deepEqual(s.mock.calls.messages.map(m => m.message.text),
+      [require('../src/appliance-one-time').REPLIES.homeservice]);
+  } finally { await s.close(); }
+});
