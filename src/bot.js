@@ -422,13 +422,25 @@ class Bot {
       t.applianceQuickReplyMutedAt = ts;
       this.cancelPending(psid);
       this.bump(psid); // invalidate any earlier conversational reply in flight
-      const allowed = !isStandby && !t.optedOut && !t.gateClosed && !t.bookingStaffOnly
-        && !t.handedOff && !this.humanPaused(t)
-        && (!this.cfg.testPsids.length || this.cfg.testPsids.includes(psid))
-        && this.now() - ts < this.cfg.replyWindowHours * HOUR && ts - this.now() < 120000;
+      // A recent Page Inbox/staff reply can create a 30-minute human pause,
+      // but the owner explicitly wants these fixed FAQ answers even mid-chat.
+      // Still honor explicit handoff, booking control, opt-out and Meta's window.
+      const skip = isStandby ? 'standby'
+        : t.optedOut ? 'opted out'
+        : t.gateClosed ? 'quote-gate closed'
+        : t.bookingStaffOnly ? 'booking handed to staff'
+        : t.handedOff ? 'explicit staff handoff'
+        : this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid) ? 'test allowlist'
+        : this.now() - ts >= this.cfg.replyWindowHours * HOUR ? 'outside Messenger reply window'
+        : ts - this.now() >= 120000 ? 'future message timestamp' : '';
+      const allowed = !skip;
+      if (skip) this.log.info(`appliance one-time skipped for ${short(psid)} on ${page?.key || 'page'}: ${skip}`);
       if (allowed) {
         const already = t.applianceQuickReplyAttempts ||= {};
         const fresh = applianceTypes.filter(type => !already[type]);
+        if (!fresh.length) {
+          this.log.info(`appliance one-time skipped for ${short(psid)} on ${page?.key || 'page'}: already attempted category ${applianceTypes.join(',')}`);
+        }
         if (fresh.length) {
           for (const type of fresh) already[type] = String(ev.message.mid);
           this.store.flushNow(); // at-most-once even if Meta's send response is uncertain
@@ -438,7 +450,7 @@ class Bot {
             this.store.addTurn(psid, 'assistant', answer, this.now(), {
               provider: 'appliance-one-time', history: false,
             });
-            this.log.info(`appliance one-time reply sent on ${page?.key || 'page'}`);
+            this.log.info(`appliance one-time reply sent on ${page?.key || 'page'} for ${short(psid)}: ${fresh.join(',')}`);
           } catch (err) {
             this.log.warn(`appliance one-time reply failed (HTTP ${Number(err.status) || 'network'})`);
           }
