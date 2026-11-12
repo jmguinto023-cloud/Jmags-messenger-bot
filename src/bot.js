@@ -463,6 +463,34 @@ class Bot {
     }
     if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, firstInquiryMid, ts,
       { adInquiry, adPostback, previousCustomerTs: lastCustomerTs }));
+
+    // Existing chats may never have received our fixed welcome, especially when
+    // this bot was enabled after their first inquiry. A fresh TV repair request
+    // can arm ONE video reminder without turning on the conversational AI.
+    // No reply on the initial request: wait for the next customer message.
+    if (fixedIntakeEnabled && !firstInquiry && !t.firstInquirySentAt
+        && ev.message?.mid && !forceReason && !isStandby) {
+      const videoReceived = media.some(item => item.type === 'video')
+        || /(?:nasend|sinend|pinadala|uploaded|sent)\s+(?:ko\s+)?(?:na\s+)?(?:ang\s+)?video/i.test(spoken);
+      if (videoReceived) t.returningTvVideoReceived = true;
+      const tvRepairRequest = /\b(?:tv|television)\b/i.test(spoken)
+        && /\b(?:sira|nasira|sirang|repair|paayos|pagawa|issue|problem|blanco|walang|ayaw)\b/i.test(spoken);
+      const startedAt = Number(t.returningTvVideoStartedAt) || 0;
+      const attemptedAt = Number(t.returningTvVideoReminderAttemptAt) || 0;
+      const eligible = !attemptedAt || ts - attemptedAt >= returnGap;
+      if (tvRepairRequest && !videoReceived && eligible && (!startedAt || ts - startedAt >= returnGap)) {
+        t.returningTvVideoStartedAt = ts;
+        t.returningTvVideoReceived = false;
+        t.returningTvVideoLatestMid = '';
+        this.store.save();
+        this.log.info(`existing TV inquiry reminder armed for ${short(psid)} on ${page?.key || 'page'}`);
+      } else if (startedAt && eligible && ts > startedAt
+          && ts - startedAt < this.cfg.replyWindowHours * HOUR
+          && !t.returningTvVideoReceived && !ev.message.attachments?.length) {
+        t.returningTvVideoLatestMid = ev.message.mid;
+        this.safe(() => this.remindReturningTvInquiry(psid, t, ev.message.mid, ts));
+      }
+    }
     if (fixedIntakeEnabled && t.firstInquirySentAt
         && !t.firstInquiryReminderAttempt && ev.message?.mid && !t.firstInquiryComplete) {
       t.firstInquiryComplete = inquiryReminder.recordEvidence(t,
@@ -722,6 +750,38 @@ class Bot {
         : `${branch} first-inquiry greeting skipped: inbox history unavailable`);
     } catch (err) {
       this.log.warn(`${branch} first-inquiry greeting could not be verified or sent (HTTP ${err.status || 'unknown'})`);
+    }
+  }
+
+  // Independent of the continuous chatbot. A customer must actively reply to
+  // the fresh TV inquiry; do not send unsolicited messages to old conversations.
+  async remindReturningTvInquiry(psid, t, mid, ts) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const page = currentPage();
+    const startedAt = Number(t.returningTvVideoStartedAt) || 0;
+    const gapMs = (page?.key === 'cavite' ? this.cfg.caviteReturnInquiryDays
+      : this.cfg.mainReturnInquiryDays) * 86400e3;
+    const attemptAt = Number(t.returningTvVideoReminderAttemptAt) || 0;
+    const blocked = t.returningTvVideoLatestMid !== mid
+      || (attemptAt && this.now() - attemptAt < gapMs) || t.returningTvVideoReceived
+      || !startedAt || t.firstInquirySentAt || t.optedOut || t.standby
+      || t.handedOff || t.bookingStaffOnly || t.bookingDone || t.gateClosed
+      || t.bookingFormSent || Number(t.applianceQuickReplyMutedAt) >= ts
+      || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
+    if (blocked) {
+      this.log.info(`existing TV reminder skipped for ${short(psid)} on ${page?.key || 'page'}`);
+      return;
+    }
+    // No automatic retry after an ambiguous Meta send: at most once per inquiry.
+    t.returningTvVideoReminderAttemptAt = this.now();
+    this.store.flushNow();
+    try {
+      await this.graph.sendText(psid, inquiryReminder.REMINDER);
+      this.store.addTurn(psid, 'assistant', inquiryReminder.REMINDER, this.now(),
+        { provider: 'existing-tv-video-reminder', history: false });
+      this.log.info(`existing TV inquiry reminder sent on ${page?.key || 'page'} for ${short(psid)}`);
+    } catch (err) {
+      this.log.warn(`existing TV reminder send failed on ${page?.key || 'page'} (HTTP ${Number(err.status) || 'network'})`);
     }
   }
 
