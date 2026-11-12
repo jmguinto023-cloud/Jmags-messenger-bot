@@ -838,3 +838,38 @@ test('separate location and home service FAQs remain available after staff-manag
     assert.equal(withPage(page, () => s.app.store.thread('previous-booking-faq').bookingStaffOnly), true);
   } finally { await s.close(); }
 });
+
+
+test('live spelling Nag hohome service ba kayo triggers its fixed one-time reply', async () => {
+  const match = require('../src/appliance-one-time').match;
+  const cases = [
+    'Nag hohome service ba kayo?',
+    'Nag hohome service po ba kayo?',
+    'Nag ho-home service po ba kayo?',
+    'Naghohome service ba kayo?',
+    'Nag home service po ba kayo?',
+    'Naghohome-service ba kayo?',
+  ];
+  for (const question of cases) {
+    assert.deepEqual(match(question), ['homeservice'], question);
+  }
+  assert.deepEqual(match('Gumagawa ba kayo ng monitor?'), ['monitor']);
+  assert.deepEqual(match('Gumagawa ba kayo ng ref?'), ['other']);
+  assert.deepEqual(match('Pwede po ba bukas home service?'), []);
+});
+
+test('real customer home-service spelling works once when monitor and ref answered earlier', async () => {
+  const s = await setup({ BOT_ENABLED: 'false' });
+  try {
+    await s.post(MAIN, 'same-actual-customer', 'Gumagawa ba kayo ng monitor?');
+    await s.post(MAIN, 'same-actual-customer', 'Nag hohome service ba kayo?');
+    await s.post(MAIN, 'same-actual-customer', 'Gumagawa ba kayo ng ref?');
+    await s.post(MAIN, 'same-actual-customer', 'Nag hohome service ba kayo?');
+    assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [
+      require('../src/appliance-one-time').REPLIES.monitor,
+      require('../src/appliance-one-time').REPLIES.homeservice,
+      require('../src/appliance-one-time').REPLIES.other,
+    ]);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
