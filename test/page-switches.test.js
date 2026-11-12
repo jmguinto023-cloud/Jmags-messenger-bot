@@ -707,3 +707,55 @@ test('location intent recognizes Tagalog and English location wording', () => {
   assert.deepEqual(matcher('Taga San Pablo City ako'), []);
   assert.deepEqual(matcher('Nagawa ba kayo ng ref?'), ['other']);
 });
+
+
+test('home-service variations send exactly one fixed reply without continuous bot, booking or TV intake', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    const variants = [
+      'Naghohome service po ba kayo?',
+      'Pwde po ba kayo mag service?',
+      'Nagseservice po ba kayo?',
+      'Gumagawa ba kayo sa bahay?',
+      'Pwde ba kayo dito sa Calamba?',
+      'Kaya ba dito sa Batangas?',
+      'Kaya nyo ba gumawa sa bahay?',
+      'Gusto nyo ba guma dito?',
+    ];
+    const reply = require('../src/appliance-one-time').REPLIES.homeservice;
+    for (const question of variants) {
+      assert.deepEqual(require('../src/appliance-one-time').match(question), ['homeservice'], question);
+    }
+    await s.post(MAIN, 'home-new', variants[0]);
+    await s.post(MAIN, 'home-new', variants[1]);
+    await s.post(MAIN, 'home-new', variants[3]);
+    assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [reply]);
+    assert.equal(s.mock.calls.llm.length, 0);
+    assert.deepEqual(Object.keys(s.app.store.thread('home-new').applianceQuickReplyAttempts), ['homeservice']);
+    assert.match(s.app.bot.followUpSkip('home-new', s.app.store.thread('home-new'),
+      Date.now(), 23 * 3600e3), /one-time appliance reply/);
+  } finally { await s.close(); }
+});
+
+test('home service can answer mid-conversation independently on both Pages without switching continuous AI on', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'false', CAVITE_FIRST_INQUIRY_ENABLED: 'false' });
+  try {
+    await s.post(MAIN, 'returning-home', 'May tanong lang po');
+    await s.post(MAIN, 'returning-home', 'Pwede po ba kayo mag service?');
+    await s.post(CAVITE_PAGE_ID, 'returning-home', 'Kaya nyo ba gumawa sa bahay?');
+    assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [
+      require('../src/appliance-one-time').REPLIES.homeservice,
+      require('../src/appliance-one-time').REPLIES.homeservice,
+    ]);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('scheduling and non-question mentions do not trigger the new generic home-service greeting', () => {
+  const match = require('../src/appliance-one-time').match;
+  assert.deepEqual(match('pwede po ba bukas home service'), []);
+  assert.deepEqual(match('Sa bahay namin may Samsung TV'), []);
+  assert.deepEqual(match('Magkano home service checkup bukas?'), []);
+  assert.deepEqual(match('Nagawa ba kayo ng ref?'), ['other']);
+  assert.deepEqual(match('Saan po shop nyo?'), ['location']);
+});
