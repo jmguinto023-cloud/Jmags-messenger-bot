@@ -66,6 +66,24 @@ class Graph {
   typingOn(psid) {
     return this.call('POST', `${this.pageNode()}/messages`, { body: { recipient: { id: psid }, sender_action: 'typing_on' } });
   }
+  // Check unfiltered Messenger history, including attachment-only messages.
+  // A missing conversation or MID can mean the inbox hasn't indexed the webhook yet.
+  async firstInquiryStatus(psid, mid) {
+    const threads = await this.call('GET', `${this.pageNode()}/conversations`, {
+      params: { platform: 'messenger', user_id: psid, fields: 'id', limit: '2' },
+    });
+    if (!threads.data?.length) return 'pending';
+    if (threads.data.length !== 1 || threads.paging?.next) return 'existing';
+    const messages = await this.call('GET', `${encodeURIComponent(threads.data[0].id)}/messages`, {
+      params: { fields: 'id,from', limit: '50' },
+    });
+    const rows = messages.data || [];
+    if (messages.paging?.next) return 'existing';
+    if (!rows.some(row => row.id === mid)) return 'pending';
+    // Meta returns newest first. A burst of new messages can follow the initial one.
+    const oldest = rows.at(-1);
+    return oldest.id === mid && oldest.from?.id === psid ? 'first' : 'existing';
+  }
   async sendText(psid, text) {
     // Messenger text limit is 2000 characters; split long replies on line breaks.
     const chunks = [];

@@ -56,6 +56,38 @@ async function setup(extraEnv = {}) {
   return { app, mock, post, close };
 }
 
+test('standalone main greeting runs once for concurrent first messages even with AI off', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { fresh: { id: 'new-chat' }, old: { id: 'old-chat' } };
+    const row = (id, sender) => ({ id, from: { id: sender } });
+    s.mock.state.threadMessages = {
+      'new-chat': [row('sw.2', 'fresh'), row('sw.1', 'fresh')],
+      'old-chat': [row('sw.4', 'old'), row('previous', 'old')],
+    };
+    await Promise.all([s.post(MAIN, 'fresh', 'Hi'), s.post(MAIN, 'fresh', 'Samsung TV')]);
+    await s.post(MAIN, 'fresh', 'Still here');
+    await s.post(MAIN, 'old', 'Returning customer');
+    await s.post(CAVITE_PAGE_ID, 'other', 'Hi');
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].recipient.id, 'fresh');
+    assert.match(s.mock.calls.messages[0].message.text, /VIDEO ng ACTUAL issue/);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
+
+test('first greeting allows the usual reply handler to run on the very same inquiry', async () => {
+  const s = await setup({ MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { both: { id: 'both-chat' } };
+    s.mock.state.threadMessages = { 'both-chat': [{ id: 'sw.1', from: { id: 'both' } }] };
+    await s.post(MAIN, 'both', 'Hello po');
+    const replies = s.mock.calls.messages.map(call => call.message.text);
+    assert.equal(replies.filter(text => text.includes('VIDEO ng ACTUAL issue')).length, 1);
+    assert.ok(replies.some(text => !text.includes('VIDEO ng ACTUAL issue')));
+  } finally { await s.close(); }
+});
+
 test('migration creates bot_switches off, and only authenticated users can update', () => {
   const sql = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', '20261104124600_bot_switches.sql'), 'utf8');
   assert.match(sql, /create table if not exists public\.bot_switches/);

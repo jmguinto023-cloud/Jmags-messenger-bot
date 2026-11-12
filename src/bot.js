@@ -34,6 +34,18 @@ const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./
 const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
+const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng Jmags Appliances ang inquire nyo about sa TV nila. Maari po ba namin mahingi agad ang mga sumusunod upang mareplayan po agad kayo. 🙂
+
+➡️ SIZE NG TV:
+➡️ BRAND NG TV:
+➡️ ISSUE NG TV:
+➡️ REPAIRED O HINDI PA: (YES/NO)
+➡️ KAILAN NASIRA?:
+
+At pinaka Importante sa lahat ay makapag send po
+Kayo ng VIDEO ng ACTUAL issue ng TV after mafill up ang form. 
+
+Kailangan po namin lahat ito para mareplayan agad kayo ng mabilis dahil sa dami po ng volume ng Inquiries maraming Salamat po 🙂`;
 const {
   reviewPending, reviewIsCurrent, releaseOldReview, asksBarePrice, asksForACall, varyRepeated,
   asksReviewStatus, isUnclearDuringReview, mentionsOldBooking, explicitNewUnit,
@@ -321,9 +333,10 @@ class Bot {
       psid, text: spoken, ts, now: this.now(), isStandby,
       hasMedia: Boolean(media.length), forceReason,
     })) return;
-    this.store.addTurn(psid, 'user', logText, ts);
-
     const t = this.store.thread(psid);
+    const firstInquiry = this.cfg.mainFirstInquiryEnabled && currentPage()?.primary
+      && ev.message?.mid && !isStandby && !t.lastUserTs && !t.history?.length && !t.firstInquiryAttempt;
+    this.store.addTurn(psid, 'user', logText, ts);
     if (optOutReason(spoken)) {
       t.optedOut = true;
       this.cancelPending(psid);
@@ -334,6 +347,7 @@ class Bot {
     }
     t.followupFails = 0;
     t.followupNextAt = 0;
+    if (firstInquiry) this.safe(() => this.greetFirstInquiry(psid, t, ev.message.mid, ts));
     if (t.awaitingAgree && !media.length && bookingConfirm.isAgree(spoken)) {
       await this.onBookingAgree(psid, t, ts, isStandby);
       return;
@@ -496,6 +510,35 @@ class Bot {
       }
     }
     this.log.info(`standby msg from ${short(psid)} (another app owns thread) – no reply`);
+  }
+
+  // Separate from conversational AI. The branch can enable this single fixed reply
+  // while the ordinary reply and follow-up switches remain off.
+  async greetFirstInquiry(psid, t, mid, ts) {
+    const held = () => t.optedOut || t.standby || t.handedOff || t.bookingStaffOnly
+      || t.gateClosed || this.humanPaused(t) || this.now() - ts >= this.cfg.replyWindowHours * HOUR;
+    if (held()) return;
+    try {
+      for (const delay of [0, 1000, 3000]) {
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        if (held()) return;
+        const status = await this.graph.firstInquiryStatus(psid, mid);
+        if (status === 'existing') return;
+        if (status !== 'first') continue;
+        if (held() || t.firstInquiryAttempt) return;
+        // Commit the attempt before sending. A restart or uncertain Send API
+        // outcome must never cause a second greeting.
+        t.firstInquiryAttempt = mid;
+        this.store.flushNow();
+        await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
+        this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, this.now(), { provider: 'main-first-inquiry', history: false });
+        this.log.info('Main Branch first-inquiry greeting sent');
+        return;
+      }
+      this.log.warn('Main Branch first-inquiry greeting skipped: inbox history unavailable');
+    } catch (err) {
+      this.log.warn(`Main Branch first-inquiry greeting could not be verified or sent (HTTP ${err.status || 'unknown'})`);
+    }
   }
 
   // '' when this Page's ops switch is on. Unreadable is off (fail closed).

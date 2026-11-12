@@ -126,6 +126,7 @@ function loadConfig(env = process.env) {
     botTestChatEnabled: bool(env.BOT_TEST_CHAT_ENABLED, false),
     botTestChatCode: env.BOT_TEST_CHAT_CODE || '', // private simulation code; Render only
     botEnabled: bool(env.BOT_ENABLED, false),
+    mainFirstInquiryEnabled: bool(env.MAIN_FIRST_INQUIRY_ENABLED, false),
     testPsids: list(env.BOT_TEST_PSIDS),
     activeHours: env.BOT_ACTIVE_HOURS || '', // e.g. "18:00-08:00" (empty = 24/7)
     alwaysOnDays: list(env.BOT_ALWAYS_ON_DAYS).map((d) => d.toLowerCase().slice(0, 3)), // e.g. "sat,sun"
