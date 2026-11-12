@@ -428,7 +428,9 @@ class Bot {
       const skip = isStandby ? 'standby'
         : t.optedOut ? 'opted out'
         : t.gateClosed ? 'quote-gate closed'
-        : t.bookingStaffOnly ? 'booking handed to staff'
+        // Booking staff-only suppresses the conversational bot, but must NOT
+        // suppress a separately-approved one-time fixed FAQ answer. Never clear
+        // the booking flag or reactivate the continuous chatbot.
         : t.handedOff ? 'explicit staff handoff'
         : this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid) ? 'test allowlist'
         : this.now() - ts >= this.cfg.replyWindowHours * HOUR ? 'outside Messenger reply window'
