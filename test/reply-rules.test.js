@@ -203,3 +203,28 @@ test('a stale video review does not stall a new price question, and a repeat is 
     assert.equal(numbers, CALL_LINE);
   } finally { await s.close(); }
 });
+
+
+test('ref repair reply recognizes missing-a typo, sends once, and keeps AI disabled', async () => {
+  const appliance = require('../src/appliance-one-time');
+  const expected = appliance.REPLIES.other;
+  for (const phrase of [
+    'gumgawa ba kayo ng ref?', 'gumagawa ba kayo ng ref?',
+    'Gumagawa po ba kayo ng refrigerator?', 'Nagagawa po ba kayo ng ref?',
+  ]) {
+    assert.deepEqual(appliance.match(phrase), ['other'], phrase);
+    assert.equal(appliance.response(appliance.match(phrase)), expected);
+  }
+  assert.deepEqual(appliance.match('Nagawa na ba ang ref ko?'), []);
+  assert.deepEqual(appliance.match('gumgawa po ba kayo ng monitor?'), ['monitor']);
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'false' });
+  try {
+    await s.say('ref-typo', 'gumgawa ba kayo ng ref?');
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.messages[0].message.text, expected);
+    assert.equal(s.mock.calls.llm.length, 0);
+    await s.say('ref-typo', 'gumagawa po ba kayo ng refrigerator?');
+    assert.equal(s.mock.calls.messages.length, 1);
+    assert.equal(s.mock.calls.llm.length, 0);
+  } finally { await s.close(); }
+});
