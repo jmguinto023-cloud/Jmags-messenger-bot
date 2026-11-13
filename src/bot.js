@@ -48,6 +48,8 @@ const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng J
 At pinaka Importante sa lahat ay makapag send po Kayo ng VIDEO ng ACTUAL issue ng TV after mafill up ang form. 
 
 Kailangan po namin lahat ito para mareplayan agad kayo ng mabilis dahil sa dami po ng volume ng Inquiries maraming Salamat po 🙂`;
+// Cavite messages stay branch-specific; the Main template above remains unchanged.
+const CAVITE_FIRST_INQUIRY = MAIN_FIRST_INQUIRY.replace('Jmags Appliances', 'Jmags Appliances Cavite');
 const {
   reviewPending, reviewIsCurrent, releaseOldReview, asksBarePrice, asksForACall, varyRepeated,
   asksReviewStatus, isUnclearDuringReview, mentionsOldBooking, explicitNewUnit,
@@ -447,7 +449,7 @@ class Bot {
           for (const type of fresh) already[type] = String(ev.message.mid);
           this.store.flushNow(); // at-most-once even if Meta's send response is uncertain
           try {
-            const answer = applianceOneTime.response(fresh);
+            const answer = applianceOneTime.response(fresh, { pageKey: page?.key });
             await this.graph.sendText(psid, answer);
             this.store.addTurn(psid, 'assistant', answer, this.now(), {
               provider: 'appliance-one-time', history: false,
@@ -727,7 +729,8 @@ class Bot {
         if (returning) t.returnInquiryAttemptAt = ts;
         else t.firstInquiryAttempt = mid;
         this.store.flushNow();
-        await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
+        const intakeMessage = page?.key === 'cavite' ? CAVITE_FIRST_INQUIRY : MAIN_FIRST_INQUIRY;
+        await this.graph.sendText(psid, intakeMessage);
         t.firstInquirySentAt = this.now();
         if (returning) {
           t.returnInquiryStartedAt = ts;
@@ -737,8 +740,8 @@ class Bot {
         }
         const currentHistory = returning ? t.history.filter(h => h.ts >= ts) : t.history;
         t.firstInquiryComplete = inquiryReminder.recordEvidence(t, currentHistory);
-        this.store.addTurn(psid, 'assistant', MAIN_FIRST_INQUIRY, t.firstInquirySentAt, {
-          provider: returning ? 'main-returning-inquiry' : 'main-first-inquiry', history: false,
+        this.store.addTurn(psid, 'assistant', intakeMessage, t.firstInquirySentAt, {
+          provider: returning ? `${page?.key || 'main'}-returning-inquiry` : `${page?.key || 'main'}-first-inquiry`, history: false,
         });
         this.log.info(returning
           ? (adInquiry ? `${branch} returning ad inquiry greeting sent` : `${branch} returning inquiry greeting sent`)
