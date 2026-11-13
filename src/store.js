@@ -346,8 +346,12 @@ class Store {
   // Returns true if this message id was already processed (Meta can retry webhooks).
   seen(mid) {
     if (!mid) return false;
-    if (this.data.seenMids.includes(mid)) return true;
-    this.data.seenMids.push(mid);
+    const page = currentPage();
+    // Preserve Main Branch's historical seenMids values and dedup behavior;
+    // namespaced Cavite IDs can never suppress a Main webhook or vice versa.
+    const key = page && !page.primary && page.id ? `${page.id}:${mid}` : String(mid);
+    if (this.data.seenMids.includes(key)) return true;
+    this.data.seenMids.push(key);
     if (this.data.seenMids.length > 1000) this.data.seenMids.splice(0, 200);
     this.save();
     return false;
