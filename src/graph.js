@@ -25,6 +25,9 @@ class Graph {
     this.labelErrorLogged = false;
     this.conversationCache = new Map(); // psid -> { at, value }
     this.messageCache = new Map(); // psid -> { at, value }
+    this.profileCache = new Map(); // page:psid -> { at, name }; never share customer data across Pages
+    this.profilePending = new Map(); // collapse simultaneous lookups for one person
+    this.profilePermissionWarned = new Set(); // warn once per Page and HTTP status
   }
   accessToken() {
     const page = currentPage();
@@ -214,15 +217,50 @@ class Graph {
     this.businesses.set(node, { at: Date.now(), value });
     return value;
   }
-  // Best-effort public name. Missing permission (often HTTP 400 until Advanced Access)
-  // or a failed lookup just returns ''. Only the name field is requested. A photo is not.
+  // Customer profile names are optional. Meta can reject /{PSID}?fields=name
+  // (HTTP 400/403) even when sending Messenger messages works. Fall back to an
+  // inbox participant name rather than repeatedly calling an unavailable API.
+  // Cache/in-flight requests are Page-scoped so Cavite and Main never share data.
   async userName(psid) {
+    const id = String(psid || '').trim();
+    if (!id) return '';
+    const pageId = String(this.pageNode());
+    const key = `${pageId}:${id}`;
+    const cached = this.profileCache.get(key);
+    if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.name;
+    if (this.profilePending.has(key)) return this.profilePending.get(key);
+    const pending = (async () => {
+      let name = '';
+      try {
+        const json = await this.call('GET', encodeURIComponent(id), { params: { fields: 'name' } });
+        name = String(json.name || '').trim();
+      } catch (e) {
+        const status = Number(e.status) || 0;
+        if ([400, 403, 404].includes(status)) {
+          const warnKey = `${pageId}:${status}`;
+          if (!this.profilePermissionWarned.has(warnKey)) {
+            this.profilePermissionWarned.add(warnKey);
+            // Deliberately omit PSIDs, token values, and Graph response bodies.
+            this.log.warn(`customer profile API unavailable for Page ${pageId} (HTTP ${status}); falling back to inbox participants`);
+          }
+          try {
+            name = String((await this.findConversation(id))?.name || '').trim();
+          } catch {
+            name = '';
+          }
+        } else {
+          this.log.warn(`customer profile lookup temporary failure (HTTP ${status || 'network'})`);
+          return '';
+        }
+      }
+      this.profileCache.set(key, { at: Date.now(), name });
+      return name;
+    })();
+    this.profilePending.set(key, pending);
     try {
-      const json = await this.call('GET', encodeURIComponent(psid), { params: { fields: 'name' } });
-      return String(json.name || '').trim();
-    } catch (e) {
-      this.log.warn('profile lookup failed', e.message);
-      return '';
+      return await pending;
+    } finally {
+      if (this.profilePending.get(key) === pending) this.profilePending.delete(key);
     }
   }
   // Page Inbox history, including messages human staff sent. Up to 100, paging
