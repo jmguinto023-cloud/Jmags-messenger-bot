@@ -8,6 +8,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
 COPY test ./test
+# The regression suite asserts the bot_switches SQL migration is present.
+COPY supabase ./supabase
 COPY prompts ./prompts
 COPY knowledge ./knowledge
 COPY public ./public
