@@ -8,6 +8,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 
 // Graph Page id for Jmag's Appliances Cavite. The profile id is what some
 // Business Suite screens show; webhooks may use either, and both map here.
+const MAIN_PAGE_ID = '102622881557025'; // independently verified San Pablo Main Page
 const CAVITE_PAGE_ID = '1237499962773846';
 const CAVITE_PROFILE_ID = '61591823125793';
 const KNOWN_CAVITE_PAGE_ID = CAVITE_PAGE_ID;
@@ -17,9 +18,14 @@ function cleanId(v) {
   return String(v == null ? '' : v).trim();
 }
 
+function mainProtected(env) {
+  return /^(1|true|yes|on)$/i.test(String(env.JMAGS_MAIN_PROTECTED || '').trim());
+}
+
 function mainPage(env) {
   return {
-    id: cleanId(env.PAGE_ID),
+    // Main-protected Render services cannot be repointed to Cavite by env edits.
+    id: mainProtected(env) ? MAIN_PAGE_ID : cleanId(env.PAGE_ID),
     token: String(env.PAGE_ACCESS_TOKEN || ''),
     name: "JMAG's Appliances",
     key: 'main',
@@ -62,6 +68,8 @@ function upsert(pages, page) {
     return;
   }
   const prev = pages[i];
+  // Never let PAGES or CAVITE_PAGE_* replace the primary Main Page credentials.
+  if (prev.primary) return;
   pages[i] = {
     ...prev,
     name: page.name || prev.name,
@@ -76,6 +84,13 @@ function loadPages(env = {}) {
   const pages = [];
   const main = mainPage(env);
   if (main.id || main.token) pages.push(main);
+  if (mainProtected(env)) {
+    // This production service remains Main-only even when someone adds Cavite
+    // credentials, changes CAVITE_PAGE_ID, or injects PAGES JSON into Render.
+    // A Cavite service must use separate env, disk and independently verified webhook.
+    pages.push({ ...cavitePage(env), id: CAVITE_PAGE_ID, token: '' });
+    return pages;
+  }
   upsert(pages, cavitePage(env));
   let extra = [];
   if (env.PAGES) {
@@ -84,7 +99,15 @@ function loadPages(env = {}) {
       if (Array.isArray(parsed)) extra = parsed;
     } catch { extra = []; }
   }
-  for (const raw of extra) upsert(pages, asPage(raw));
+  for (const raw of extra) {
+    const item = asPage(raw);
+    if (!item || item.key === 'main' || item.id === main.id) continue;
+    upsert(pages, item);
+  }
+  // A secondary Page must never borrow the Main token, even by copy/paste.
+  for (const page of pages) {
+    if (!page.primary && page.token && main.token && page.token === main.token) page.token = '';
+  }
   return pages;
 }
 
@@ -124,6 +147,8 @@ function storageKey(psid, page) {
 }
 
 module.exports = {
+  MAIN_PAGE_ID,
+  mainProtected,
   CAVITE_PAGE_ID,
   CAVITE_PROFILE_ID,
   KNOWN_CAVITE_PAGE_ID,
