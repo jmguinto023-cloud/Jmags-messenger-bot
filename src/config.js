@@ -2,7 +2,7 @@
 // All settings come from environment variables. See .env.example for explanations.
 const path = require('node:path');
 const { DEFAULT_TIPS } = require('./messages');
-const { loadPages, mainProtected, MAIN_PAGE_ID } = require('./pages');
+const { loadPages, mainProtected, caviteOnly, MAIN_PAGE_ID, CAVITE_PAGE_ID } = require('./pages');
 
 function bool(v, def = false) {
   if (v === undefined || v === '') return def;
@@ -33,8 +33,9 @@ function loadConfig(env = process.env) {
     verifyToken: env.VERIFY_TOKEN || '',
     appSecret: env.APP_SECRET || '',
     appId: String(env.APP_ID || ''),
-    pageId: mainProtected(env) ? MAIN_PAGE_ID : String(env.PAGE_ID || ''),
-    pageAccessToken: env.PAGE_ACCESS_TOKEN || '',
+    pageId: caviteOnly(env) ? CAVITE_PAGE_ID : (mainProtected(env) ? MAIN_PAGE_ID : String(env.PAGE_ID || '')),
+    // Cavite service has no fallback to the Main Page token.
+    pageAccessToken: caviteOnly(env) ? '' : (env.PAGE_ACCESS_TOKEN || ''),
     // Main Page plus any others (Cavite). pageId/pageAccessToken stay the main Page.
     pages: loadPages(env),
     // Ops-dashboard per-Page on/off. Service role reads bot_switches. Empty stays off.
@@ -127,6 +128,7 @@ function loadConfig(env = process.env) {
     botTestChatCode: env.BOT_TEST_CHAT_CODE || '', // private simulation code; Render only
     // Main production lock: independent of Cavite env and PAGES JSON.
     mainProtected: mainProtected(env),
+    caviteOnly: caviteOnly(env),
     botEnabled: bool(env.BOT_ENABLED, false),
     mainFirstInquiryEnabled: bool(env.MAIN_FIRST_INQUIRY_ENABLED, false),
     // Fixed monitor/ref/microwave answers work even when the continuous AI bot is off.
