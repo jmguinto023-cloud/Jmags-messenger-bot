@@ -47,3 +47,27 @@ Previously verified Main welcome log: November 13, 2026 10:37 AM Philippine time
 - [ ] Changes classified as Completed, In Progress, Not Executed, or Failed based on evidence.
 
 Never publish actual access tokens, app secrets, customer PSIDs, or conversation records in GitHub, screenshots, logs or chat.
+
+## Owner-approved permanent JMAGS Main Branch bot standard (November 13, 2026)
+
+**This section records the owner's standing instructions. Do not change this baseline unless the owner explicitly approves a revision.** Keep it in effect across maintenance, token rotation, deployment, code refactoring, future agents, and Cavite setup.
+
+1. **Saved reply remains exactly as approved.** Staff sends:
+
+   > Hello Mam/Sir eto po ang schedule form niyo para ma book na po kayo paki click ng link sa ibaba at fill upan para sa details salamat po 😊
+
+   Do not require staff to paste a plain booking URL or replace this with a link-bearing saved-reply template.
+
+2. **Automatic follow-up link is separate.** Detect the staff/Page Inbox `message_echoes` event for that saved reply. Send **one signed, customer-specific Main Branch booking URL in a separate Messenger message** addressed to the same PSID: `https://jmagscutomerform.netlify.app/` with signed page/customer parameters. Maintain 10-minute anti-duplicate protection and Meta's permitted messaging window. Do not interpret the bot's own outbound echo as another staff saved reply.
+
+3. **Keep independent automations independent.** Main's one-time welcome/repeat-inquiry rules, fixed FAQ and location/home-service/monitor replies, optional video reminders, booking acknowledgements, and staff handoff remain separately controlled. **`BOT_ENABLED=false` is the approved setting for the continuous AI chatter**; do not turn it on to fix a booking-link issue. A legitimate staff answer may pause conversational automation but must not remove the independently approved saved-reply link function.
+
+4. **Strict Main/Cavite isolation.** Keep `JMAGS_MAIN_PROTECTED=true`, Main Page ID `102622881557025`, Main's `PAGE_ACCESS_TOKEN`, its webhook and its persistent `/data` intact. Reject/ignore Cavite traffic in Main. Cavite Page ID `1237499962773846` and credentials, message rules, deploys, webhook configuration, and customer records must be managed independently. No cross-branch credential fallback, token overwrite, shared customer state, or unapproved webhook repointing.
+
+5. **Credentials should be durable, not assumed immortal.** Prefer a securely held authorized Main Page token without a scheduled expiration when Meta supports it. Meta can still revoke tokens, permissions can change, and app settings can become invalid. Verify `/health` exposes `messengerAuth: valid` and use read-only monitoring to alert on failures. Never commit tokens, transmit secrets in chat, or silently replace the working token. Rotate/repair only the relevant Main credential with explicit owner authorization.
+
+6. **Owner approval required for behavior changes.** Do not modify the saved reply, trigger phrases, reply templates, messaging windows, booking URLs, throttles, page mappings, secrets, automation switches, or user data unless the owner specifically approves that change. Bug repairs must be minimal, tested and reported with exact results; do not represent a proposed, untested, or unverified change as completed.
+
+7. **Release regression gates.** Before any production behavior change, run the existing `npm test` suite, including `test/booking-confirm.test.js` and `test/main-branch-protection.test.js`. Preserve tests for: exact saved-reply trigger, separately delivered signed Main link, duplicate suppression, no send outside the Messenger window, no auto-trigger from bot echoes, Main/Cavite isolation, and continuous AI remaining off. After an authorized deploy, check Render health, Page token validity, and a real opt-in customer test. No live customer messages solely for testing without owner consent.
+
+**Verification limit:** Source-code safeguards and monitoring cannot make a Meta token genuinely non-revocable or prevent every possible outage. They do prevent accidental code/config regressions and enable prompt detection. Maintain honest status labels: Completed only with execution and evidence; otherwise In progress, Not executed, or Failed.
