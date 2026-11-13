@@ -831,7 +831,7 @@ test('separate location and home service FAQs remain available after staff-manag
     await s.post(CAVITE_PAGE_ID, 'previous-booking-faq', 'Saan po kayo located?');
     await s.post(CAVITE_PAGE_ID, 'previous-booking-faq', 'Naghohome service po ba kayo?');
     assert.deepEqual(s.mock.calls.messages.map(c => c.message.text), [
-      require('../src/appliance-one-time').REPLIES.location,
+      require('../src/appliance-one-time').response(['location'], { pageKey: 'cavite' }),
       require('../src/appliance-one-time').REPLIES.homeservice,
     ]);
     assert.equal(s.mock.calls.llm.length, 0);
