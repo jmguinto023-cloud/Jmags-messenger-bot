@@ -17,14 +17,15 @@ const CAVITE = '1237499962773846';
 test('price inquiries get a clear fixed quote-intake answer, never a made-up rate', () => {
   for (const question of [
     'Magkano ang serbisyo?',
-    'Magkano po pagawa ng TV?',
-    'Hm po?',
-    'How much for TV repair?',
-    'What is the service fee?',
-    'price po?',
+    'Magkano po ang serbisyo?',
+    'How much for service?',
+    'price ng service?',
   ]) {
     assert.deepEqual(faq.match(question), ['price'], question);
   }
+  // Existing generic repair quotes continue through the regular approval gates.
+  assert.deepEqual(faq.match('Magkano po pagawa ng TV?'), []);
+  assert.deepEqual(faq.match('Hm po?'), []);
   assert.deepEqual(faq.match('Hello po'), []);
   assert.deepEqual(faq.match('Naghohome service po ba kayo?'), ['homeservice']);
   assert.match(faq.REPLIES.price, /brand/i);
