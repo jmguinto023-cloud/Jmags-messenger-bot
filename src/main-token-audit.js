@@ -43,6 +43,14 @@ async function auditMainToken(env, log, fetcher = fetch) {
   conversationUrl.searchParams.set('fields', 'id');
   conversationUrl.searchParams.set('limit', '1');
   const conversation = await read(conversationUrl, { Authorization: 'Bearer ' + token });
+  // Read-only managed Page ID verification. Never request or log Page tokens.
+  const accountsUrl = new URL(base + '/me/accounts');
+  accountsUrl.searchParams.set('fields', 'id,name');
+  accountsUrl.searchParams.set('limit', '100');
+  const accounts = await read(accountsUrl, { Authorization: 'Bearer ' + token });
+  const managedMainPages = (Array.isArray(accounts.body?.data) ? accounts.body.data : [])
+    .filter((p) => typeof p?.name === 'string' && /^jmag['’]?s appliances$/i.test(p.name.trim()));
+  const managedMainId = managedMainPages.length === 1 ? numeric(managedMainPages[0].id) : 'unknown';
   const scopes = Array.isArray(meta.scopes) ? meta.scopes : [];
   const authId = numeric(meta.app_id);
   const appMatch = authId !== 'unknown' ? String(authId === appId) : 'unknown';
@@ -58,6 +66,10 @@ async function auditMainToken(env, log, fetcher = fetch) {
     'expected_page_id=' + numeric(expected),
     'page_match=' + pageMatch,
     'main_name_match=' + nameMatchesMain,
+    'managed_pages_http=' + accounts.status,
+    'managed_main_page_id=' + managedMainId,
+    'managed_main_matches_expected=' + (managedMainId !== 'unknown' ? String(managedMainId === expected) : 'unknown'),
+    'pages_show_list=' + (scopes.includes('pages_show_list') ? 'present' : 'unconfirmed'),
     'pages_messaging=' + (scopes.includes('pages_messaging') ? 'present' : 'unconfirmed'),
     'pages_manage_metadata=' + (scopes.includes('pages_manage_metadata') ? 'present' : 'unconfirmed'),
     'me_http=' + me.status,
