@@ -62,6 +62,11 @@ if (require.main === module) {
     ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')
     : 'off'}`);
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'} | pages=${livePages}${heldPages.length ? ` | no-token=${heldPages.join('+')}` : ''}`));
+  // Operator-only read-only Meta token identity audit; does not alter message handling.
+  if (process.env.JMAGS_MAIN_TOKEN_AUDIT === 'true') {
+    const { auditMainToken } = require('./main-token-audit');
+    auditMainToken(process.env, log).catch(() => log.warn('MAIN_TOKEN_AUDIT=unexpected_failure'));
+  }
   if (process.env.AI_SMOKE_TEST_ON_STARTUP === 'true') {
     // Synthetic-only connectivity check. Its own guard refuses to run if
     // customer replies or external customer routing are enabled.
