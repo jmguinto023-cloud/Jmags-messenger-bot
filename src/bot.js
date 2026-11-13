@@ -387,7 +387,9 @@ class Bot {
     }
     const t = this.store.thread(psid);
     const applianceTypes = this.cfg.applianceOneTimeReplyEnabled && ev.message?.mid
-      && !media.length && !forceReason ? applianceOneTime.match(spoken) : [];
+      && !media.length && !forceReason
+      ? applianceOneTime.match(spoken).filter(type => type !== 'price' || !this.cfg.botEnabled)
+      : [];
     const adInquiry = isAdInquiry(ev);
     // A click-to-Messenger ad can arrive as a first postback instead of text.
     // Never send on a referral-only event: a customer must actually interact.
