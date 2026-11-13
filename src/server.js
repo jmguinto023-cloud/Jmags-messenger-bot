@@ -315,6 +315,14 @@ function createServer({ cfg, bot, log }) {
         let body;
         try { body = JSON.parse(raw.toString('utf8')); } catch { return send(400, 'Bad JSON'); }
         if (body.object !== 'page') return send(404, 'Not a page event');
+        // Cavite-only privacy-safe delivery diagnostic. Never log customer IDs,
+        // message content, access tokens, or Meta's signed payload.
+        if (cfg.caviteOnly) {
+          const entries = Array.isArray(body.entry) ? body.entry : [];
+          const caviteEntries = entries.filter(e => String(e?.id || '') === String(cfg.pageId)).length;
+          const eventCount = entries.reduce((sum, e) => sum + (Array.isArray(e?.messaging) ? e.messaging.length : 0), 0);
+          log.info(`CAVITE_SIGNED_WEBHOOK_RECEIVED entries=${caviteEntries} events=${eventCount}`);
+        }
         send(200, 'EVENT_RECEIVED'); // answer Meta right away, work continues in background
         setImmediate(() => bot.handleWebhook(body));
       });
