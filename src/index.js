@@ -7,6 +7,7 @@ const { LLM } = require('./llm');
 const { Bot } = require('./bot');
 const { Push } = require('./push');
 const { createServer } = require('./server');
+const { withPage } = require('./pages');
 
 function build(env = process.env) {
   const cfg = loadConfig(env);
@@ -66,6 +67,31 @@ if (require.main === module) {
     ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')
     : 'off'}`);
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'} | pages=${livePages}${heldPages.length ? ` | no-token=${heldPages.join('+')}` : ''}`));
+  // Read-only Page token probe every 15 minutes. Do not confuse HTTP /health
+  // with Messenger availability: the server can be up while OAuth is expired.
+  // No customer messages or credentials are sent to the logs.
+  const checkMessengerTokens = async () => {
+    for (const page of cfg.pages || []) {
+      if (!page.id || !page.token) continue;
+      const prev = app.graph.tokenHealth.get(page.id)?.status || 'unchecked';
+      try {
+        await withPage(page, () => app.graph.call('GET', `${page.id}/conversations`, {
+          params: { fields: 'id', limit: '1' },
+        }));
+        if (prev !== 'valid') log.info(`Messenger token check OK for ${page.key || 'page'}`);
+      } catch (e) {
+        const expired = Number(e.body?.error?.code) === 190;
+        const status = expired ? 'expired' : 'error';
+        app.graph.tokenHealth.set(page.id, { status, checkedAt: new Date().toISOString() });
+        if (prev !== status) {
+          log.warn(`Messenger token check ${status} for ${page.key || 'page'} (HTTP ${Number(e.status) || 'network'})`);
+        }
+      }
+    }
+  };
+  checkMessengerTokens().catch(() => log.warn('Messenger token health probe unexpected failure'));
+  setInterval(() => checkMessengerTokens().catch(() => {}), 15 * 60 * 1000).unref();
+
   // Operator-only read-only Meta token identity audit; does not alter message handling.
   if (process.env.JMAGS_MAIN_TOKEN_AUDIT === 'true') {
     const { auditMainToken } = require('./main-token-audit');
