@@ -7,11 +7,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+COPY test ./test
 COPY prompts ./prompts
 COPY knowledge ./knowledge
 COPY public ./public
 # Catch missing runtime files during build, before serving Messenger webhooks.
 RUN node -e "require('./src/index')"
+# Cavite-only release gate: block deployment if any isolation or Messenger regression test fails.
+RUN npm test
 RUN mkdir -p /data && chown -R node:node /app /data
 USER node
 EXPOSE 3000
