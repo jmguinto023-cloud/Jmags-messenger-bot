@@ -24,7 +24,9 @@ if (require.main === module) {
   const app = build();
   const { cfg, log } = app;
   const aiConfigured = cfg.aiRouterEnabled && app.llm.configured();
-  const mandatory = ['VERIFY_TOKEN', 'APP_SECRET', 'APP_ID', 'PAGE_ACCESS_TOKEN'];
+  const mandatory = cfg.caviteOnly
+    ? ['VERIFY_TOKEN', 'APP_SECRET', 'APP_ID', 'CAVITE_PAGE_ACCESS_TOKEN']
+    : ['VERIFY_TOKEN', 'APP_SECRET', 'APP_ID', 'PAGE_ACCESS_TOKEN'];
   const missing = mandatory.filter((k) => !process.env[k]);
   if (!aiConfigured) missing.push(...['LLM_BASE_URL', 'LLM_MODEL'].filter((k) => !process.env[k]));
   if (missing.length) log.warn(`Missing env: ${missing.join(', ')} – bot will not work fully until set.`);
@@ -58,6 +60,7 @@ if (require.main === module) {
   const livePages = (cfg.pages || []).filter((p) => p.token).map((p) => p.key).join('+') || 'none';
   const heldPages = (cfg.pages || []).filter((p) => p.id && !p.token).map((p) => p.key);
   if (cfg.mainProtected) log.info('Main Branch protection: ON | Main Page ID pinned | Cavite credentials and events ignored');
+  if (cfg.caviteOnly) log.info('Cavite isolation: ON | Cavite Page ID pinned | Main Page credentials and events ignored');
   log.info(`Main Branch first-inquiry greeting: ${cfg.mainFirstInquiryEnabled && livePages.split('+').includes('main') ? 'enabled' : 'off'}`);
   log.info(`Cavite fixed inquiry greeting: ${cfg.caviteFirstInquiryEnabled
     ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')

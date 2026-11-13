@@ -31,7 +31,10 @@ function match(text) {
   if (OTHER.test(s)) out.push('other');
   return out;
 }
-function response(types) {
-  return types.filter(t => Object.hasOwn(REPLIES, t)).map(t => REPLIES[t]).join('\n\n');
+const CAVITE_LOCATION = 'We are located in General Trias, Cavite po 😊';
+function response(types, { pageKey = 'main' } = {}) {
+  return types.filter(t => Object.hasOwn(REPLIES, t))
+    .map(t => pageKey === 'cavite' && t === 'location' ? CAVITE_LOCATION : REPLIES[t])
+    .join('\n\n');
 }
 module.exports = { match, response, REPLIES };
