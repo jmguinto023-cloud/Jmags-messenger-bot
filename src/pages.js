@@ -22,6 +22,10 @@ function mainProtected(env) {
   return /^(1|true|yes|on)$/i.test(String(env.JMAGS_MAIN_PROTECTED || '').trim());
 }
 
+function caviteOnly(env) {
+  return /^(1|true|yes|on)$/i.test(String(env.JMAGS_CAVITE_ONLY || '').trim());
+}
+
 function mainPage(env) {
   return {
     // Main-protected Render services cannot be repointed to Cavite by env edits.
@@ -81,6 +85,12 @@ function upsert(pages, page) {
 }
 
 function loadPages(env = {}) {
+  // Cavite has its own Render service, credentials, and DATA_DIR.
+  // Fail closed if someone tries to enable both production branch locks.
+  if (caviteOnly(env)) {
+    if (mainProtected(env)) return [];
+    return [{ ...cavitePage(env), id: CAVITE_PAGE_ID }];
+  }
   const pages = [];
   const main = mainPage(env);
   if (main.id || main.token) pages.push(main);
@@ -149,6 +159,7 @@ function storageKey(psid, page) {
 module.exports = {
   MAIN_PAGE_ID,
   mainProtected,
+  caviteOnly,
   CAVITE_PAGE_ID,
   CAVITE_PROFILE_ID,
   KNOWN_CAVITE_PAGE_ID,
