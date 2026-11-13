@@ -28,6 +28,7 @@ class Graph {
     this.profileCache = new Map(); // page:psid -> { at, name }; never share customer data across Pages
     this.profilePending = new Map(); // collapse simultaneous lookups for one person
     this.profilePermissionWarned = new Set(); // warn once per Page and HTTP status
+    this.tokenHealth = new Map(); // pageId -> { status, checkedAt } (never contains token)
   }
   accessToken() {
     const page = currentPage();
@@ -51,6 +52,7 @@ class Graph {
     return u;
   }
   async call(method, pathPart, { body, params } = {}) {
+    const pageId = this.pageNode();
     const res = await fetch(this.url(pathPart, params), {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -60,10 +62,17 @@ class Graph {
     const text = await res.text();
     let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
     if (!res.ok) {
+      // Meta OAuth 190 means an invalid or expired credential. This is the
+      // principal reason a healthy Render service can still fail to reply.
+      // Record only a coarse Page-scoped state, never the raw access token.
+      if (Number(json?.error?.code) === 190) {
+        this.tokenHealth.set(pageId, { status: 'expired', checkedAt: new Date().toISOString() });
+      }
       const err = new Error(`Graph ${method} ${pathPart} failed: ${res.status} ${json?.error?.message || text.slice(0, 200)}`);
       err.status = res.status; err.body = json;
       throw err;
     }
+    this.tokenHealth.set(pageId, { status: 'valid', checkedAt: new Date().toISOString() });
     return json;
   }
   typingOn(psid) {
