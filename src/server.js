@@ -61,6 +61,9 @@ function createServer({ cfg, bot, log }) {
 
     if (req.method === 'GET' && url.pathname === '/health') {
       const now = new Date(bot.now());
+      const primaryTokenPage = (cfg.pages || []).find(p => p && p.token && p.primary)
+        || (cfg.pages || []).find(p => p && p.token);
+      const tokenState = primaryTokenPage && bot.graph?.tokenHealth?.get(primaryTokenPage.id);
       return sendJson(200, {
         ok: true,
         botEnabled: cfg.botEnabled,
@@ -69,6 +72,10 @@ function createServer({ cfg, bot, log }) {
         activeNow: activeNow(cfg, now),
         llmErrors: bot.llm ? bot.llm.errors : 0,
         llmLastError: bot.llm ? bot.llm.lastError : '',
+        // Server health and Messenger authorization are independent. Never
+        // expose the Page token, customer IDs or raw Meta error text here.
+        messengerAuth: primaryTokenPage ? (tokenState?.status || 'unchecked') : 'missing',
+        messengerAuthCheckedAt: tokenState?.checkedAt || null,
         bookingWebhook: cfg.netlifyWebhookSecret ? 'configured' : 'missing',
       });
     }
