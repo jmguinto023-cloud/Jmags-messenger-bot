@@ -57,6 +57,7 @@ if (require.main === module) {
   }
   const livePages = (cfg.pages || []).filter((p) => p.token).map((p) => p.key).join('+') || 'none';
   const heldPages = (cfg.pages || []).filter((p) => p.id && !p.token).map((p) => p.key);
+  if (cfg.mainProtected) log.info('Main Branch protection: ON | Main Page ID pinned | Cavite credentials and events ignored');
   log.info(`Main Branch first-inquiry greeting: ${cfg.mainFirstInquiryEnabled && livePages.split('+').includes('main') ? 'enabled' : 'off'}`);
   log.info(`Cavite fixed inquiry greeting: ${cfg.caviteFirstInquiryEnabled
     ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')
