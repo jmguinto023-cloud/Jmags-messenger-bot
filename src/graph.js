@@ -172,27 +172,35 @@ class Graph {
   // dashboard refresh does not call Graph again. Null on error or an empty list.
   // participants is requested so a missing profile name can still be shown. If that
   // field is rejected, the lookup is repeated without it.
-  async findConversation(psid) {
+  async findConversation(psid, { strict = false } = {}) {
     const id = String(psid || '');
     if (!id) return null;
     const key = `${this.pageNode()}:${id}`;
     const hit = this.conversationCache.get(key);
-    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000 && (!strict || hit.value)) return hit.value;
     const base = { platform: 'messenger', user_id: id };
     let json = null;
+    let lookupError = null;
     try {
       json = await this.call('GET', `${this.pageNode()}/conversations`, {
         params: { ...base, fields: 'id,link,updated_time,participants' },
       });
     } catch (e) {
+      lookupError = e;
       this.log.warn('conversation lookup with participants failed', e.message);
       try {
         json = await this.call('GET', `${this.pageNode()}/conversations`, {
           params: { ...base, fields: 'id,link,updated_time' },
         });
       } catch (e2) {
+        lookupError = e2;
         this.log.warn('conversation lookup failed', e2.message);
       }
+    }
+    if (strict && !json) {
+      const err = new Error('Cavite inbox lookup unavailable');
+      err.status = Number(lookupError && lookupError.status) || 0;
+      throw err;
     }
     let value = null;
     const row = json && (json.data || [])[0];
@@ -205,6 +213,7 @@ class Graph {
         participants: participantRows(row),
       };
     }
+    if (strict && !value) throw new Error('Cavite inbox conversation not yet indexed');
     this.conversationCache.set(key, { at: Date.now(), value });
     return value;
   }
@@ -274,14 +283,20 @@ class Graph {
   }
   // Page Inbox history, including messages human staff sent. Up to 100, paging
   // through /{conversation-id}/messages, across the last 90 days.
-  // Cached for a minute. A miss or a Graph error returns [] and does not throw.
-  async recentMessages(psid, { limit = 100, withinMs = 90 * 86400e3 } = {}) {
+  // Strict Cavite mode treats Meta errors and missing inbox conversations as unsafe;
+  // Page-authored lines are classified by the bot, not assumed to be staff.
+  // Legacy mode keeps the original Main behavior unchanged.
+  async recentMessages(psid, { limit = 100, withinMs = 90 * 86400e3, strict = false } = {}) {
     const id = String(psid || '');
-    if (!id) return [];
-    const key = `${this.pageNode()}:${id}`;
+    if (!id) {
+      if (strict) throw new Error('Cavite inbox customer ID unavailable');
+      return [];
+    }
+    const key = `${this.pageNode()}:${id}:${strict ? 'strict' : 'legacy'}`;
     const hit = this.messageCache.get(key);
     if (hit && Date.now() - hit.at < 60 * 1000) return hit.value;
-    const convo = await this.findConversation(id);
+    const convo = await this.findConversation(id, { strict });
+    if (strict && (!convo || !convo.id)) throw new Error('Cavite inbox conversation not yet indexed');
     let value = [];
     if (convo && convo.id) {
       try {
@@ -295,8 +310,15 @@ class Graph {
               params: { fields: 'message,from,created_time', limit: String(Math.min(50, limit)) },
             });
           } else {
-            const res = await fetch(nextUrl);
-            if (!res.ok) break;
+            const res = await fetch(nextUrl, { signal: AbortSignal.timeout(10000) });
+            if (!res.ok) {
+              if (strict) {
+                const err = new Error('Cavite inbox history pagination unavailable');
+                err.status = res.status;
+                throw err;
+              }
+              break;
+            }
             json = await res.json();
           }
           first = false;
@@ -312,13 +334,16 @@ class Graph {
           const ts = Date.parse(row && row.created_time) || 0;
           if (!text || !ts || ts < cutoff) continue;
           const fromId = String((row.from && row.from.id) || '');
+          if (strict && !fromId) throw new Error('Cavite inbox message sender unavailable');
           const fromPage = Boolean(pageId && fromId === pageId);
-          value.push({ role: fromPage ? 'assistant' : 'user', content: text, ts, via: fromPage ? 'ivan' : '' });
+          value.push({ role: fromPage ? 'assistant' : 'user', content: text, ts,
+            via: fromPage ? (strict ? 'page' : 'ivan') : '' });
         }
         value.sort((a, b) => a.ts - b.ts);
         if (value.length > limit) value = value.slice(-limit);
       } catch (e) {
-        this.log.warn('inbox history lookup failed', e.message);
+        this.log.warn('inbox history lookup failed', strict ? `HTTP ${Number(e.status) || 'network'}` : e.message);
+        if (strict) throw e;
         value = [];
       }
     }
