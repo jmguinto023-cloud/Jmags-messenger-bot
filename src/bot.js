@@ -1028,14 +1028,25 @@ class Bot {
     return this.replyWithAI(psid, t.lastUserTs || now);
   }
 
-  // Pull Ivan's Page Inbox lines from the last 7 days so we do not ask again.
+  // Read Page Inbox before Cavite AI replies; never treat Meta failure as empty history.
+  // Main Branch retains the original permissive Graph history behavior.
   async loadInboxHistory(psid) {
+    const strict = Boolean(this.cfg.caviteOnly);
     let rows = [];
-    try { rows = await this.graph.recentMessages(psid, { limit: 100, withinMs: 90 * 86400e3 }); } catch (e) {
-      this.log.warn('inbox history failed', e.message);
-      return;
+    try {
+      rows = await this.graph.recentMessages(psid, { limit: 100, withinMs: 90 * 86400e3, strict });
+    } catch (e) {
+      this.log.warn(`inbox history failed (HTTP ${Number(e.status) || 'network'}); Cavite AI held for staff`);
+      if (strict) {
+        const t = this.store.thread(psid);
+        t.aiNeedsIvan = true;
+        t.handoffReason = 'Cavite inbox context unavailable';
+        this.store.save();
+        return false;
+      }
+      return true;
     }
-    if (!rows.length) return;
+    if (!rows.length) return true;
     const t = this.store.thread(psid);
     const have = new Set((t.history || []).map((h) => `${h.role}|${String(h.content || '').trim()}|${Math.floor((h.ts || 0) / 60000)}`));
     let added = 0;
@@ -1044,11 +1055,23 @@ class Bot {
       if (have.has(key)) continue;
       have.add(key);
       const turn = { role: row.role, content: row.content, ts: row.ts };
-      if (row.via) turn.via = row.via;
+      if (strict && row.role === 'assistant' && row.via === 'page') {
+        // Meta's from=Page cannot reveal if staff or a bot authored the line.
+        // Only a known local send or a recognized auto-template skips staff pause.
+        const localBotSend = (t.history || []).some((h) =>
+          h.role === 'assistant' && h.via !== 'ivan'
+          && String(h.content || '').trim() === String(row.content || '').trim()
+          && Math.abs(Number(h.ts || 0) - Number(row.ts || 0)) <= 5 * 60 * 1000);
+        const knownAutomation = localBotSend
+          || isAutomatedEchoText(row.content, this.cfg.automatedEchoPatterns)
+          || String(row.content || '').trim() === CAVITE_FIRST_INQUIRY.trim()
+          || String(row.content || '').trim() === inquiryReminder.REMINDER.trim();
+        turn.via = knownAutomation ? 'auto' : 'ivan';
+      } else if (row.via) turn.via = row.via;
       t.history.push(turn);
       added += 1;
     }
-    if (!added) return;
+    if (!added) return true;
     t.history.sort((a, b) => (a.ts || 0) - (b.ts || 0));
     const max = Math.max((this.cfg.historyTurns || 20) * 2, 100);
     if (t.history.length > max) t.history.splice(0, t.history.length - max);
@@ -1060,6 +1083,22 @@ class Bot {
       t.pauseSource = 'staff inbox history';
     }
     this.store.save();
+    return true;
+  }
+
+  // A scheduled Cavite follow-up must not rely on potentially stale local state.
+  // Unknown context, staff takeover, or more recent unseen customer text blocks it.
+  async caviteFollowUpContextOk(psid) {
+    if (!this.cfg.caviteOnly) return true;
+    if (await this.loadInboxHistory(psid) === false) return false;
+    const t = this.store.thread(psid);
+    if (t.optedOut || t.handedOff || t.standby || this.humanPaused(t, this.now())) return false;
+    const last = Number(t.lastUserTs) || 0;
+    if (!last || this.now() - last >= this.cfg.replyWindowHours * HOUR) return false;
+    const latestRemoteUser = (t.history || [])
+      .filter((h) => h && h.role === 'user' && h.ts)
+      .reduce((max, h) => Math.max(max, Number(h.ts) || 0), 0);
+    return latestRemoteUser <= last + 30 * 1000;
   }
 
   // A reply that only repeats known facts is thrown out. One rewrite, then the next question.
@@ -1127,7 +1166,7 @@ class Bot {
   }
 
   async replyWithAI(psid, ts) {
-    await this.loadInboxHistory(psid);
+    if (await this.loadInboxHistory(psid) === false) return;
     for (let attempt = 0; attempt < 4; attempt++) {
       const rev = this.rev.get(this.slot(psid)) || 0;
       if (this.repliedRev.get(this.slot(psid)) === rev) return; // a newer pass already covered these messages
@@ -2489,6 +2528,10 @@ class Bot {
       return;
     }
 
+    if (!await this.caviteFollowUpContextOk(psid)) {
+      if (this.cfg.caviteOnly) this.log.info(`video follow-up held for ${short(psid)}: context or staff unverified`);
+      return;
+    }
     t.videoFollowupPending = true;
     this.store.save();
     try {
@@ -2839,6 +2882,8 @@ class Bot {
     const skip = this.followUpSkip(psid, t, now, windowMs);
     if (skip) return 'skip';
     if (await this.pageSwitchReason(psid)) return 'skip';
+    if (!await this.caviteFollowUpContextOk(psid)) return 'skip';
+    if (this.followUpSkip(psid, t, this.now(), windowMs)) return 'skip';
     const count = t.followupCount || 0;
     const last = t.history[t.history.length - 1];
     if (last && last.role === 'user') {
