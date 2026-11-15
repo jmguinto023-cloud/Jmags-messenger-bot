@@ -98,3 +98,72 @@ test('Cavite-only service accepts Cavite FAQ but ignores a signed Main webhook',
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const { Graph } = require('../src/graph');
+const { Bot } = require('../src/bot');
+
+test('Cavite strict Graph history fails closed on inbox lookup error', async () => {
+  const graph = new Graph({ pageId: CAVITE_PAGE_ID, pageAccessToken: 'TEST_TOKEN' }, { warn() {} });
+  graph.findConversation = async () => {
+    const error = new Error('Meta unavailable'); error.status = 400; throw error;
+  };
+  await assert.rejects(graph.recentMessages('cavite-customer', { strict: true }), /Meta unavailable/);
+});
+
+test('Cavite strict history returns unclassified Page-author lines, not presumed staff', async () => {
+  const graph = new Graph({ pageId: CAVITE_PAGE_ID, pageAccessToken: 'TEST_TOKEN' }, { warn() {} });
+  graph.findConversation = async () => ({ id: 'test-conversation' });
+  graph.call = async () => ({ data: [
+    { message: 'Welcome sa JMAGS', from: { id: CAVITE_PAGE_ID }, created_time: new Date().toISOString() },
+  ] });
+  const rows = await graph.recentMessages('cavite-customer', { strict: true });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].via, 'page');
+});
+
+function caviteHistoryHarness(recentMessages) {
+  const t = { history: [], lastUserTs: Date.now(), handedOff: false, optedOut: false };
+  const store = { thread: () => t, save() {} };
+  const cfg = { caviteOnly: true, historyTurns: 20, humanPauseHours: 12,
+    replyWindowHours: 23.5, automatedEchoPatterns: [] };
+  const bot = new Bot({ cfg, store, graph: { recentMessages }, llm: {
+    reply() { throw new Error('AI must not be called on an inbox error'); },
+  }, log: { warn() {}, info() {}, error() {} } });
+  return { bot, t };
+}
+
+test('Cavite AI and scheduled follow-up stop when Page Inbox cannot be verified', async () => {
+  let requestedStrict = false;
+  const { bot, t } = caviteHistoryHarness(async (psid, opts) => {
+    requestedStrict = opts.strict === true;
+    const error = new Error('Graph temporarily unavailable'); error.status = 503; throw error;
+  });
+  await bot.replyWithAI('cavite-test-customer', t.lastUserTs);
+  assert.equal(requestedStrict, true);
+  assert.equal(t.aiNeedsIvan, true);
+  assert.equal(t.handoffReason, 'Cavite inbox context unavailable');
+  assert.equal(await bot.caviteFollowUpContextOk('cavite-test-customer'), false);
+});
+
+test('Cavite recognizes automated Page template, but pauses when unknown staff line appears', async () => {
+  const ts = Date.now();
+  const { bot, t } = caviteHistoryHarness(async () => [
+    { role: 'assistant', content: 'Welcome sa JMAGS', ts: ts - 10000, via: 'page' },
+    { role: 'assistant', content: 'Our technician will contact you', ts, via: 'page' },
+  ]);
+  assert.equal(await bot.loadInboxHistory('cavite-test-customer'), true);
+  assert.equal(t.history[0].via, 'auto');
+  assert.equal(t.history[1].via, 'ivan');
+  assert.equal(t.pauseSource, 'staff inbox history');
+  assert.equal(await bot.caviteFollowUpContextOk('cavite-test-customer'), false);
+});
+
+test('Cavite known auto reply does not pause eligible conversation', async () => {
+  const ts = Date.now();
+  const { bot, t } = caviteHistoryHarness(async () => [
+    { role: 'assistant', content: 'Welcome sa JMAGS', ts: ts - 5000, via: 'page' },
+  ]);
+  assert.equal(await bot.caviteFollowUpContextOk('cavite-test-customer'), true);
+  assert.equal(t.history[0].via, 'auto');
+  assert.equal(t.pausedUntil || 0, 0);
+});
