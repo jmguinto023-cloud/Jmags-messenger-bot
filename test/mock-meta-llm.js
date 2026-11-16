@@ -80,6 +80,11 @@ function startMock({ llmResponder } = {}) {
       }
       if (url.pathname.endsWith('/messages')) {
         if (body.sender_action) { calls.typing.push(body); return json(200, { recipient_id: body.recipient.id }); }
+        if (state.sendFailStatus) {
+          calls.failedSends = calls.failedSends || [];
+          calls.failedSends.push(body);
+          return json(state.sendFailStatus, { error: { message: state.sendFailMessage || 'send rejected' } });
+        }
         calls.messages.push(body);
         return json(200, { recipient_id: body.recipient.id, message_id: `m_${calls.messages.length}` });
       }
