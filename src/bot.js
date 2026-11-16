@@ -726,10 +726,26 @@ class Bot {
         if (returning && ((t.returnInquiryAttemptAt && ts - t.returnInquiryAttemptAt < returnGap)
           || (t.firstInquirySentAt && ts - t.firstInquirySentAt < returnGap))) return;
         // Commit each attempt before sending; uncertain Meta sends are not retried.
+        const priorAttempt = t.firstInquiryAttempt;
+        const priorReturnAttempt = t.returnInquiryAttemptAt;
         if (returning) t.returnInquiryAttemptAt = ts;
         else t.firstInquiryAttempt = mid;
         this.store.flushNow();
-        await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
+        try {
+          await this.graph.sendText(psid, MAIN_FIRST_INQUIRY);
+        } catch (err) {
+          // A definitive Meta rejection (HTTP 4xx other than 429, e.g. a permission or
+          // access error) means nothing was delivered, so release the attempt marker.
+          // Otherwise one failed send would silence this customer's welcome forever.
+          // Timeouts, 429 and 5xx stay uncertain: the marker stays and is never retried.
+          const code = Number(err.status) || 0;
+          if (code >= 400 && code < 500 && code !== 429) {
+            if (returning) t.returnInquiryAttemptAt = priorReturnAttempt;
+            else t.firstInquiryAttempt = priorAttempt;
+            this.store.flushNow();
+          }
+          throw err;
+        }
         t.firstInquirySentAt = this.now();
         if (returning) {
           t.returnInquiryStartedAt = ts;

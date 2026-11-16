@@ -79,6 +79,42 @@ test('standalone main greeting runs once for concurrent first messages even with
   } finally { await s.close(); }
 });
 
+test('a definitive Meta rejection of the first greeting does not silence that customer forever', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { fresh: { id: 'new-chat' } };
+    const row = (id) => ({ id, from: { id: 'fresh' } });
+    s.mock.state.threadMessages = { 'new-chat': [row('sw.2'), row('sw.1')] };
+    // Meta rejects the send (for example a permission error): nothing is delivered.
+    s.mock.state.sendFailStatus = 400;
+    s.mock.state.sendFailMessage = 'Cannot message users who are not admins, developers or testers';
+    await s.post(MAIN, 'fresh', 'Hi');
+    assert.equal(s.mock.calls.messages.length, 0);
+    assert.equal(s.mock.calls.failedSends.length, 1);
+    // The failed attempt is not recorded, so the customer is not permanently excluded.
+    const t = s.app.store.thread('fresh');
+    assert.ok(!t.firstInquiryAttempt);
+    assert.ok(!t.firstInquirySentAt);
+  } finally { await s.close(); }
+});
+
+test('an uncertain first-greeting failure (HTTP 500) is never retried', async () => {
+  const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
+  try {
+    s.mock.state.conversations = { fresh: { id: 'new-chat' } };
+    const row = (id) => ({ id, from: { id: 'fresh' } });
+    s.mock.state.threadMessages = { 'new-chat': [row('sw.2'), row('sw.1')] };
+    s.mock.state.sendFailStatus = 500;
+    await s.post(MAIN, 'fresh', 'Hi');
+    assert.equal(s.mock.calls.failedSends.length, 1);
+    assert.equal(s.app.store.thread('fresh').firstInquiryAttempt, 'sw.1');
+    s.mock.state.sendFailStatus = 0;
+    await s.post(MAIN, 'fresh', 'Samsung TV');
+    const greetings = s.mock.calls.messages.filter(m => /VIDEO ng ACTUAL issue/.test(m.message.text));
+    assert.equal(greetings.length, 0);
+  } finally { await s.close(); }
+});
+
 test('first-time click-to-Messenger ad lead receives same intake despite Page auto reply', async () => {
   const s = await setup({ BOT_ENABLED: 'false', MAIN_FIRST_INQUIRY_ENABLED: 'true' });
   try {
