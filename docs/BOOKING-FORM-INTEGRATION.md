@@ -2,8 +2,12 @@
 
 When a customer submits the booking form, this bot sends **one** Messenger message
 that says Regular or Priority and asks them to reply `AGREE`. It does not send SMS.
-JMAG's Operations still reads the Netlify submission the same way as now. Do not
-change that. The `jmags-website` repo is not this form; leave it alone.
+The same process also copies the booking into the operations dashboard collection
+`app_docs` / `formBookings` (see `src/booking-dashboard.js`). That copy runs on a
+timer and again when this webhook or the browser confirm arrives. It includes
+Netlify submissions marked spam, dedupes intake and Netlify copies of the same
+booking, and does not send any message. The dashboard does not have to be open.
+The `jmags-website` repo is not this form; leave it alone.
 
 The live form is https://jmagscutomerform.netlify.app (`name="booking"`). It already
 asks willing-to-wait and posts the fields to Netlify Forms. It also tries the

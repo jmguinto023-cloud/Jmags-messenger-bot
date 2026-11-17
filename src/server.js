@@ -77,6 +77,7 @@ function createServer({ cfg, bot, log }) {
         messengerAuth: primaryTokenPage ? (tokenState?.status || 'unchecked') : 'missing',
         messengerAuthCheckedAt: tokenState?.checkedAt || null,
         bookingWebhook: cfg.netlifyWebhookSecret ? 'configured' : 'missing',
+        bookingDashboard: bot.dashboardBookings && bot.dashboardBookings.enabled() ? 'on' : 'off',
       });
     }
 
@@ -255,6 +256,13 @@ function createServer({ cfg, bot, log }) {
         const rawText = Buffer.concat(chunks).toString('utf8');
         try { body = JSON.parse(rawText || '{}'); } catch {
           body = Object.fromEntries(new URLSearchParams(rawText));
+        }
+        // Save the booking on the dashboard even when this call cannot message
+        // anyone (no signed ref). This does not send SMS or Messenger.
+        if (bot.dashboardBookings) {
+          try { await bot.dashboardBookings.sync(); } catch (e) {
+            log.warn('booking dashboard mirror failed');
+          }
         }
         const wait = bookingConfirm.normalizeWait(body.wait ?? body.willingToWait);
         if (!wait) return reply(400, { ok: false, error: 'wait must be yes or no' });

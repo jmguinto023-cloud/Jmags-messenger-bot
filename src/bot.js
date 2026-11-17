@@ -34,6 +34,7 @@ const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./
 const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
+const { BookingDashboard } = require('./booking-dashboard');
 const inquiryReminder = require('./inquiry-reminder');
 const applianceOneTime = require('./appliance-one-time');
 const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng Jmags Appliances ang inquire nyo about sa TV nila. Maari po ba namin mahingi agad ang mga sumusunod upang mareplayan po agad kayo. 🙂
@@ -159,6 +160,7 @@ class Bot {
   constructor({ cfg, store, graph, llm, log, push = null, now = () => Date.now(), switches = null }) {
     Object.assign(this, { cfg, store, graph, llm, log, push, now });
     this.switches = switches || new PageSwitches(cfg, { now: () => this.now(), log: this.log });
+    this.dashboardBookings = new BookingDashboard(cfg, { log, now: () => this.now() });
     this.pending = new Map(); // psid -> { texts:[], timer, latestTs }
     this.chains = new Map(); // psid -> promise (keeps one reply at a time per customer)
     this.inflight = new Set();
@@ -1623,6 +1625,13 @@ class Bot {
     }
     if (sub.formName && sub.formName !== 'booking') {
       return { status: 200, body: { ok: true, sent: false, reason: 'ignored form' } };
+    }
+    // Dashboard copy is separate from the Messenger confirm. A missing yes/no
+    // or an unmatched chat still has to show up for staff, and this sends nothing.
+    if (this.dashboardBookings) {
+      try { await this.dashboardBookings.sync(); } catch (e) {
+        this.log.warn('booking dashboard mirror failed');
+      }
     }
     const kind = bookingConfirm.bookingKind(sub);
     if (!kind) {

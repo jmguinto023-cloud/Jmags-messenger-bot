@@ -64,6 +64,11 @@ if (require.main === module) {
     ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')
     : 'off'}`);
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'} | pages=${livePages}${heldPages.length ? ` | no-token=${heldPages.join('+')}` : ''}`));
+  if (app.bot.dashboardBookings && app.bot.dashboardBookings.enabled()) {
+    const mirrorBookings = () => app.bot.dashboardBookings.sync().catch(() => log.warn('booking dashboard sync failed'));
+    mirrorBookings();
+    setInterval(mirrorBookings, 45000).unref();
+  }
   // Read-only Page token probe every 15 minutes. Do not confuse HTTP /health
   // with Messenger availability: the server can be up while OAuth is expired.
   // No customer messages or credentials are sent to the logs.
