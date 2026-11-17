@@ -85,6 +85,9 @@ function loadConfig(env = process.env) {
     // Optional. Used only to read Netlify form submissions after the booking link is sent.
     netlifyApiToken: (env.NETLIFY_API_TOKEN || '').trim(),
     netlifyFormId: (env.NETLIFY_FORM_ID || '').trim(),
+    // Copy form bookings into the ops dashboard even when nobody has it open.
+    // Empty stays on. false stops the copy. It never sends a customer message.
+    bookingDashboardSync: bool(env.BOOKING_DASHBOARD_SYNC, true),
     // Form → Messenger "Willing to wait?" confirmation. On by default; independent of BOT_SCHEDULE.
     bookingConfirmEnabled: bool(env.BOOKING_CONFIRM_ENABLED, true),
     // Signs ?token= and ?ref= on booking-form links. Empty falls back to APP_SECRET.
