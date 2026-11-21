@@ -540,6 +540,8 @@ class Bot {
       t.attachmentNote = note;
       t.awaitingVideo = false;
     }
+    // Test account only: handle a standby message like a normal one, to see whether Meta lets the bot answer.
+    if (isStandby && this.cfg.testReset && this.isTestPsid(psid)) isStandby = false;
     if (isStandby) {
       t.standby = true;
       this.stopVideoFollowup(psid, 'standby, another app owns the thread');
