@@ -5,7 +5,7 @@ const path = require('node:path');
 const { summarizeConversation } = require('./summary');
 const {
   asksCheckupFee, checkupFeeReply, HOME_CHECKUP_FEE_ANSWER, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN,
-  scriptedReply, listEstimate,
+  scriptedReply, listEstimate, knownSize, listKind,
 } = require('./estimate');
 const { SAFE_TEMPLATE } = require('./messages');
 const PRICE_TABLE = require('../knowledge/prices.json');
@@ -59,7 +59,9 @@ function grabBarangay(text) {
 function grabCity(text) {
   const t = String(text || '').toLowerCase();
   const city = CITIES.find((name) => t.includes(name));
-  return city || '';
+  if (city) return city;
+  const province = PROVINCES.find((name) => new RegExp(`\\b${name}\\b`).test(t));
+  return province || '';
 }
 
 function repairedAnswer(text) {
@@ -114,9 +116,12 @@ function rememberJob(thread) {
     return true;
   }).map((h) => h.content || '');
   const blob = users.join('\n');
+  const latestMsg = users[users.length - 1] || '';
   const summary = summarizeConversation([{ content: blob }]);
   if (summary.brand) s.brand = s.brand || summary.brand;
-  if (summary.size) s.size = s.size || summary.size;
+  const latestSize = knownSize(latestMsg);
+  if (latestSize) s.size = `${latestSize}"`;
+  else if (summary.size) s.size = s.size || summary.size;
   const model = grabModel(blob);
   if (model) s.model = s.model || model;
   const city = grabCity(blob);
@@ -128,7 +133,11 @@ function rememberJob(thread) {
   if (/\[Customer sent a (?:video|photo)/i.test(blob) || thread.problemViaVideo || (thread.mediaNotes || []).length) {
     thread.videoReceived = true;
   }
-  if (isCracked(blob)) s.symptom = 'cracked';
+  const latestFault = listKind(latestMsg);
+  if (latestFault === 'replace' || isCracked(latestMsg)) s.symptom = 'cracked';
+  else if (latestFault === 'mod') s.symptom = 'lines';
+  else if (latestFault === 'backlight') s.symptom = 'backlight';
+  else if (isCracked(blob) && !s.symptom) s.symptom = 'cracked';
   else if (/nawala|walang (?:display|picture|ilaw)|no display|black screen|backlight|lines|linya|ayaw mag-?on|flicker|blink|kislap|kumikislap/i.test(blob) && !s.symptom) {
     s.symptom = 'screen';
   }
@@ -307,7 +316,7 @@ function stripPersonNames(text) {
 function isSafeTemplate(text) {
   const t = String(text || '').trim();
   if (!t) return false;
-  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed po ang presyo', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
+  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Nasa ₱', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
   return leads.some((lead) => t === lead || t.startsWith(lead));
 }
 
@@ -427,6 +436,9 @@ function legacyShape(thread, text, latest) {
 // Validator. A clean model draft is kept. A draft that breaks a hard rule falls back to the old template.
 function shapeReply(thread, text, latest) {
   rememberJob(thread);
+  if (/^Nasa ₱/i.test(String(text || '')) || /^Para sa \d/i.test(String(text || ''))) {
+    return { text: String(text || '').trim(), handoff: false, reason: '', silent: false, closeGate: false, fallback: false };
+  }
   if (gatePassed(thread) && /https?:\/\//i.test(text) && /form|book|schedule/i.test(text)) {
     return { text: String(text || '').trim(), handoff: false, reason: '', silent: false, closeGate: false, fallback: false };
   }

@@ -84,8 +84,8 @@ test('Devant, sira, 1yr, Lipa, wala pa asks the symptom, then the size, then a p
     assert.equal(first, QUESTIONS.symptom);
     assert.equal(second, QUESTIONS.size);
     assert.equal(third, QUESTIONS.size);
-    assert.match(quote, /video ng TV habang naka-on/);
-    assert.doesNotMatch(quote, /₱|Kailan po sila free/);
+    assert.match(quote, /Nasa ₱8,500 po ang backlight para sa Devant 55/);
+    assert.doesNotMatch(quote, /Kailan po sila free/);
     assert.doesNotMatch(quote, /Lipa|Batangas|1 yr|wala pa/i);
     assert.equal(s.app.store.thread('dv').slots.location.toLowerCase().includes('lipa'), true);
     assert.equal(detectLocation(s.app.store.thread('dv').slots.location).branch, 'San Pablo');
@@ -139,8 +139,8 @@ test('lines without a size ask inches, then quote; a dead set names the cause', 
     assert.equal(ask, QUESTIONS.size);
     assert.doesNotMatch(ask, /TCL|Laguna/);
     const quote = await s.say('tcl', '40 inches po');
-    assert.match(quote, /video ng TV habang naka-on/);
-    assert.doesNotMatch(quote, /₱/);
+    assert.match(quote, /Nasa ₱4,500 po ang LCD modification para sa TCL 40/);
+    assert.doesNotMatch(quote, /Kailan po sila free/);
     const dead = await s.say('lg', 'LG 32 inch po, ayaw mag-on, taga Imus Cavite');
     assert.match(dead, /video ng TV habang naka-on/);
     assert.doesNotMatch(dead, /₱|power supply|mainboard|Imus/);

@@ -146,9 +146,34 @@ function phpAmount(n) {
   return `₱${Number(n).toLocaleString('en-US')}`;
 }
 
+const SIZE_PHRASES = [
+  ['trenta y dos', 32], ["trenta'y dos", 32], ['thirty two', 32], ['thirty-two', 32],
+  ['kuwarenta y tres', 43], ["kuwarenta'y tres", 43], ['forty three', 43], ['forty-three', 43],
+  ['singkuwenta y singko', 55], ["singkuwenta'y singko", 55], ['fifty five', 55], ['fifty-five', 55],
+  ['sesenta y singko', 65], ["sesenta'y singko", 65], ['sixty five', 65], ['sixty-five', 65],
+  ['setenta y singko', 75], ["setenta'y singko", 75], ['seventy five', 75], ['seventy-five', 75],
+  ['otsenta y singko', 85], ["otsenta'y singko", 85], ['eighty five', 85], ['eighty-five', 85],
+  ['kuwarenta', 40], ['forty', 40],
+  ['singkuwenta', 50], ['fifty', 50],
+  ['sesenta', 60], ['sixty', 60],
+  ['setenta', 70], ['seventy', 70],
+  ['otsenta', 80], ['eighty', 80],
+];
+
+// The rightmost size in the text wins, so a later "32 inches" beats an earlier 65.
 function knownSize(text) {
-  const m = String(text || '').match(/\b(32|40|43|48|49|50|55|60|65|70|75|80|85)\b/);
-  return m ? Number(m[1]) : 0;
+  const s = String(text || '').toLowerCase();
+  let best = { at: -1, n: 0 };
+  for (const [phrase, n] of SIZE_PHRASES) {
+    const at = s.lastIndexOf(phrase);
+    if (at > best.at) best = { at, n };
+  }
+  const re = /\b(32|40|43|48|49|50|55|60|65|70|75|80|85)\s*(?:["”″]|''|inches?|in\b|pulgada)?/gi;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m.index >= best.at) best = { at: m.index, n: Number(m[1]) };
+  }
+  return best.n || 0;
 }
 
 const FLICKER = /flicker|blink(?:ing)?|kislap/i;
@@ -209,23 +234,57 @@ function priceHint(size) {
 function listKind(text) {
   const t = String(text || '');
   if (/basag|cracked|smashed|broken lcd|durog|palit lcd|lcd replacement|replace(?:ment)? lcd/i.test(t)) return 'replace';
+  // Sound with a dark screen is a backlight fault, same as walang ilaw.
+  const dark = /walang (?:display|picture|ilaw)|no (?:display|picture)|black screen/i.test(t);
+  if (FLICKER.test(t) || ((/sound|tunog/i.test(t) && dark))) return 'backlight';
   if (/may linya|\blinya\b|\blines\b|lcd modification|\bmodif|no display|walang (?:display|picture)/i.test(t)) return 'mod';
-  if (/backlight|flicker|blink|kislap|walang ilaw/i.test(t)) return 'backlight';
+  if (/backlight|walang ilaw/i.test(t)) return 'backlight';
   return '';
 }
 
 // Official list price for an explicit size and fault. Empty when either is missing.
+function sizeOptions(size) {
+  const bits = [
+    BACKLIGHT[size] ? `backlight ${phpAmount(BACKLIGHT[size])}` : '',
+    LCD_MOD[size] ? `LCD modification ${phpAmount(LCD_MOD[size])}` : '',
+    LCD_REPLACE[size] ? `LCD replacement ${phpAmount(LCD_REPLACE[size])}` : '',
+  ].filter(Boolean);
+  if (!bits.length) return '';
+  return `Para sa ${size}": ${bits.join(', ')}. Ano po ang sira, backlight, may lines, o basag?`;
+}
+
+function slotKind(thread = {}) {
+  const s = (thread.slots && thread.slots.symptom) || '';
+  if (s === 'cracked') return 'replace';
+  if (s === 'lines') return 'mod';
+  if (s === 'backlight') return 'backlight';
+  return '';
+}
+
 function listEstimate(latest, thread = {}, { force } = {}) {
+  const latestText = String(latest || '');
   const blob = chatBlob(latest, thread);
-  const size = knownSize(`${blob}\n${latest || ''}`);
-  const kind = force || listKind(latest) || listKind(blob);
-  if (!size || !kind) return '';
-  const label = unitLabel(blob, size);
+  const users = (thread.history || []).filter((h) => h && h.role === 'user').map((h) => h.content || '').join('\n');
+  const size = knownSize(latestText) || knownSize(blob);
+  // Customer words decide the fault. The stored symptom is only a backup, so an
+  // internal label like "no display / backlight" cannot flip the price.
+  const kind = force || listKind(latestText) || listKind(users) || slotKind(thread);
+  if (!size) return '';
+  if (!kind) {
+    if (!asksPrice(latestText)) return '';
+    return sizeOptions(size);
+  }
+  const label = unitLabel(`${latestText}\n${blob}`, size);
   const price = kind === 'replace' ? LCD_REPLACE[size] : kind === 'mod' ? LCD_MOD[size] : BACKLIGHT[size];
   if (!price) return '';
   const what = kind === 'replace' ? 'palit LCD' : kind === 'mod' ? 'LCD modification' : 'backlight';
   const role = kind === 'replace' ? 'Starting price po iyan' : 'Estimate po iyan';
   return `Nasa ${phpAmount(price)} po ang ${what} para sa ${label}. ${role}, final po after makita ng staff ang video.`;
+}
+
+function wantsListedPrice(latest) {
+  const t = String(latest || '');
+  return Boolean(knownSize(t) || asksPrice(t) || listKind(t));
 }
 
 // A short table answer. No "Confirmed:". Do not ask the fault again once it is known.
@@ -262,7 +321,7 @@ const WARRANTY_LINE = 'May warranty po sir. Backlight at new LCD 6 months. Mothe
 
 function discountReply(text) {
   if (!/discount|tawad|\bpromo\b|less pa|pa[\s-]*less|ibababa|lower (?:the )?price/i.test(text || '')) return '';
-  return 'Fixed po ang presyo sir. Kasama ang warranty at home service, walang hakot. Ang technician po namin ang kakausap.\n[HANDOFF: asked for a discount]';
+  return 'Fixed price na po ito, all-in na po parts and labor with warranty. Gusto nyo po ba ituloy?';
 }
 
 function locationReply(text) {
@@ -364,6 +423,9 @@ module.exports = {
   LCD_REPLACE,
   BACKLIGHT,
   listEstimate,
+  listKind,
+  wantsListedPrice,
+  discountReply,
   confirmedPriceReply,
   quoteKnownTv,
   powerPriceRange,

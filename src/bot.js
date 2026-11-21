@@ -28,7 +28,7 @@ const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
 const { PageSwitches, pageKey } = require('./page-switches');
-const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, quoteKnownTv, CHECKUP_NUDGE } = require('./estimate');
+const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, quoteKnownTv, CHECKUP_NUDGE, listEstimate, wantsListedPrice, knownSize, discountReply } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { composeVerdict } = require('./verdict');
 const interestFollowup = require('./interest-followup');
@@ -1281,7 +1281,17 @@ class Bot {
         return;
       }
 
-      const priced = !hadMedia && !reviewPending(t) && !t.problemViaVideo ? quoteKnownTv(t) : '';
+      const canQuote = !hadMedia && !reviewPending(t) && !t.problemViaVideo;
+      const listed = canQuote && wantsListedPrice(latestUser) ? listEstimate(latestUser, t) : '';
+      const discount = discountReply(latestUser);
+      if (listed || discount) {
+        this.repliedRev.set(this.slot(psid), rev);
+        await this.send(psid, discount || listed, { provider: 'rules' });
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
+        return;
+      }
+
+      const priced = canQuote ? quoteKnownTv(t) : '';
       if (priced) {
         this.repliedRev.set(this.slot(psid), rev);
         await this.send(psid, priced, { provider: 'rules' });
@@ -1404,9 +1414,6 @@ class Bot {
     this.log.error(`LLM outage for ${short(psid)}: ${reason}. ${e && e.message ? e.message : ''} No canned greeting.`);
     t.aiNeedsIvan = true;
     t.handoffReason = reason;
-    t.handedOff = true;
-    t.handoffAt = this.now();
-    t.passedByBot = true;
     t.aiHoldingSent = false;
     this.repliedRev.set(this.slot(psid), rev);
     this.store.save();
@@ -1414,7 +1421,21 @@ class Bot {
       await this.sendMediaAck(psid, lines.mediaAck, true, { armVideo: hadVideo, skipGate: true });
       return;
     }
-    return this.send(psid, lines.aiHolding, { skipGate: true, provider: '' });
+    const latest = latestUserText(t);
+    const listed = wantsListedPrice(latest) ? listEstimate(latest, t) : '';
+    const discount = discountReply(latest);
+    if (listed || discount) return this.send(psid, discount || listed, { provider: 'rules' });
+    const ask = this.nextMissingAsk(t);
+    return this.send(psid, ask, { provider: 'rules', skipGate: true });
+  }
+
+  // Used when the model is down and this message is not itself a price question.
+  nextMissingAsk(thread) {
+    const s = (thread && thread.slots) || {};
+    if (!s.size) return 'Ilang inches po ang TV?';
+    if (!s.brand) return 'Anong brand po ng TV?';
+    if (!s.city) return 'Taga saan po kayo?';
+    return 'Pwede po pa-send ng video ng TV habang naka-on?';
   }
 
   async send(psid, text, opts = {}) {
@@ -1484,7 +1505,8 @@ class Bot {
     });
     this.log.info(`replied to ${short(psid)} (${clean.length} chars)${provider ? ` provider=${provider}` : ''}${modelName ? ` model=${modelName}` : ''}`);
     if (!opts.ops && !opts.tips && !opts.videoFollowup) {
-      await this.sendPriceCard(psid, clean, { size: thread.slots && thread.slots.size, checkup: opts.checkupCard });
+      const cardSize = knownSize(latestUserText(thread)) || knownSize(clean) || (thread.slots && thread.slots.size);
+      await this.sendPriceCard(psid, clean, { size: cardSize, checkup: opts.checkupCard });
     }
     if (opts.armVideo) this.armVideoFollowup(psid);
     if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
@@ -1511,6 +1533,7 @@ class Bot {
   // printed price equals the quoted price. Otherwise a check-up fee answer gets the
   // check-up card. Once per card per customer. Never throws: the text is already sent.
   async sendPriceCard(psid, text, { size, checkup = false } = {}) {
+    let key = '';
     try {
       if (!this.cfg.priceCardsEnabled) return false;
       const repair = priceCards.cardForQuote({ size, text });
@@ -1524,14 +1547,18 @@ class Bot {
       const key = priceCards.cardKey(card);
       if (t.priceCardsSent && t.priceCardsSent[key]) return false;
       const url = priceCards.cardUrl(this.cfg.publicBaseUrl, card);
-      if (!url) return false;
-      await this.graph.sendImage(psid, url);
+      if (!url) {
+        this.log.info(`price card ${key} skipped for ${short(psid)}: file missing`);
+        return false;
+      }
+      const sent = await this.graph.sendImage(psid, url);
+      const messageId = sent && (sent.message_id || sent.messageId) || '';
       t.priceCardsSent = { ...(t.priceCardsSent || {}), [key]: this.now() };
       this.store.save();
-      this.log.info(`price card ${key} sent to ${short(psid)}`);
+      this.log.info(`price card ${key} sent to ${short(psid)} url=${url}${messageId ? ` id=${messageId}` : ''}`);
       return true;
     } catch (e) {
-      this.log.warn(`price card not sent to ${short(psid)}: ${e.message}`);
+      this.log.warn(`price card ${key} failed for ${short(psid)}: ${e.message}`);
       return false;
     }
   }
