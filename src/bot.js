@@ -31,6 +31,7 @@ const { PageSwitches, pageKey } = require('./page-switches');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, quoteKnownTv, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
 const { composeVerdict } = require('./verdict');
+const interestFollowup = require('./interest-followup');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
@@ -2828,6 +2829,38 @@ class Bot {
     }
   }
 
+  // One scripted nudge about an hour after a customer asked about repair but never sent a video.
+  // Fixed text, no AI. Sent at most once per customer, never between 9 PM and 7 AM Manila.
+  async maybeInterestFollowUp(psid, t, now) {
+    if (!this.cfg.interestFollowupEnabled) return false;
+    const page = currentPage();
+    if (!page || !page.primary || !page.token) return false;
+    const hasReview = (this.store.data.reviews || []).some((r) => r.psid === psid);
+    const skip = interestFollowup.skipReason(t, {
+      now,
+      afterMs: this.cfg.interestFollowupMin * 60 * 1000,
+      windowMs: 23 * HOUR,
+      hasReview,
+    });
+    if (skip) return false;
+    if (quietDeferUntil(now, this.cfg.timezone || 'Asia/Manila') !== now) return false;
+    // The ops on/off switch for this Page is the owner's kill switch. Off or unreadable stays silent.
+    if (await this.pageSwitchReason(psid)) return false;
+    // No automatic retry after an ambiguous Meta send: at most once per customer.
+    t.interestFollowupAt = now;
+    this.store.flushNow();
+    try {
+      await this.graph.sendText(psid, interestFollowup.FOLLOWUP_TEXT);
+      this.store.addTurn(psid, 'assistant', interestFollowup.FOLLOWUP_TEXT, this.now(),
+        { provider: 'interest-followup', history: false });
+      this.log.info(`interest follow-up sent for ${short(psid)}`);
+      return 'sent';
+    } catch (err) {
+      this.log.warn(`interest follow-up failed for ${short(psid)} (HTTP ${Number(err.status) || 'network'})`);
+      return 'failed';
+    }
+  }
+
   async checkFollowups() {
     if (this._followRunning) return;
     this._followRunning = true;
@@ -2853,6 +2886,8 @@ class Bot {
           const outcome = await withPage(page, async () => {
             const sentVideo = await this.maybeVideoFollowUp(psid, this.store.thread(psid), now);
             if (sentVideo) return 'video';
+            const interest = await this.maybeInterestFollowUp(psid, this.store.thread(psid), now);
+            if (interest) return interest;
             if (max > 0) return this.maybeFollowUp(psid, this.store.thread(psid), { now, max, afterMs, day, windowMs });
             return 'skip';
           });

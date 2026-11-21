@@ -162,6 +162,9 @@ function loadConfig(env = process.env) {
     humanIdleResumeHours: num(env.HUMAN_IDLE_RESUME_HOURS, 2),
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 24),
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
+    // One scripted nudge for a customer who asked about repair but never sent a video. Main Page only.
+    interestFollowupEnabled: bool(env.INTEREST_FOLLOWUP_ENABLED, true),
+    interestFollowupMin: num(env.INTEREST_FOLLOWUP_MIN, 60),
     followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
     followupMax: num(env.FOLLOWUP_MAX, 2),
     // No quiet-customer nudge when their last message is older than this. Stops an overnight burst.

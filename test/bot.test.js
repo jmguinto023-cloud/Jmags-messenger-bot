@@ -35,7 +35,7 @@ async function setup(extraEnv = {}, mockOpts = {}) {
     PAGE_ACCESS_TOKEN: 'PAGE_TOKEN', GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`,
     LLM_API_KEY: 'sk-test', LLM_MODEL: 'mock-model', BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0',
     SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
-    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', ...extraEnv,
+    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', INTEREST_FOLLOWUP_ENABLED: 'false', ...extraEnv,
   };
   const app = build(env);
   app.llm.sleep = async () => {};
@@ -3058,5 +3058,29 @@ test('a new video card keeps what the customer wrote before it so staff know the
     const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
     assert.match(html, /Inquiry ng customer/);
     assert.match(html, /Magkano po magpagawa ng TCL 43 inch walang ilaw\?/);
+  } finally { await s.close(); }
+});
+
+test('a customer who asked about repair but sent no video gets one scripted nudge after an hour', async () => {
+  const s = await setup({ INTEREST_FOLLOWUP_ENABLED: 'true' });
+  const t0 = NOON;
+  s.app.bot.now = () => t0;
+  const sent = (re) => s.mock.calls.messages.filter((m) => m.message && re.test(m.message.text || '')).length;
+  try {
+    await s.post(msg('nudge-1', { text: 'Magkano po magpagawa ng TV 43 inch walang ilaw?' }, t0));
+    await s.app.bot.checkFollowups();
+    assert.equal(sent(/Interesado pa po/), 0);
+    s.app.bot.now = () => t0 + 61 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(sent(/Interesado pa po/), 1);
+    s.app.bot.now = () => t0 + 62 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(sent(/Interesado pa po/), 1);
+
+    await s.post(msg('nudge-2', { text: 'Magkano po magpagawa ng TV?' }, t0));
+    await s.post(msg('nudge-2', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/n2.mp4' } }] }, t0 + 1000));
+    s.app.bot.now = () => t0 + 70 * 60 * 1000;
+    await s.app.bot.checkFollowups();
+    assert.equal(sent(/Interesado pa po/), 1);
   } finally { await s.close(); }
 });
