@@ -1052,6 +1052,8 @@ class Bot {
 
   // Pull Ivan's Page Inbox lines from the last 7 days so we do not ask again.
   async loadInboxHistory(psid) {
+    // A reset tester account is a clean slate: old test chats in its inbox must not feed the bot.
+    if (this.cfg.testReset && this.isTestPsid(psid)) return;
     let rows = [];
     try { rows = await this.graph.recentMessages(psid, { limit: 100, withinMs: 90 * 86400e3 }); } catch (e) {
       this.log.warn('inbox history failed', e.message);
