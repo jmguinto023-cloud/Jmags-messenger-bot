@@ -11,22 +11,28 @@ function gpt5Family(model) {
   return /^gpt-5/i.test(String(model || ''));
 }
 
+function usableKey(value) {
+  const key = String(value || '').trim();
+  if (!key || /^(undefined|null|none|false|changeme)$/i.test(key)) return '';
+  return key;
+}
+
 function buildProviders(cfg) {
   if (!cfg.aiAllowExternalData) return [];
   const known = {
-    gemini: cfg.geminiApiKey ? {
+    gemini: usableKey(cfg.geminiApiKey) ? {
       name: 'gemini', baseUrl: GEMINI_ENDPOINT,
-      apiKey: cfg.geminiApiKey, model: cfg.geminiModel || 'gemini-3.1-flash-lite',
+      apiKey: usableKey(cfg.geminiApiKey), model: cfg.geminiModel || 'gemini-3.1-flash-lite',
       thirdParty: true,
     } : null,
-    groq: cfg.groqApiKey ? {
+    groq: usableKey(cfg.groqApiKey) ? {
       name: 'groq', baseUrl: GROQ_ENDPOINT,
-      apiKey: cfg.groqApiKey, model: cfg.groqModel || 'openai/gpt-oss-20b',
+      apiKey: usableKey(cfg.groqApiKey), model: cfg.groqModel || 'openai/gpt-oss-20b',
       thirdParty: true,
     } : null,
-    openai: cfg.openaiApiKey ? {
+    openai: usableKey(cfg.openaiApiKey) ? {
       name: 'openai', baseUrl: OPENAI_ENDPOINT,
-      apiKey: cfg.openaiApiKey, model: cfg.openaiModel || 'gpt-5.4-mini',
+      apiKey: usableKey(cfg.openaiApiKey), model: cfg.openaiModel || 'gpt-5.4-mini',
       reasoningEffort: cfg.openaiReasoningEffort || 'low',
       timeoutMs: Number(cfg.openaiTimeoutMs) || 15000,
       thirdParty: true,
@@ -147,12 +153,13 @@ class AiRouter {
   async ask(provider, payload) {
     const reqPayload = sanitizePayload({ ...payload, model: provider.model },
       this.redactPII && provider.thirdParty);
-    // GPT-OSS reserves output tokens for reasoning. Low effort prevents a short
-    // budget being exhausted before any user-visible response is generated.
-    if (provider.name === 'groq' && /^openai\/gpt-oss-/i.test(provider.model)) {
-      reqPayload.reasoning_effort = 'low';
-      reqPayload.max_completion_tokens = Math.max(512, Number(reqPayload.max_tokens) || 0);
-      delete reqPayload.max_tokens;
+    // Groq uses max_tokens. reasoning_effort is an OpenAI GPT-5 field and is not sent.
+    if (provider.name === 'groq') {
+      if (!reqPayload.max_tokens && reqPayload.max_completion_tokens) {
+        reqPayload.max_tokens = reqPayload.max_completion_tokens;
+      }
+      delete reqPayload.max_completion_tokens;
+      delete reqPayload.reasoning_effort;
     }
     // GPT-5 rejects max_tokens and temperature. reasoning_effort is required.
     if (provider.name === 'openai' && gpt5Family(provider.model)) {

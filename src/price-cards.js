@@ -3,10 +3,18 @@
 // price printed on it equals a price in the message the customer is getting, so the photo can
 // never contradict the text. Ambiguous or unmatched -> no photo, text only.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { cards: CARDS } = require('../knowledge/price-cards.json');
 
 const FILE_RE = /^[a-z0-9-]+\.jpg$/;
-const FILES = new Set(CARDS.map((c) => c.file));
+const CARD_DIR = path.join(__dirname, '..', 'public', 'price-cards');
+
+function fileReady(file) {
+  return FILE_RE.test(String(file || '')) && fs.existsSync(path.join(CARD_DIR, file));
+}
+
+const FILES = new Set(CARDS.map((c) => c.file).filter(fileReady));
 
 function amountsIn(text) {
   const out = new Set();
@@ -21,19 +29,29 @@ function sizeOf(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-// The one card that matches this TV size and a price in the text, or null.
+function cardAmounts(card) {
+  return [card && card.price, card && card.replacePrice].filter((n) => Number(n) > 0);
+}
+
+// The card for this size whose printed price is in the text. A missing photo is skipped.
 function cardForQuote({ size, text } = {}) {
   const n = sizeOf(size);
   if (!n) return null;
   const amts = amountsIn(text);
-  const hits = CARDS.filter((c) => c.size === n && c.kind !== 'checkup' && amts.has(c.price));
-  if (hits.length === 1) return hits[0];
-  if (hits.length > 1) {
-    const t = String(text || '');
-    const byWord = hits.filter((c) => (c.kind === 'backlight' ? /backlight/i : /lcd|panel/i).test(t));
-    if (byWord.length === 1) return byWord[0];
+  const t = String(text || '');
+  const hits = CARDS.filter((c) => c.kind !== 'checkup' && c.size === n && cardAmounts(c).some((p) => amts.has(p)) && fileReady(c.file));
+  if (!hits.length) return null;
+  const wantBack = /backlight/i.test(t);
+  const wantLcd = /lcd|panel|basag|cracked|linya|\blines\b|modification|\bmodif|no display|walang display|palit lcd|replacement/i.test(t);
+  if (wantBack && !wantLcd) {
+    const back = hits.find((c) => c.kind === 'backlight');
+    if (back) return back;
   }
-  return null;
+  if (wantLcd && !wantBack) {
+    const lcd = hits.find((c) => c.kind === 'lcd');
+    if (lcd) return lcd;
+  }
+  return hits.length === 1 ? hits[0] : null;
 }
 
 function checkupCard() {
@@ -49,12 +67,14 @@ function answersCheckupFee(text) {
 }
 
 function cardKey(card) {
-  return card ? `${card.kind}-${card.size}` : '';
+  if (!card) return '';
+  if (card.kind === 'checkup') return 'checkup-1000';
+  return `${card.kind}-${card.size}`;
 }
 
 function cardUrl(origin, card) {
-  if (!card || !FILE_RE.test(card.file)) return '';
+  if (!card || !fileReady(card.file)) return '';
   return `${String(origin || '').replace(/\/$/, '')}/price-cards/${card.file}`;
 }
 
-module.exports = { CARDS, FILES, FILE_RE, amountsIn, cardForQuote, checkupCard, answersCheckupFee, cardKey, cardUrl };
+module.exports = { CARDS, FILES, FILE_RE, amountsIn, cardForQuote, checkupCard, answersCheckupFee, cardKey, cardUrl, fileReady };

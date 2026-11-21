@@ -5,7 +5,7 @@ const path = require('node:path');
 const { summarizeConversation } = require('./summary');
 const {
   asksCheckupFee, checkupFeeReply, HOME_CHECKUP_FEE_ANSWER, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN,
-  scriptedReply,
+  scriptedReply, listEstimate,
 } = require('./estimate');
 const { SAFE_TEMPLATE } = require('./messages');
 const PRICE_TABLE = require('../knowledge/prices.json');
@@ -212,6 +212,7 @@ function capWords(text) {
   if (/Para mabigyan po namin kayo agad ng presyo/.test(s)) return s.trim();
   if (isPreparedPriceAnswer(s)) return s.trim();
   if (canonical.includes(s.trim())) return s;
+  if (/^Nasa ₱/i.test(s) || /final po after makita ng staff/i.test(s)) return s.trim();
   // A booking-form message is sent whole. The word cap must not drop the link.
   if (/schedule form|booking form/i.test(s) && /https?:\/\//i.test(s)) return s.trim();
   const emoji = /\p{Extended_Pictographic}/gu;
@@ -236,12 +237,14 @@ function bannedPart(text) {
 
 function allowedPesos() {
   const set = new Set([300, 1000]);
-  const walk = (node) => {
-    if (typeof node === 'number' && Number.isFinite(node) && node >= 100) set.add(Math.round(node));
-    else if (Array.isArray(node)) node.forEach(walk);
-    else if (node && typeof node === 'object') Object.values(node).forEach(walk);
-  };
-  walk(PRICE_TABLE);
+  for (const key of ['backlight', 'lcdMod', 'lcdReplace']) {
+    for (const n of Object.values((PRICE_TABLE && PRICE_TABLE[key]) || {})) {
+      if (Number(n) >= 100) set.add(Math.round(Number(n)));
+    }
+  }
+  const check = (PRICE_TABLE && PRICE_TABLE.checkup) || {};
+  if (Number(check.home) >= 100) set.add(Math.round(Number(check.home)));
+  if (Number(check.shop) >= 100) set.add(Math.round(Number(check.shop)));
   return set;
 }
 const ALLOWED_PESOS = allowedPesos();
@@ -382,7 +385,9 @@ function legacyShape(thread, text, latest) {
   const reason = [];
   // Only a crack with no separate question. A later or mixed question is answered.
   if (isCracked(latest) && !otherThanCrack(latest)) {
-    return { text: CRACKED_PRICE_LINE, handoff: true, reason: 'cracked lcd', silent: false, closeGate: false };
+    const estimate = listEstimate(latest, thread, { force: 'replace' });
+    if (estimate) return { text: estimate, handoff: true, reason: 'cracked lcd', silent: false, closeGate: false };
+    return { text: ASK_SIZE, handoff: false, reason: '', silent: false, closeGate: false };
   }
   if (/\[\[?\s*HANDOFF/i.test(body)) {
     body = body.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, '').trim();
@@ -400,6 +405,10 @@ function legacyShape(thread, text, latest) {
     return { text: HANDOFF_LINE, handoff: true, reason: 'anger', silent: false };
   }
   if (asksCheckupFee(latest) || (!passed && isMagkano(latest))) {
+    if (!asksCheckupFee(latest)) {
+      const estimate = listEstimate(latest, thread);
+      if (estimate) return { text: estimate, handoff: false, reason: '', silent: false };
+    }
     return { text: capWords(flexiblePriceReply(thread, latest)), handoff: false, reason: '', silent: false };
   }
   if (!passed && (isRepairQuote(body) || isScheduleTalk(body) || (/https?:\/\//i.test(body) && /form|book|schedule/i.test(body)))) {
@@ -429,6 +438,7 @@ function shapeReply(thread, text, latest) {
     return { text: combined.trim(), handoff: true, reason: 'cracked lcd', silent: false, closeGate: false, fallback: true };
   }
   const legacy = legacyShape(thread, text, latest);
+  if (isCracked(latest) && !otherThanCrack(latest)) return { ...legacy, fallback: true };
   if (legacy.reason === 'cracked lcd') return { ...legacy, fallback: true };
   const guarded = guardCustomerReply(thread, text, latest);
   if (asksCheckupFee(latest) || (!gatePassed(thread) && isMagkano(latest))
@@ -454,6 +464,7 @@ module.exports = {
   SCHEDULE_HOLD,
   VIDEO_ACK,
   ASK_VIDEO,
+  ASK_SIZE,
   flexiblePriceReply,
   rememberJob,
   gatePassed,

@@ -7,9 +7,10 @@ const { CARDS, amountsIn, cardForQuote, checkupCard, answersCheckupFee, cardUrl,
 
 test('every card in the manifest has a photo on disk', () => {
   for (const c of CARDS) assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', 'price-cards', c.file)), c.file);
+  assert.equal(CARDS.length, 23);
   assert.equal(CARDS.filter((c) => c.kind === 'backlight').length, 11);
-  assert.equal(CARDS.filter((c) => c.kind === 'lcd').length, 7);
-  assert.ok(checkupCard());
+  assert.equal(CARDS.filter((c) => c.kind === 'lcd').length, 11);
+  assert.equal(checkupCard().file, 'checkup-1000.jpg');
 });
 
 test('amounts are read from peso text', () => {

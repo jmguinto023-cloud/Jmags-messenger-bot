@@ -1,7 +1,7 @@
 {
- "source": "JMAGs-PriceList-2026.xlsx",
- "sourceTitle": "JMAG'S PRICE LIST UPDATED as of 09/28/2026",
- "note": "Owner-confirmed price cards (Business Suite saved replies, 2026-11-21) replace all earlier prices. xlsx = reference only.",
+ "source": "Jm official price list",
+ "sourceTitle": "JMAG'S official TV price list",
+ "note": "All-in parts and labor. Backlight is a brand-new whole set (5-month warranty on the card). LCD modification and LCD replacement are separate. Check-up is 1000 at home (mobilization plus diagnosis, TV only) and 300 at the shop. Older tables, including the brand-split 85 inch backlight, are not customer prices.",
  "lcdMod": {
   "32": 2500,
   "40": 4500,
@@ -12,7 +12,8 @@
   "65": 9500,
   "70": 15000,
   "75": 17000,
-  "80": 18500
+  "80": 18500,
+  "85": 22000
  },
  "backlight": {
   "32": 3000,
@@ -27,70 +28,50 @@
   "80": 22000,
   "85": 25000
  },
- "backlight85": {
-  "other": 25000,
-  "premium": 25000,
-  "premiumBrands": [
-   "samsung",
-   "sony",
-   "sharp",
-   "lg",
-   "hisense",
-   "devant"
-  ]
- },
  "priceRange": {
   "32": [
-   2000,
-   4800
+   2500,
+   5000
   ],
   "40": [
-   3000,
+   4500,
    10000
   ],
   "43": [
-   3500,
-   12000
-  ],
-  "48": [
-   4500,
-   14000
-  ],
-  "49": [
-   4500,
-   15000
+   6000,
+   12500
   ],
   "50": [
-   4500,
-   15000
+   7500,
+   16500
   ],
   "55": [
-   5000,
-   18000
+   8500,
+   19500
   ],
   "60": [
-   6000,
-   25000
+   9500,
+   28000
   ],
   "65": [
-   8000,
-   27000
+   9500,
+   30500
   ],
   "70": [
-   9500,
+   15000,
    38000
   ],
   "75": [
-   10500,
-   40000
+   17000,
+   45000
   ],
   "80": [
-   11500,
-   43000
+   18500,
+   49000
   ],
   "85": [
-   11500,
-   46000
+   22000,
+   55000
   ]
  },
  "xlsx": {
@@ -368,5 +349,22 @@
   "1-50km": 500,
   "50-80km": 1500
  },
- "conflicts": []
+ "conflicts": [],
+ "lcdReplace": {
+  "32": 5000,
+  "40": 10000,
+  "43": 12500,
+  "50": 16500,
+  "55": 19500,
+  "60": 28000,
+  "65": 30500,
+  "70": 38000,
+  "75": 45000,
+  "80": 49000,
+  "85": 55000
+ },
+ "checkup": {
+  "home": 1000,
+  "shop": 300
+ }
 }

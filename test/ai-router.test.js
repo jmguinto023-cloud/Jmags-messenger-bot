@@ -188,18 +188,30 @@ test('OpenAI 5xx falls back to Groq', async () => {
   assert.equal(router.lastProvider, 'groq');
 });
 
-test('Groq GPT-OSS uses low reasoning and enough completion tokens', async () => {
+test('a blank OpenAI key is skipped and Groq uses max_tokens without reasoning_effort', async () => {
+  const called = [];
   let payload;
-  const provider = buildProviders(cfg())[1];
+  const providers = buildProviders({
+    aiAllowExternalData: true, openaiApiKey: '   ', groqApiKey: 'g',
+    aiProviderOrder: 'openai,groq', groqModel: 'openai/gpt-oss-20b',
+  });
+  assert.deepEqual(providers.map((p) => p.name), ['groq']);
   const router = new AiRouter({
-    providers: [provider], fetcher: async (_url, opts) => {
+    providers, fetcher: async (url, opts) => {
+      called.push(url);
       payload = JSON.parse(opts.body);
       return ok('Groq passed');
     },
   });
-  const reply = await router.complete({ messages: [{ role: 'user', content: 'hello' }], max_tokens: 60 });
+  const reply = await router.complete({
+    messages: [{ role: 'user', content: 'Sony 65 inches' }],
+    max_tokens: 400, temperature: 0.4, reasoning_effort: 'low',
+  });
   assert.equal(reply, 'Groq passed');
-  assert.equal(payload.reasoning_effort, 'low');
-  assert.ok(payload.max_completion_tokens >= 512);
-  assert.equal(payload.max_tokens, undefined);
+  assert.equal(called.some((url) => url.includes('api.openai.com')), false);
+  assert.equal(called.some((url) => url.includes('api.groq.com')), true);
+  assert.equal(payload.max_tokens, 400);
+  assert.equal(payload.max_completion_tokens, undefined);
+  assert.equal(payload.reasoning_effort, undefined);
+  assert.equal(router.lastProvider, 'groq');
 });
