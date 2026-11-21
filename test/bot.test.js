@@ -35,7 +35,7 @@ async function setup(extraEnv = {}, mockOpts = {}) {
     PAGE_ACCESS_TOKEN: 'PAGE_TOKEN', GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`,
     LLM_API_KEY: 'sk-test', LLM_MODEL: 'mock-model', BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0',
     SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
-    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', INTEREST_FOLLOWUP_ENABLED: 'false', ...extraEnv,
+    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', INTEREST_FOLLOWUP_ENABLED: 'false', PRICE_CARDS_ENABLED: 'false', ...extraEnv,
   };
   const app = build(env);
   app.llm.sleep = async () => {};
@@ -3083,4 +3083,55 @@ test('a customer who asked about repair but sent no video gets one scripted nudg
     await s.app.bot.checkFollowups();
     assert.equal(sent(/Interesado pa po/), 1);
   } finally { await s.close(); }
+});
+
+test('a repairable verdict sends the matching price card once, and nothing when no card matches the price', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm', PRICE_CARDS_ENABLED: 'true', PUBLIC_BASE_URL: 'https://bot.test' });
+  const now = NOON;
+  s.app.bot.now = () => now;
+  const images = () => s.mock.calls.messages.filter((m) => m.message && m.message.attachment);
+  try {
+    await s.post(msg('card-1', {
+      text: 'Samsung 43 inch walang display taga Binan',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/card.mp4' } }],
+    }, now));
+    const review = s.app.store.data.reviews[0];
+    const { cookie } = await dashCookie(s.base);
+    const call = (body) => fetch(`${s.base}/dashboard/api/verdict`, {
+      method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal((await call({ id: review.id, verdict: 'repairable', price: 4000 })).status, 200);
+    assert.equal(images().length, 0); // no 43" card prints 4,000
+    assert.equal((await call({ id: review.id, verdict: 'repairable', price: 6000 })).status, 200);
+    assert.equal(images().length, 1);
+    assert.equal(images()[0].message.attachment.payload.url, 'https://bot.test/price-cards/backlight-43.jpg');
+    assert.equal(images()[0].recipient.id, 'card-1');
+    assert.equal((await call({ id: review.id, verdict: 'repairable', price: 6000, note: 'ok' })).status, 200);
+    assert.equal(images().length, 1); // same card never repeats
+    assert.equal(s.app.store.thread('card-1').pausedUntil || 0, 0);
+    const jpg = await fetch(`${s.base}/price-cards/backlight-43.jpg`);
+    assert.equal(jpg.status, 200);
+    assert.equal(jpg.headers.get('content-type'), 'image/jpeg');
+    assert.equal((await fetch(`${s.base}/price-cards/nope.jpg`)).status, 404);
+    assert.equal((await fetch(`${s.base}/price-cards/..%2Fdashboard.js`)).status, 404);
+  } finally { await s.close(); }
+});
+
+test('the check-up fee answer carries the check-up card once; the card switch turns it off', async () => {
+  const on = await setup({ PRICE_CARDS_ENABLED: 'true' });
+  const t0 = NOON;
+  on.app.bot.now = () => t0;
+  const imgs = (s) => s.mock.calls.messages.filter((m) => m.message && m.message.attachment).length;
+  try {
+    await on.post(msg('chk-1', { text: 'Magkano po check up fee sa bahay?' }, t0));
+    assert.equal(imgs(on), 1);
+    await on.post(msg('chk-1', { text: 'Magkano po check up fee sa bahay?' }, t0 + 5000));
+    assert.equal(imgs(on), 1);
+  } finally { await on.close(); }
+  const off = await setup({ PRICE_CARDS_ENABLED: 'false' });
+  off.app.bot.now = () => t0;
+  try {
+    await off.post(msg('chk-2', { text: 'Magkano po check up fee sa bahay?' }, t0));
+    assert.equal(imgs(off), 0);
+  } finally { await off.close(); }
 });

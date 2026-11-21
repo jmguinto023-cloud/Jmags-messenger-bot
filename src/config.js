@@ -163,6 +163,7 @@ function loadConfig(env = process.env) {
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 24),
     batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
     // One scripted nudge for a customer who asked about repair but never sent a video. Main Page only.
+    priceCardsEnabled: bool(env.PRICE_CARDS_ENABLED, true),
     interestFollowupEnabled: bool(env.INTEREST_FOLLOWUP_ENABLED, true),
     interestFollowupMin: num(env.INTEREST_FOLLOWUP_MIN, 60),
     followupAfterMin: num(env.FOLLOWUP_AFTER_MIN, 120),
