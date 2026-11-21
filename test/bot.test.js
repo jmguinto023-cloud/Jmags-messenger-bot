@@ -3135,3 +3135,21 @@ test('the check-up fee answer carries the check-up card once; the card switch tu
     assert.equal(imgs(off), 0);
   } finally { await off.close(); }
 });
+
+test('a test allowlist can match by last digits, and a reset tester starts clean once per boot', async () => {
+  const s = await setup({ BOT_TEST_PSIDS: '*9161', BOT_TEST_RESET: 'true' });
+  const t0 = NOON;
+  s.app.bot.now = () => t0;
+  try {
+    assert.equal(s.app.bot.isTestPsid('1234569161'), true);
+    assert.equal(s.app.bot.isTestPsid('1234560000'), false);
+    const th = s.app.store.thread('1234569161');
+    th.bookingStaffOnly = true; th.handedOff = true;
+    await s.post(msg('1234569161', { text: 'Magkano po check up fee sa bahay?' }, t0));
+    const to = (id) => s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === id && m.message && m.message.text);
+    assert.ok(to('1234569161').length >= 1);
+    assert.equal(s.app.store.thread('1234569161').bookingStaffOnly, undefined);
+    await s.post(msg('7770000000', { text: 'Magkano po check up fee sa bahay?' }, t0));
+    assert.equal(to('7770000000').length, 0); // not on the allowlist
+  } finally { await s.close(); }
+});

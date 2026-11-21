@@ -302,6 +302,7 @@ class Bot {
     const pageIds = new Set((this.cfg.pages || []).map((p) => p.id).filter(Boolean));
     if (this.cfg.pageId) pageIds.add(String(this.cfg.pageId));
     if (!psid || pageIds.has(String(psid))) return;
+    this.resetTestAccount(psid);
 
     // An m.me?ref=BK_ tap is not proof this person submitted the form. Leave it on
     // the normal path so a Page switch that is off keeps every non-submitter silent.
@@ -439,7 +440,7 @@ class Bot {
         // suppress a separately-approved one-time fixed FAQ answer. Never clear
         // the booking flag or reactivate the continuous chatbot.
         : t.handedOff ? 'explicit staff handoff'
-        : this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid) ? 'test allowlist'
+        : this.cfg.testPsids.length && !this.isTestPsid(psid) ? 'test allowlist'
         : this.now() - ts >= this.cfg.replyWindowHours * HOUR ? 'outside Messenger reply window'
         : ts - this.now() >= 120000 ? 'future message timestamp' : '';
       const allowed = !skip;
@@ -873,7 +874,7 @@ class Bot {
     if (t && t.bookingStaffOnly) return 'booking handed to staff';
     if (t && t.gateClosed) return 'quote-gate handoff';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
-    if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
+    if (this.cfg.testPsids.length && !this.isTestPsid(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.handedOff) return `handed off to Ivan (${t.handoffReason})`;
     if (this.humanPaused(t, now)) return 'paused: a human replied recently';
     if (!isActiveNow(this.cfg, new Date(now))) return 'outside BOT_ACTIVE_HOURS';
@@ -1502,6 +1503,22 @@ class Bot {
     if (opts.armVideo) this.armVideoFollowup(psid);
     if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
     return true;
+  }
+
+  // BOT_TEST_PSIDS entries are full ids, or "*1234" to match an id by its last digits (4 or more).
+  isTestPsid(psid) {
+    const id = String(psid || '');
+    return (this.cfg.testPsids || []).some((e) => e === id || (/^\*\d{4,}$/.test(e) && id.endsWith(e.slice(1))));
+  }
+
+  // With BOT_TEST_RESET on, a tester account starts clean the first time it writes after each boot,
+  // so an old staff handoff or paused state cannot keep it silent. Only allowlisted testers.
+  resetTestAccount(psid) {
+    if (!this.cfg.testReset || !this.cfg.testPsids.length || !this.isTestPsid(psid)) return;
+    this.testReset = this.testReset || new Set();
+    if (this.testReset.has(String(psid))) return;
+    this.testReset.add(String(psid));
+    try { this.forgetCustomer(String(psid)); this.log.info(`test account ${short(psid)} reset`); } catch (e) { this.log.warn(`test reset failed: ${e.message}`); }
   }
 
   // Price-card photo after a text that quotes a price. Only when the card's printed price equals a
@@ -2554,7 +2571,7 @@ class Bot {
         this.log.info(`video follow-up deferred for ${short(psid)} until the reply schedule`);
       }
       return;
-    } else if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) skip = 'not in BOT_TEST_PSIDS allowlist';
+    } else if (this.cfg.testPsids.length && !this.isTestPsid(psid)) skip = 'not in BOT_TEST_PSIDS allowlist';
     else if (t.handedOff) skip = 'handed to Ivan';
     else if (t.standby) skip = 'standby, another app owns the thread';
     else if (this.humanPaused(t, now)) skip = 'paused for a human';
@@ -2702,7 +2719,7 @@ class Bot {
         continue;
       }
       if (!this.cfg.botEnabled || !this.scheduleOpen(now)) continue;
-      if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) continue;
+      if (this.cfg.testPsids.length && !this.isTestPsid(job.psid)) continue;
       const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
       const outside = !last || now - last > this.cfg.replyWindowHours * HOUR;
       if (outside) {
@@ -2747,7 +2764,7 @@ class Bot {
     if (switched) return { sent: false, reason: 'switch' };
     if (!this.cfg.botEnabled) return { sent: false, reason: 'disabled' };
     if (!this.scheduleOpen(now)) return { sent: false, reason: 'schedule' };
-    if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(job.psid)) return { sent: false, reason: 'allowlist' };
+    if (this.cfg.testPsids.length && !this.isTestPsid(job.psid)) return { sent: false, reason: 'allowlist' };
     const last = thread && thread.lastUserTs ? thread.lastUserTs : 0;
     if (!last || now - last > this.cfg.replyWindowHours * HOUR) {
       this.log.info(`delivery notice skipped for ${short(job.psid)}: outside 24h`);
@@ -2943,7 +2960,7 @@ class Bot {
     if (!this.cfg.botEnabled) return 'BOT_ENABLED is off';
     if (t.optedOut) return 'opted out';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
-    if (this.cfg.testPsids.length && !this.cfg.testPsids.includes(psid)) return 'not in BOT_TEST_PSIDS allowlist';
+    if (this.cfg.testPsids.length && !this.isTestPsid(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.intakeCloseSent || t.tipsSent) return 'intake closed, waiting on the technician';
     if (t.handedOff) return 'handed off';
     if (t.videoReplyAt) return 'video follow-up still open';
