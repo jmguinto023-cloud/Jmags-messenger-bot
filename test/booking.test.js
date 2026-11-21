@@ -19,17 +19,20 @@ const NOW = Date.parse('2026-11-04T12:00:00Z');
 
 test('prices.json: owner TV prices are what the bot quotes', () => {
   assert.equal(estimate.LCD_MOD[40], 4500);
-  assert.equal(estimate.LCD_MOD[75], 14000);
+  assert.equal(estimate.LCD_MOD[43], 6500);
+  assert.equal(estimate.LCD_MOD[75], 17000);
+  assert.equal(estimate.LCD_MOD[80], 18500);
   assert.equal(estimate.LCD_MOD[85], undefined);
-  assert.equal(estimate.BACKLIGHT[32], 2500);
-  assert.equal(estimate.BACKLIGHT[75], 16000);
-  assert.deepEqual([prices.backlight85.other, prices.backlight85.premium], [22000, 28000]);
+  assert.equal(estimate.BACKLIGHT[32], 3000);
+  assert.equal(estimate.BACKLIGHT[43], 6000);
+  assert.equal(estimate.BACKLIGHT[75], 18000);
+  assert.equal(estimate.BACKLIGHT[80], 22000);
+  assert.deepEqual([prices.backlight85.other, prices.backlight85.premium], [25000, 25000]);
   assert.deepEqual(estimate.PRICE_RANGE[32], [2000, 4800]);
   assert.deepEqual(estimate.PRICE_RANGE[85], [11500, 46000]);
-  assert.ok(prices.conflicts.some((c) => c.item === 'LCD modification' && c.size === 55 && c.xlsx === 7500));
-  assert.match(estimate.priceHint(85), /₱22,000 other brands, ₱28,000/);
-  assert.match(estimate.confirmedPriceReply('magkano backlight', { history: [{ role: 'user', content: 'Sony 85 walang display' }] }), /₱28,000/);
-  assert.match(estimate.confirmedPriceReply('magkano backlight', { history: [{ role: 'user', content: 'TCL 85 walang display' }] }), /₱22,000/);
+  assert.match(estimate.priceHint(85), /₱25,000 all brands/);
+  assert.match(estimate.confirmedPriceReply('magkano backlight', { history: [{ role: 'user', content: 'Sony 85 walang display' }] }), /₱25,000/);
+  assert.match(estimate.confirmedPriceReply('magkano backlight', { history: [{ role: 'user', content: 'TCL 85 walang display' }] }), /₱25,000/);
 });
 
 test('hours: Mon-Sat 8-5, no Sundays, late evening starts tomorrow', () => {
@@ -206,7 +209,7 @@ test('webhook: BOOKING_AGENT_ENABLED runs the booking flow and posts to intake',
     await say('Brgy Mabuhay, Carmona, Cavite');
     const sum = await say(`${day} 9am`);
     assert.match(sum, /Paki-check/);
-    assert.match(sum, /₱5,000/);
+    assert.match(sum, /₱6,500/);
     assert.equal(got.length, 0);
     assert.match(await say('oo'), /Na-receive na po namin ang booking/);
     assert.equal(got.length, 1);
