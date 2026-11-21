@@ -34,7 +34,7 @@ async function setup(extraEnv = {}) {
     PAGE_ACCESS_TOKEN: 'PAGE_TOKEN', GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`,
     LLM_API_KEY: 'sk-test', LLM_MODEL: 'mock-model', BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0',
     SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
-    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-ops-')), LOG_LEVEL: 'silent',
+    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-ops-')), LOG_LEVEL: 'silent', PASS_THREAD_CONTROL_ON_HANDOFF: 'true',
     ADMIN_TOKEN: 'adm', DASHBOARD_PASSWORD: 'secret', ...extraEnv,
   };
   const app = build(env);

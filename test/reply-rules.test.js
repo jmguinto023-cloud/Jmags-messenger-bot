@@ -26,7 +26,7 @@ async function setup(extra = {}) {
   const app = build({
     PORT: '0', VERIFY_TOKEN: 'v', APP_SECRET: SECRET, APP_ID: '1', PAGE_ID: MAIN, PAGE_ACCESS_TOKEN: 'T',
     GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`, LLM_API_KEY: 'k', LLM_MODEL: 'm',
-    BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0', LOG_LEVEL: 'silent',
+    BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0', LOG_LEVEL: 'silent', PASS_THREAD_CONTROL_ON_HANDOFF: 'true',
     SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
     NEEDS_IVAN_LABEL: 'Needs Ivan',
     DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-rules-')),
