@@ -127,13 +127,8 @@ function applyCustomerGuard(thread, text, latestUser) {
 }
 
 const LCD_MOD = numKeys(PRICES.lcdMod);
+const LCD_REPLACE = numKeys(PRICES.lcdReplace);
 const BACKLIGHT = numKeys(PRICES.backlight);
-const BL85 = PRICES.backlight85;
-const BL85_TEXT = BL85.other === BL85.premium
-  ? `${peso85(BL85.other)} all brands`
-  : `${peso85(BL85.other)} other brands, ${peso85(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant`;
-function peso85(n) { return `₱${Number(n).toLocaleString('en-US')}`; }
-const PREMIUM_85 = new RegExp(`\\b(?:${BL85.premiumBrands.join('|')})\\b`, 'i');
 const PSU_BASIC = numKeys(PRICES.xlsx && PRICES.xlsx.powerSupplyBasic);
 const PSU_SMART = numKeys(PRICES.xlsx && PRICES.xlsx.powerSupplySmart);
 const MOBO_BASIC = numKeys(PRICES.xlsx && PRICES.xlsx.motherboardBasic);
@@ -202,15 +197,35 @@ function lcdQuote(label, price) {
 // One price row for the model. Other sizes stay out of the request so Groq accepts it.
 function priceHint(size) {
   const n = Number(size) || 0;
-  if (!n) return 'No size yet. Ask brand and size. Do not invent a price.';
-  if (n === 85) return `85" backlight ${BL85_TEXT}. No LCD modification price. Hand off for LCD modification.`;
+  if (!n) return 'No size yet. Ask the inches. Do not invent a price.';
   const bits = [];
   if (BACKLIGHT[n]) bits.push(`backlight ${phpAmount(BACKLIGHT[n])}`);
   if (LCD_MOD[n]) bits.push(`LCD modification ${phpAmount(LCD_MOD[n])}`);
-  let line = bits.length ? `${n}" ${bits.join(', ')}.` : `${n}" has no confirmed backlight or LCD modification price. Hand off.`;
-  if (n === 55) line += ' 55" Samsung brand-new nasa around ₱35,000. Repair ₱8,500. About ₱26,500 less.';
-  else line += ' Do not invent a brand-new price.';
-  return line;
+  if (LCD_REPLACE[n]) bits.push(`LCD replacement ${phpAmount(LCD_REPLACE[n])}`);
+  if (!bits.length) return `${n}" has no listed TV price. Do not invent a price.`;
+  return `Price for this chat only: ${n}" ${bits.join(', ')}. List estimate only. Final after staff sees the video.`;
+}
+
+function listKind(text) {
+  const t = String(text || '');
+  if (/basag|cracked|smashed|broken lcd|durog|palit lcd|lcd replacement|replace(?:ment)? lcd/i.test(t)) return 'replace';
+  if (/may linya|\blinya\b|\blines\b|lcd modification|\bmodif|no display|walang (?:display|picture)/i.test(t)) return 'mod';
+  if (/backlight|flicker|blink|kislap|walang ilaw/i.test(t)) return 'backlight';
+  return '';
+}
+
+// Official list price for an explicit size and fault. Empty when either is missing.
+function listEstimate(latest, thread = {}, { force } = {}) {
+  const blob = chatBlob(latest, thread);
+  const size = knownSize(`${blob}\n${latest || ''}`);
+  const kind = force || listKind(latest) || listKind(blob);
+  if (!size || !kind) return '';
+  const label = unitLabel(blob, size);
+  const price = kind === 'replace' ? LCD_REPLACE[size] : kind === 'mod' ? LCD_MOD[size] : BACKLIGHT[size];
+  if (!price) return '';
+  const what = kind === 'replace' ? 'palit LCD' : kind === 'mod' ? 'LCD modification' : 'backlight';
+  const role = kind === 'replace' ? 'Starting price po iyan' : 'Estimate po iyan';
+  return `Nasa ${phpAmount(price)} po ang ${what} para sa ${label}. ${role}, final po after makita ng staff ang video.`;
 }
 
 // A short table answer. No "Confirmed:". Do not ask the fault again once it is known.
@@ -226,25 +241,15 @@ function confirmedPriceReply(latest, thread = {}) {
   const label = unitLabel(blob, size);
   const possible = /sound|tunog/i.test(blob) && !/\bbacklight\b/i.test(ask);
   if (fault === 'backlight') {
-    if (size === 85) {
-      const premium = PREMIUM_85.test(blob);
-      const price = premium ? BL85.premium : BL85.other;
-      const who = premium ? 'Samsung, Sony, Sharp, LG, Hisense, Devant' : 'ibang brand';
-      const brandNote = BL85.other === BL85.premium ? '' : ` (${who})`;
-      return `${label} po sir. ${possible ? 'Possible backlight po' : 'Palit backlight'}, ${phpAmount(price)}${brandNote}. 6 months warranty, home service.`;
-    }
     const price = BACKLIGHT[size];
     if (!price) return '';
     return backlightQuote(label, price, possible);
   }
   if (fault === 'lcd-mod') {
-    if (!LCD_MOD[size]) return '85" LCD modification po, wala pang confirmed price. Ang technician po namin ang magko-confirm.\n[HANDOFF: 85 inch LCD modification has no confirmed price]';
+    if (!LCD_MOD[size]) return '';
     return lcdQuote(label, LCD_MOD[size]);
   }
   if (!asksPrice(ask)) return '';
-  if (size === 85) {
-    return `85" po sir. Backlight ${BL85_TEXT}. LCD modification, ang technician po namin ang magko-confirm.\nAno po ang sira?`;
-  }
   const back = BACKLIGHT[size];
   const mod = LCD_MOD[size];
   if (!back && !mod) return '';
@@ -321,7 +326,7 @@ function quoteKnownTv(thread = {}) {
     return `${label} po sir. LCD modification ${phpAmount(price)}. Kasama repair, warranty, at home service. ${when}`;
   }
   if (s.symptom === 'backlight') {
-    const price = n === 85 ? (PREMIUM_85.test(s.brand) ? BL85.premium : BL85.other) : BACKLIGHT[n];
+    const price = BACKLIGHT[n];
     if (!price) return '';
     return `${label} po sir. Possible backlight po, ${phpAmount(price)}. Kasama testing, 6 months warranty, at home service. ${when}`;
   }
@@ -356,7 +361,9 @@ module.exports = {
   PRICES,
   PRICE_RANGE,
   LCD_MOD,
+  LCD_REPLACE,
   BACKLIGHT,
+  listEstimate,
   confirmedPriceReply,
   quoteKnownTv,
   powerPriceRange,

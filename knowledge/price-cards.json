@@ -1,126 +1,28 @@
 {
- "note": "Printed prices of the owner price-card photos (Business Suite saved replies, supplied 2026-11-21). A card is sent only when its printed price equals the price in the message. The 43\" LCD card with mod 5,000 is outdated and not included.",
- "cards": [
-  {
-   "file": "backlight-32.jpg",
-   "kind": "backlight",
-   "size": 32,
-   "price": 3000
-  },
-  {
-   "file": "backlight-40.jpg",
-   "kind": "backlight",
-   "size": 40,
-   "price": 4500
-  },
-  {
-   "file": "backlight-43.jpg",
-   "kind": "backlight",
-   "size": 43,
-   "price": 6000
-  },
-  {
-   "file": "backlight-50.jpg",
-   "kind": "backlight",
-   "size": 50,
-   "price": 7500
-  },
-  {
-   "file": "backlight-55.jpg",
-   "kind": "backlight",
-   "size": 55,
-   "price": 8500
-  },
-  {
-   "file": "backlight-60.jpg",
-   "kind": "backlight",
-   "size": 60,
-   "price": 9500
-  },
-  {
-   "file": "backlight-65.jpg",
-   "kind": "backlight",
-   "size": 65,
-   "price": 11000
-  },
-  {
-   "file": "backlight-70.jpg",
-   "kind": "backlight",
-   "size": 70,
-   "price": 16000
-  },
-  {
-   "file": "backlight-75.jpg",
-   "kind": "backlight",
-   "size": 75,
-   "price": 18000
-  },
-  {
-   "file": "backlight-80.jpg",
-   "kind": "backlight",
-   "size": 80,
-   "price": 22000
-  },
-  {
-   "file": "backlight-85.jpg",
-   "kind": "backlight",
-   "size": 85,
-   "price": 25000
-  },
-  {
-   "file": "lcd-43.jpg",
-   "kind": "lcd",
-   "size": 43,
-   "price": 6500,
-   "replacePrice": 12500
-  },
-  {
-   "file": "lcd-50.jpg",
-   "kind": "lcd",
-   "size": 50,
-   "price": 7500,
-   "replacePrice": 16500
-  },
-  {
-   "file": "lcd-55.jpg",
-   "kind": "lcd",
-   "size": 55,
-   "price": 8500,
-   "replacePrice": 19500
-  },
-  {
-   "file": "lcd-65.jpg",
-   "kind": "lcd",
-   "size": 65,
-   "price": 9500,
-   "replacePrice": 30500
-  },
-  {
-   "file": "lcd-70.jpg",
-   "kind": "lcd",
-   "size": 70,
-   "price": 15000,
-   "replacePrice": 38000
-  },
-  {
-   "file": "lcd-75.jpg",
-   "kind": "lcd",
-   "size": 75,
-   "price": 17000,
-   "replacePrice": 45000
-  },
-  {
-   "file": "lcd-80.jpg",
-   "kind": "lcd",
-   "size": 80,
-   "price": 18500,
-   "replacePrice": 49000
-  },
-  {
-   "file": "checkup.jpg",
-   "kind": "checkup",
-   "size": 0,
-   "price": 1000
-  }
- ]
+  "note": "Official photo cards, one per type and size. An LCD card prints both the modification price and the brand-new panel replacement price. A card whose file is not in public/price-cards yet is mapped here and skipped when sending.",
+  "cards": [
+    {"file": "backlight-32.jpg", "kind": "backlight", "size": 32, "price": 3000},
+    {"file": "backlight-40.jpg", "kind": "backlight", "size": 40, "price": 4500},
+    {"file": "backlight-43.jpg", "kind": "backlight", "size": 43, "price": 6000},
+    {"file": "backlight-50.jpg", "kind": "backlight", "size": 50, "price": 7500},
+    {"file": "backlight-55.jpg", "kind": "backlight", "size": 55, "price": 8500},
+    {"file": "backlight-60.jpg", "kind": "backlight", "size": 60, "price": 9500},
+    {"file": "backlight-65.jpg", "kind": "backlight", "size": 65, "price": 11000},
+    {"file": "backlight-70.jpg", "kind": "backlight", "size": 70, "price": 16000},
+    {"file": "backlight-75.jpg", "kind": "backlight", "size": 75, "price": 18000},
+    {"file": "backlight-80.jpg", "kind": "backlight", "size": 80, "price": 22000},
+    {"file": "backlight-85.jpg", "kind": "backlight", "size": 85, "price": 25000},
+    {"file": "lcd-32.jpg", "kind": "lcd", "size": 32, "price": 2500, "replacePrice": 5000},
+    {"file": "lcd-40.jpg", "kind": "lcd", "size": 40, "price": 4500, "replacePrice": 10000},
+    {"file": "lcd-43.jpg", "kind": "lcd", "size": 43, "price": 6500, "replacePrice": 12500},
+    {"file": "lcd-50.jpg", "kind": "lcd", "size": 50, "price": 7500, "replacePrice": 16500},
+    {"file": "lcd-55.jpg", "kind": "lcd", "size": 55, "price": 8500, "replacePrice": 19500},
+    {"file": "lcd-60.jpg", "kind": "lcd", "size": 60, "price": 9500, "replacePrice": 28000},
+    {"file": "lcd-65.jpg", "kind": "lcd", "size": 65, "price": 9500, "replacePrice": 30500},
+    {"file": "lcd-70.jpg", "kind": "lcd", "size": 70, "price": 15000, "replacePrice": 38000},
+    {"file": "lcd-75.jpg", "kind": "lcd", "size": 75, "price": 17000, "replacePrice": 45000},
+    {"file": "lcd-80.jpg", "kind": "lcd", "size": 80, "price": 18500, "replacePrice": 49000},
+    {"file": "lcd-85.jpg", "kind": "lcd", "size": 85, "price": 22000, "replacePrice": 55000},
+    {"file": "checkup-1000.jpg", "kind": "checkup", "size": 0, "price": 1000}
+  ]
 }

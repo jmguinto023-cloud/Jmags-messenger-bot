@@ -3,7 +3,7 @@
 // create the booking through the Supabase edge function ops-booking-intake (same payload as the
 // jmagscutomerform.netlify.app form). BOOKING_INTAKE_URL unset = dry run (logged, nothing sent).
 // Any failure falls back to the booking form link, prefilled with what we collected.
-const { knownSize, LCD_MOD, BACKLIGHT, PRICES, powerPriceRange } = require('./estimate');
+const { knownSize, LCD_MOD, LCD_REPLACE, BACKLIGHT, powerPriceRange } = require('./estimate');
 const { detectLocation } = require('./branch');
 const hours = require('./hours');
 
@@ -146,8 +146,8 @@ function quotedPrice(f) {
   const n = parseInt(f.size, 10);
   if (f.appliance !== 'TV' || !n) return 0;
   const p = String(f.problem || '');
+  if (/basag|cracked|smashed/i.test(p)) return LCD_REPLACE[n] || 0;
   if (/flicker|kislap|walang (?:display|picture|ilaw)|black screen|backlight|dim/i.test(p)) {
-    if (n === 85) return new RegExp(`\\b(?:${PRICES.backlight85.premiumBrands.join('|')})\\b`, 'i').test(f.brand) ? PRICES.backlight85.premium : PRICES.backlight85.other;
     return BACKLIGHT[n] || 0;
   }
   if (/linya|lines|guhit|modif/i.test(p)) return LCD_MOD[n] || 0;

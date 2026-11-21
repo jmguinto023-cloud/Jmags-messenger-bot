@@ -9,7 +9,7 @@ const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { compactPrompt } = require('../src/llm');
 const {
-  NEED_FACTS_LINE, NEED_VIDEO_LINE, ASK_VIDEO, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE,
+  NEED_FACTS_LINE, NEED_VIDEO_LINE, ASK_VIDEO, ASK_SIZE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE,
   gatePassed, shapeReply, nextAsk, capWords,
 } = require('../src/quote-gate');
 const { HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN } = require('../src/estimate');
@@ -46,7 +46,7 @@ async function setup() {
       body: raw,
     });
     await app.bot.idle();
-    const sent = mock.calls.messages.filter((m) => m.recipient && m.recipient.id === psid).map((m) => m.message.text);
+    const sent = mock.calls.messages.filter((m) => m.recipient && m.recipient.id === psid && m.message && m.message.text).map((m) => m.message.text);
     return sent.at(-1) || '';
   };
   return { app, mock, say, close: async () => { await app.bot.idle(); app.server.close(); await mock.close(); } };
@@ -75,8 +75,8 @@ test('quote gate blocks every price until video, size, brand, model, barangay, c
     assert.doesNotMatch(early, /₱|Kailan po kayo free|8,500/);
     assert.equal(gatePassed(s.app.store.thread('g1')), false);
     const cracked = await s.say('crack', 'basag ang LCD ng Samsung 55');
-    assert.equal(cracked, CRACKED_PRICE_LINE);
-    assert.doesNotMatch(cracked, /₱/);
+    assert.match(cracked, /₱19,500/);
+    assert.match(cracked, /final po after makita ng staff ang video/i);
     assert.equal(s.app.store.thread('crack').handedOff, true);
     assert.equal(Boolean(s.app.store.thread('crack').gateClosed), false);
   } finally { await s.close(); }
@@ -202,15 +202,16 @@ test('a pre-video repair price with size and symptom explains the need and names
   const latest = 'Samsung 43 inch po walang ilaw, magkano po?';
   const thread = { history: [{ role: 'user', content: latest }], slots: {} };
   const shaped = shapeReply(thread, 'Possible backlight po, ₱6,000.', latest);
-  assert.equal(shaped.text, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
-  assert.doesNotMatch(shaped.text, /₱|ilang inches|anong brand/i);
+  assert.match(shaped.text, /Nasa ₱6,000 po ang backlight/);
+  assert.match(shaped.text, /final po after makita ng staff ang video/i);
   assert.equal(shaped.handoff, false);
 });
 
 test('price flexibility does not replace handoffs', () => {
   const crack = shapeReply({ history: [], slots: {} }, '₱8,500', 'magkano po ang basag na LCD');
-  assert.equal(crack.text, CRACKED_PRICE_LINE);
-  assert.equal(crack.handoff, true);
+  assert.equal(crack.text, ASK_SIZE);
+  assert.doesNotMatch(crack.text, /₱/);
+  assert.equal(crack.handoff, false);
   assert.equal(crack.closeGate, false);
   const war = shapeReply({ history: [], slots: {} }, '6 months', 'magkano po ang warranty');
   assert.equal(war.text, WARRANTY_ONLY);
@@ -236,7 +237,8 @@ test('basag then 65 no display magkano still gets a reply', async () => {
   s.mock.state.llmResponder = () => '65 inches po, ₱11,000. [HANDOFF: panel damage]';
   try {
     const cracked = await s.say('after-basag', 'basag ang screen');
-    assert.equal(cracked, CRACKED_PRICE_LINE);
+    assert.match(cracked, /Ilang inches po ang TV/);
+    assert.doesNotMatch(cracked, /₱/);
     assert.equal(Boolean(s.app.store.thread('after-basag').gateClosed), false);
     const before = s.mock.calls.messages.length;
     const next = await s.say('after-basag', '65 no display magkano');

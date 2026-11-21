@@ -1084,15 +1084,15 @@ test('a home check-up answer includes ₱1,000 and the check-up card', async () 
   } finally { await s.close(); }
 });
 
-test('a pre-video repair price question does not quote a repair price', async () => {
+test('a sized no-display price question quotes the LCD modification list price', async () => {
   const s = await setup();
   s.mock.state.llmResponder = () => '65 inches po, palit backlight ₱11,000.';
   try {
     await s.post(msg('pre-video', { text: '65 no display magkano' }));
     const text = s.mock.calls.messages.map((m) => m.message.text || '').join('\n');
-    assert.ok(text.trim());
-    assert.doesNotMatch(text, /₱|11,?000|8,?500/);
-    assert.match(text, /video|depende/i);
+    assert.match(text, /Nasa ₱9,500 po ang LCD modification/);
+    assert.match(text, /final po after makita ng staff ang video/i);
+    assert.doesNotMatch(text, /11,?000|8,?500/);
   } finally { await s.close(); }
 });
 
@@ -2796,8 +2796,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.doesNotMatch(sound, /₱|Makati/);
 
     const bl = await send('live-3', 'magkano po backlight ng 43 lg');
-    assert.equal(bl, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
-    assert.doesNotMatch(bl, /₱/);
+    assert.match(bl, /Nasa ₱6,000 po ang backlight para sa LG 43/);
+    assert.match(bl, /final po after makita ng staff ang video/i);
 
     const mahal = await send('live-2', 'ang mahal naman po');
     assert.doesNotMatch(mahal, /₱|discount|tawad|promo|ibababa/i);
@@ -2825,8 +2825,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
 
     await send('live-8', 'Astron 40 may linya');
     const price = await send('live-8', 'magkano po kaya');
-    assert.equal(price, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
-    assert.doesNotMatch(price, /₱|LCD modification/);
+    assert.match(price, /Nasa ₱4,500 po ang LCD modification para sa Astron 40/);
+    assert.match(price, /final po after makita ng staff ang video/i);
 
     const disc = await send('live-9', 'pa discount naman po');
     assert.match(disc, /Fixed po ang presyo/);
@@ -3162,7 +3162,7 @@ test('the check-up fee answer carries the check-up card once; the card switch tu
     assert.equal(first.length, 2);
     assert.equal(first[0].message.text, homeReply);
     assert.equal(first[1].message.attachment.type, 'image');
-    assert.equal(first[1].message.attachment.payload.url, 'https://bot.test/price-cards/checkup.jpg');
+    assert.equal(first[1].message.attachment.payload.url, 'https://bot.test/price-cards/checkup-1000.jpg');
     assert.equal(imgs(on), 1);
     await on.post(msg('chk-1', { text: 'Magkano po check up fee sa bahay?' }, t0 + 5000));
     assert.equal(imgs(on), 1);
@@ -3177,17 +3177,20 @@ test('the check-up fee answer carries the check-up card once; the card switch tu
   } finally { await off.close(); }
 });
 
-test('a pre-video 43 inch walang ilaw price question explains the need with no peso and no card', async () => {
+test('a sized backlight price is the list estimate, then the matching card', async () => {
   const s = await setup({ PRICE_CARDS_ENABLED: 'true', PUBLIC_BASE_URL: 'https://bot.test' });
   const t0 = NOON;
   s.app.bot.now = () => t0;
   try {
     await s.post(msg('p43', { text: 'Samsung 43 inch po walang ilaw, magkano po?' }, t0));
     const mine = s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'p43');
-    assert.equal(mine.length, 1);
-    assert.equal(mine[0].message.text, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
-    assert.doesNotMatch(mine[0].message.text, /₱|ilang inches|anong brand/i);
-    assert.equal(mine.filter((m) => m.message && m.message.attachment).length, 0);
+    assert.match(mine[0].message.text, /Nasa ₱6,000 po ang backlight/);
+    assert.match(mine[0].message.text, /final po after makita ng staff ang video/i);
+    const image = mine.find((m) => m.message && m.message.attachment);
+    assert.equal(image.message.attachment.payload.url, 'https://bot.test/price-cards/backlight-43.jpg');
+    await s.post(msg('p43', { text: 'Samsung 43 inch po walang ilaw, magkano po ulit?' }, t0 + 1000));
+    const images = s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'p43' && m.message && m.message.attachment);
+    assert.equal(images.length, 1);
   } finally { await s.close(); }
 });
 
