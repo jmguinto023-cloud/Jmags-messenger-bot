@@ -79,6 +79,8 @@ const lines = {
     "Hi po maam/sir, salamat po sa message sa JMAG's Appliances! 😊 Para mabigyan po namin kayo agad ng presyo, paki-send lang po: brand at size ng TV, issue, at taga saan po sila 🙏",
   holding:
     'Noted po maam/sir. Ang technician po namin ang tutuloy dito. Saglit lang po.',
+  // Sent when every provider times out, returns 5xx, or comes back empty. Not a handoff.
+  aiHolding: 'Sandali lang po, titingnan po namin ito.',
   holdingMedia:
     'Noted po maam/sir. Natanggap po namin. Ang technician po namin ang titingin dito. Saglit lang po.',
   // Photo/video stay in this chat. No "video" in the text (a later follow-up treats that word as a request).

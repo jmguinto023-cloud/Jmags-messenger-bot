@@ -5,7 +5,10 @@ const path = require('node:path');
 const { summarizeConversation } = require('./summary');
 const {
   asksCheckupFee, checkupFeeReply, HOME_CHECKUP_FEE_ANSWER, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN,
+  scriptedReply,
 } = require('./estimate');
+const { SAFE_TEMPLATE } = require('./messages');
+const PRICE_TABLE = require('../knowledge/prices.json');
 
 const RULES_PATH = path.join(__dirname, '..', 'prompts', 'rules.md');
 
@@ -209,6 +212,8 @@ function capWords(text) {
   if (/Para mabigyan po namin kayo agad ng presyo/.test(s)) return s.trim();
   if (isPreparedPriceAnswer(s)) return s.trim();
   if (canonical.includes(s.trim())) return s;
+  // A booking-form message is sent whole. The word cap must not drop the link.
+  if (/schedule form|booking form/i.test(s) && /https?:\/\//i.test(s)) return s.trim();
   const emoji = /\p{Extended_Pictographic}/gu;
   const icons = s.match(emoji) || [];
   if (icons.length > 1) {
@@ -229,18 +234,161 @@ function bannedPart(text) {
   return /power supply|mainboard|motherboard/i.test(String(text || ''));
 }
 
-function shapeReply(thread, text, latest) {
+function allowedPesos() {
+  const set = new Set([300, 1000]);
+  const walk = (node) => {
+    if (typeof node === 'number' && Number.isFinite(node) && node >= 100) set.add(Math.round(node));
+    else if (Array.isArray(node)) node.forEach(walk);
+    else if (node && typeof node === 'object') Object.values(node).forEach(walk);
+  };
+  walk(PRICE_TABLE);
+  return set;
+}
+const ALLOWED_PESOS = allowedPesos();
+
+function pesoValue(raw) {
+  return Number(String(raw || '').replace(/[^\d]/g, ''));
+}
+
+function hasRepairPeso(text) {
+  const re = /₱\s?(\d{1,3}(?:,\d{3})+|\d+)/g;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const n = pesoValue(m[1]);
+    if (n !== 300 && n !== 1000) return true;
+  }
+  return false;
+}
+
+// A cracked screen plus a different question (size, no-display, warranty, location).
+function otherThanCrack(latest) {
+  if (!isCracked(latest)) return false;
+  // A size next to "basag" is still the cracked panel. A different fault is a second question.
+  return /no display|walang (?:display|ilaw|picture)|backlight|\blinya\b|\blines\b|warranty|check-?\s*up|\blocated\b|\bsaan po\b/i.test(String(latest || ''));
+}
+
+function stripDayTime(text) {
+  return String(text || '')
+    .replace(/\b(?:kailan|anong oras|anong araw|what time)\b[^?.!\n]{0,48}\b(?:free|available|bukas|pumunta|punta|sila|kayo)\b[^?.!\n]*/gi, '')
+    .replace(/\b(?:bukas|mamaya|mamayang)\b[^?.!\n]{0,24}/gi, '')
+    .replace(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|lunes|martes|miyerkules|huwebes|biyernes|sabado|linggo)\b(?:\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?/gi, '')
+    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.!?])/g, '$1')
+    .trim();
+}
+
+function stripUnknownPesos(text, allowRepair) {
+  return String(text || '').replace(/₱\s?(\d{1,3}(?:,\d{3})+|\d+)/g, (full, raw) => {
+    const n = pesoValue(raw);
+    if (!ALLOWED_PESOS.has(n)) return '';
+    if (!allowRepair && n !== 300 && n !== 1000) return '';
+    return full;
+  }).replace(/\s{2,}/g, ' ').trim();
+}
+
+function reasksKnown(text, thread) {
+  const s = (thread && thread.slots) || {};
+  const t = String(text || '');
+  if (s.size && /ilang inches|anong size|size po ng tv/i.test(t)) return true;
+  if (s.brand && /anong brand/i.test(t)) return true;
+  if (s.symptom && /ano po ang sira|anong sira|ano pong sira/i.test(t)) return true;
+  return false;
+}
+
+function stripPersonNames(text) {
+  return String(text || '').replace(/\b(?:si|ni|kay)\s+(?!samsung\b|sony\b|lg\b|tcl\b|sharp\b|hisense\b|devant\b|xiaomi\b|philips\b|haier\b|konka\b|skyworth\b|coocaa\b|astron\b|panasonic\b)[A-Za-z][a-z]{2,}\b/g, 'staff po namin');
+}
+
+function isSafeTemplate(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed po ang presyo', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
+  return leads.some((lead) => t === lead || t.startsWith(lead));
+}
+
+function coversScript(cleaned, scripted) {
+  const body = String(scripted || '').replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, '').trim();
+  if (!body) return true;
+  const needle = body.slice(0, 24).toLowerCase();
+  if (String(cleaned || '').toLowerCase().includes(needle)) return true;
+  // Asking for the video is a valid answer when the saved script is a repair price.
+  if (/video|depende po sa/i.test(cleaned) && /₱/.test(body)) return true;
+  return false;
+}
+
+function sameWords(a, b) {
+  return String(a || '').replace(/\s+/g, ' ').trim().toLowerCase() === String(b || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// Light cleanup. fallback means the draft broke a hard rule and the old template should be used.
+function guardCustomerReply(thread, text, latest) {
+  const original = String(text || '');
+  const passed = gatePassed(thread);
+  let reason = '';
+  let handoff = false;
+  if (/\[\[?\s*HANDOFF/i.test(original)) {
+    const found = original.match(/\[+\s*HANDOFF\s*:?\s*([^\]]*)\]+/i);
+    reason = ((found && found[1]) || '').trim() || 'model';
+    handoff = true;
+  }
+  let body = stripPersonNames(staffVoice(stripWarrantyLength(original.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, ''))));
+  body = stripDayTime(body);
+  body = stripUnknownPesos(body, passed);
+  if (bannedPart(body)) body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
+  body = body.replace(/\s{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').replace(/\.{2,}/g, '.').trim();
+  const scripted = scriptedReply(latest, thread, { allowPrice: !(thread && (thread.problemViaVideo || (thread.mediaNotes || []).length)) });
+  const thin = !body || (body.length < 12 && original.trim().length > body.length + 12);
+  const violated = thin
+    || (!passed && (hasRepairPeso(original) || isRepairQuote(original) || isScheduleTalk(original) || /https?:\/\//i.test(original)))
+    || reasksKnown(original, thread)
+    || (String(original).trim() === SAFE_TEMPLATE && scripted)
+    || (scripted && !coversScript(body, scripted))
+    || (asksCheckupFee(latest) && !/₱\s?(?:300|1,?000)\b/.test(body))
+    || (/warranty|garantiya|back-?job|backjob/i.test(latest || '') && body !== WARRANTY_ONLY)
+    || (/\b(?:galit|bwisit|tangina|putangina|leche|scam|reklamo)\b/i.test(latest || ''))
+    || (/mali (?:po )?(?:yan|yun|yon)|hindi tama|mali po kayo|you(?:'re| are) wrong/i.test(latest || ''));
+  return {
+    text: capWords(body),
+    handoff,
+    reason,
+    silent: false,
+    closeGate: false,
+    fallback: violated,
+  };
+}
+
+function shapeFromScript(thread, latest) {
+  const scripted = scriptedReply(latest, thread, {
+    allowPrice: !(thread && (thread.problemViaVideo || (thread.mediaNotes || []).length)),
+  });
+  if (!scripted) return null;
+  const found = String(scripted).match(/\[+\s*HANDOFF\s*:?\s*([^\]]*)\]+/i);
+  const body = String(scripted).replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, '').trim();
+  const shaped = legacyShape(thread, body, latest);
+  return {
+    ...shaped,
+    handoff: shaped.handoff || Boolean(found),
+    reason: (found && found[1] && found[1].trim()) || shaped.reason,
+    fallback: true,
+  };
+}
+
+function legacyShape(thread, text, latest) {
   rememberJob(thread);
   let body = staffVoice(stripWarrantyLength(text));
   const passed = gatePassed(thread);
   const reason = [];
-  // Only the message that reports the crack. A later question is answered normally.
-  if (isCracked(latest)) {
+  // Only a crack with no separate question. A later or mixed question is answered.
+  if (isCracked(latest) && !otherThanCrack(latest)) {
     return { text: CRACKED_PRICE_LINE, handoff: true, reason: 'cracked lcd', silent: false, closeGate: false };
   }
   if (/\[\[?\s*HANDOFF/i.test(body)) {
     body = body.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, '').trim();
-    return { text: body || HANDOFF_LINE, handoff: true, reason: 'model', silent: false };
+    const found = String(text || '').match(/\[+\s*HANDOFF\s*:?\s*([^\]]*)\]+/i);
+    const why = ((found && found[1]) || '').trim() || 'model';
+    return { text: body || HANDOFF_LINE, handoff: true, reason: why, silent: false, closeGate: false };
   }
   if (/warranty|garantiya|back-?job|backjob/i.test(latest || '')) {
     return { text: WARRANTY_ONLY, handoff: true, reason: 'warranty or backjob', silent: false };
@@ -265,6 +413,33 @@ function shapeReply(thread, text, latest) {
     body = SCHEDULE_HOLD;
   }
   return { text: capWords(body), handoff: false, reason: reason[0] || '', silent: false };
+}
+
+// Validator. A clean model draft is kept. A draft that breaks a hard rule falls back to the old template.
+function shapeReply(thread, text, latest) {
+  rememberJob(thread);
+  if (gatePassed(thread) && /https?:\/\//i.test(text) && /form|book|schedule/i.test(text)) {
+    return { text: String(text || '').trim(), handoff: false, reason: '', silent: false, closeGate: false, fallback: false };
+  }
+  if (isCracked(latest) && otherThanCrack(latest)) {
+    const rest = legacyShape(thread, text, latest);
+    const combined = rest.text && rest.text !== CRACKED_PRICE_LINE
+      ? `${CRACKED_PRICE_LINE} ${rest.text}`
+      : CRACKED_PRICE_LINE;
+    return { text: combined.trim(), handoff: true, reason: 'cracked lcd', silent: false, closeGate: false, fallback: true };
+  }
+  const legacy = legacyShape(thread, text, latest);
+  if (legacy.reason === 'cracked lcd') return { ...legacy, fallback: true };
+  const guarded = guardCustomerReply(thread, text, latest);
+  if (asksCheckupFee(latest) || (!gatePassed(thread) && isMagkano(latest))
+      || (legacy.handoff && legacy.closeGate !== false && legacy.reason !== 'model' && !isPanelPriceHandoff(legacy.reason))) {
+    return { ...legacy, fallback: true };
+  }
+  if (!guarded.fallback) return guarded;
+  if (isSafeTemplate(legacy.text)) return { ...legacy, fallback: true };
+  const fromScript = shapeFromScript(thread, latest);
+  if (fromScript && (isSafeTemplate(fromScript.text) || fromScript.handoff)) return fromScript;
+  return { ...guarded, text: guarded.text || legacy.text, fallback: true };
 }
 
 module.exports = {

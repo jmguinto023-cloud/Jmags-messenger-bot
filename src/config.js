@@ -72,6 +72,11 @@ function loadConfig(env = process.env) {
     geminiModel: env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
     groqApiKey: env.GROQ_API_KEY || '',
     groqModel: env.GROQ_MODEL || 'openai/gpt-oss-20b',
+    // OpenAI is preferred when AI_PROVIDER_ORDER lists it first, for example openai,groq.
+    openaiApiKey: env.OPENAI_API_KEY || '',
+    openaiModel: env.OPENAI_MODEL || 'gpt-5.4-mini',
+    openaiReasoningEffort: env.OPENAI_REASONING_EFFORT || 'low',
+    openaiTimeoutMs: num(env.OPENAI_TIMEOUT_MS, 15000),
     // LLM (any OpenAI-compatible chat completions API)
     llmBaseUrl: (env.LLM_BASE_URL || '').replace(/\/+$/, ''),
     llmApiKey: env.LLM_API_KEY || '',
@@ -163,7 +168,7 @@ function loadConfig(env = process.env) {
     // Safety: a human pause ends early when Ivan has not replied for this long (0 = off).
     humanIdleResumeHours: num(env.HUMAN_IDLE_RESUME_HOURS, 2),
     handoffResumeHours: num(env.HANDOFF_RESUME_HOURS, 24),
-    batchWindowMs: num(env.BATCH_WINDOW_MS, 3000),
+    batchWindowMs: num(env.BATCH_WINDOW_MS, 1000),
     // One scripted nudge for a customer who asked about repair but never sent a video. Main Page only.
     priceCardsEnabled: bool(env.PRICE_CARDS_ENABLED, true),
     interestFollowupEnabled: bool(env.INTEREST_FOLLOWUP_ENABLED, true),

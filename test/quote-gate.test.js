@@ -221,6 +221,16 @@ test('price flexibility does not replace handoffs', () => {
   assert.equal(nextAsk({ videoReceived: false, slots: { size: '43"', symptom: 'screen', brand: 'Samsung' } }), ASK_VIDEO);
 });
 
+test('guardrails strip invented prices, names, a day or time, and a bot mention', () => {
+  const shaped = shapeReply(
+    { history: [{ role: 'user', content: 'hello po' }], slots: {} },
+    'Si Pedro po ang technician. Bot ako. Bukas 9am, ₱99,999 po.',
+    'hello po',
+  );
+  assert.doesNotMatch(shaped.text, /Pedro|technician|\bbot\b|9am|99,?999|bukas/i);
+  assert.match(shaped.text, /staff po namin|video|depende/i);
+});
+
 test('basag then 65 no display magkano still gets a reply', async () => {
   const s = await setup();
   s.mock.state.llmResponder = () => '65 inches po, ₱11,000. [HANDOFF: panel damage]';

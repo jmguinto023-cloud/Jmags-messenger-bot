@@ -98,7 +98,7 @@ function isAutomatedEchoText(text, extra = []) {
 }
 
 function isCannedLine(text) {
-  return [lines.fallback, lines.holding, lines.holdingMedia, lines.holdingPerson].some((line) => text === line || text === staffVoice(line));
+  return [lines.fallback, lines.holding, lines.holdingMedia, lines.holdingPerson, lines.aiHolding].some((line) => text === line || text === staffVoice(line));
 }
 
 function latestUserText(thread) {
@@ -1252,29 +1252,22 @@ class Bot {
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
+      // Old templates are context for the model and the fallback when a draft breaks a rule.
+      let prepared = '';
       if (!reviewIsCurrent(t, this.now()) && asksBarePrice(latestUser) && !quoteKnownTv(t)) {
-        this.repliedRev.set(this.slot(psid), rev);
-        await this.send(psid, varyRepeated(t, PRICE_ASK), { provider: 'rules' });
-        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
-        return;
+        prepared = varyRepeated(t, PRICE_ASK);
       }
-      const scripted = scriptedReply(latestUser, t, { allowPrice: !hadMedia && !reviewPending(t) });
-      if (scripted) {
-        const parsed = parseHandoff(scripted);
-        this.repliedRev.set(this.slot(psid), rev);
-        const body = this.presentReply(parsed.text) || lines.holding;
-        if (parsed.handoff) await this.handoff(psid, parsed.reason || 'rules', body, { provider: 'rules' });
-        else await this.send(psid, body, { provider: 'rules' });
-        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
-        return;
+      if (!prepared) {
+        prepared = scriptedReply(latestUser, t, { allowPrice: !hadMedia && !reviewPending(t) }) || '';
       }
-      if (asksCheckupFee(latestUser)) {
-        this.repliedRev.set(this.slot(psid), rev);
-        const checkupAnswer = checkupFeeReply(latestUser, t);
-        if (hadMedia) await this.sendMediaAck(psid, checkupAnswer, true, { armVideo: hadVideo, checkupCard: true });
-        else await this.send(psid, checkupAnswer, { checkupCard: true });
-        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
-        return;
+      if (!prepared && asksCheckupFee(latestUser)) prepared = checkupFeeReply(latestUser, t);
+      if (!prepared && !hadMedia && !reviewPending(t) && !t.problemViaVideo) {
+        prepared = quoteKnownTv(t) || '';
+      }
+      if (!prepared && reviewPending(t) && asksReviewStatus(latestUser)) prepared = PENDING_REVIEW_STATUS;
+      if (!prepared && reviewPending(t) && isUnclearDuringReview(latestUser)) prepared = REVIEW_CLARIFY;
+      if (!prepared && this.cfg.aiSmartRulesEnabled && !hadMedia && !reviewPending(t)) {
+        prepared = quickReply(latestUser, this.cfg, t) || '';
       }
 
       if (t.intakeClosed && !t.intakeCloseSent) {
@@ -1301,30 +1294,6 @@ class Bot {
         return;
       }
 
-      if (reviewPending(t) && asksReviewStatus(latestUser)) {
-        this.repliedRev.set(this.slot(psid), rev);
-        await this.send(psid, PENDING_REVIEW_STATUS, { armVideo: hadVideo });
-        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
-        return;
-      }
-      if (reviewPending(t) && isUnclearDuringReview(latestUser)) {
-        this.repliedRev.set(this.slot(psid), rev);
-        await this.send(psid, REVIEW_CLARIFY, { armVideo: hadVideo });
-        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
-        return;
-      }
-
-      // Approved zero-token FAQ replies, without overriding media review or human handoff.
-      if (this.cfg.aiSmartRulesEnabled && !hadMedia && !reviewPending(t)) {
-        const canned = quickReply(latestUser, this.cfg, t);
-        if (canned) {
-          this.repliedRev.set(this.slot(psid), rev);
-          if (this.blockReason(psid, t, ts)) return;
-          await this.send(psid, canned);
-          if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
-          return;
-        }
-      }
       this.graph.typingOn(psid).catch((e) => this.log.warn('typing_on failed', e.message));
       let raw;
       const modelHistory = visibleHistory(t.history, this.now(), {
@@ -1337,7 +1306,12 @@ class Bot {
           attachmentNote,
           intakeNote: [intakeContext(t), t.customerContext].filter(Boolean).join(' '),
           mediaStatus: mediaStatus(t),
+          preparedNote: prepared,
         });
+        if (this.llm && this.llm.lastProvider) {
+          const modelName = this.llm.lastModel || '';
+          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}`);
+        }
         raw = await this.fitModelReply(psid, raw);
       } catch (e) {
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
@@ -1359,6 +1333,17 @@ class Bot {
         latestUserText(t),
       );
       if (!handoff) guarded = await this.ensureNotEcho(psid, guarded, t);
+      if (asksBarePrice(latestUser) && !quoteKnownTv(t) && !/ilang inches|anong brand|depende po sa size/i.test(guarded)) {
+        guarded = varyRepeated(t, PRICE_ASK);
+      }
+      if (!asksForACall(latestUser) && /09\d{9}/.test(String(guarded || '')) && prepared) guarded = prepared;
+      if (prepared && reviewPending(t) && (asksReviewStatus(latestUser) || isUnclearDuringReview(latestUser))
+          && !/nagre-review|nire-review/i.test(guarded)) {
+        this.repliedRev.set(this.slot(psid), rev);
+        await this.send(psid, prepared, { provider: 'rules', armVideo: hadVideo });
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
+        return;
+      }
       this.repliedRev.set(this.slot(psid), rev);
       // A photo or video never passes the thread. A keyword in the caption already handed off above.
       if (hadMedia && !t.intakeCloseSent) {
@@ -1376,12 +1361,8 @@ class Bot {
         else if (handoff && guarded === text) {
           const steered = steerTurn(t, text || lines.holding, latestUser);
           if (steered && steered !== text && (nextEvidenceAsk(t) || remindsMissingProof(latestUser))) await this.send(psid, steered, { provider: 'rules' });
-          else if (isPanelPriceHandoff(reason) || isCracked(latestUser)) {
-            // Staff prices the cracked panel. The thread stays open for the next message.
-            await this.handoff(psid, reason || 'cracked lcd', this.presentReply(text) || lines.holding);
-          }
           else {
-            t.gateClosed = true;
+            // Flag staff. gateClosed is set only for warranty, anger, and correction inside send().
             await this.handoff(psid, reason || 'model', this.presentReply(text) || lines.holding);
           }
         }
@@ -1411,39 +1392,29 @@ class Bot {
     return 'AI unavailable';
   }
 
-  // The canned greeting is never the answer to an AI failure, and never goes out twice.
+  // One short holding line. The next customer message is tried again. Never close the thread.
   async giveUpOnAi(psid, e, { rev, hadMedia, hadVideo }) {
-    if (this.llm) this.llm.lastProvider = '';
+    if (this.llm) {
+      this.llm.lastProvider = '';
+      this.llm.lastModel = '';
+    }
     this.forceProvider = '';
     const t = this.store.thread(psid);
     const reason = this.aiOutageReason(e);
     this.log.error(`LLM outage for ${short(psid)}: ${reason}. ${e && e.message ? e.message : ''} No canned greeting.`);
     t.aiNeedsIvan = true;
     t.handoffReason = reason;
+    t.handedOff = true;
+    t.handoffAt = this.now();
+    t.passedByBot = true;
+    t.aiHoldingSent = false;
     this.repliedRev.set(this.slot(psid), rev);
     this.store.save();
     if (hadMedia) {
-      await this.sendMediaAck(psid, lines.mediaAck, true, { armVideo: hadVideo });
+      await this.sendMediaAck(psid, lines.mediaAck, true, { armVideo: hadVideo, skipGate: true });
       return;
     }
-    if (t.aiHoldingSent || t.handedOff) {
-      if (!t.handedOff) {
-        t.handedOff = true;
-        t.handoffAt = this.now();
-        t.passedByBot = true;
-        this.stopVideoFollowup(psid, 'handed to Ivan');
-        this.store.save();
-        if (this.cfg.passThreadControl) {
-          try { await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`); }
-          catch (err) { this.log.error('pass_thread_control failed', err.message); }
-        }
-      }
-      this.log.error(`LLM outage for ${short(psid)} still down; not sending another holding line`);
-      return;
-    }
-    t.aiHoldingSent = true;
-    this.store.save();
-    return this.handoff(psid, reason, lines.holding);
+    return this.send(psid, lines.aiHolding, { skipGate: true, provider: '' });
   }
 
   async send(psid, text, opts = {}) {
@@ -1463,14 +1434,16 @@ class Bot {
     const withFee = opts.ops || opts.videoFollowup || opts.tips
       ? text : ensureHomeVisitFee(text, latestUserText(thread), thread.history);
     let clean = varyRepeated(thread, sanitizeOutgoing(withFee));
+    let providerOpt = opts.provider;
     if (!opts.skipGate && !opts.ops && !opts.tips && !opts.videoFollowup) {
       rememberJob(thread);
       const shaped = shapeReply(thread, clean, latestUserText(thread));
+      if (shaped.fallback && providerOpt == null) providerOpt = 'rules';
       if (shaped.handoff) {
-        // closeGate false: cracked/panel price is flagged, later messages still get a reply.
+        // closeGate false: cracked/panel price and a plain model [HANDOFF] stay open.
         if (shaped.closeGate !== false) thread.gateClosed = true;
         if (!thread.handedOff) {
-          await this.handoff(psid, shaped.reason || 'rules', shaped.text, { ...opts, skipGate: true });
+          await this.handoff(psid, shaped.reason || 'rules', shaped.text, { ...opts, provider: providerOpt, skipGate: true });
           return true;
         }
         clean = shaped.text;
@@ -1501,14 +1474,15 @@ class Bot {
     // Canned fallback/holding lines are not part of the chat the model sees,
     // or the next reply continues them ("Pasensya na po... Nandito pa po ako").
     // They are still appended to the conversation export.
-    const provider = opts.provider != null ? opts.provider : (this.forceProvider || (this.llm && this.llm.lastProvider) || '');
+    const provider = providerOpt != null ? providerOpt : (this.forceProvider || (this.llm && this.llm.lastProvider) || '');
+    const modelName = provider && provider !== 'rules' && provider !== 'template' && this.llm ? (this.llm.lastModel || '') : '';
     this.forceProvider = '';
     this.store.addTurn(psid, 'assistant', clean, this.now(), {
       history: !isCannedLine(clean),
       handoffReason: t.handoffReason || '',
       provider,
     });
-    this.log.info(`replied to ${short(psid)} (${clean.length} chars)${provider ? ` provider=${provider}` : ''}`);
+    this.log.info(`replied to ${short(psid)} (${clean.length} chars)${provider ? ` provider=${provider}` : ''}${modelName ? ` model=${modelName}` : ''}`);
     if (!opts.ops && !opts.tips && !opts.videoFollowup) {
       await this.sendPriceCard(psid, clean, { size: thread.slots && thread.slots.size, checkup: opts.checkupCard });
     }

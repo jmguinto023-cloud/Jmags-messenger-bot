@@ -5,6 +5,11 @@
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai';
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1';
+const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+
+function gpt5Family(model) {
+  return /^gpt-5/i.test(String(model || ''));
+}
 
 function buildProviders(cfg) {
   if (!cfg.aiAllowExternalData) return [];
@@ -17,6 +22,13 @@ function buildProviders(cfg) {
     groq: cfg.groqApiKey ? {
       name: 'groq', baseUrl: GROQ_ENDPOINT,
       apiKey: cfg.groqApiKey, model: cfg.groqModel || 'openai/gpt-oss-20b',
+      thirdParty: true,
+    } : null,
+    openai: cfg.openaiApiKey ? {
+      name: 'openai', baseUrl: OPENAI_ENDPOINT,
+      apiKey: cfg.openaiApiKey, model: cfg.openaiModel || 'gpt-5.4-mini',
+      reasoningEffort: cfg.openaiReasoningEffort || 'low',
+      timeoutMs: Number(cfg.openaiTimeoutMs) || 15000,
       thirdParty: true,
     } : null,
   };
@@ -96,6 +108,7 @@ class AiRouter {
         try {
           const answer = await this.ask(provider, payload);
           this.lastProvider = provider.name;
+          this.lastModel = provider.model || '';
           this.cooldowns.delete(provider.name);
           return answer;
         } catch (err) {
@@ -141,13 +154,22 @@ class AiRouter {
       reqPayload.max_completion_tokens = Math.max(512, Number(reqPayload.max_tokens) || 0);
       delete reqPayload.max_tokens;
     }
+    // GPT-5 rejects max_tokens and temperature. reasoning_effort is required.
+    if (provider.name === 'openai' && gpt5Family(provider.model)) {
+      const budget = Number(reqPayload.max_completion_tokens) || Number(reqPayload.max_tokens) || 400;
+      reqPayload.max_completion_tokens = budget;
+      reqPayload.reasoning_effort = provider.reasoningEffort || 'low';
+      delete reqPayload.max_tokens;
+      delete reqPayload.temperature;
+    }
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers.Authorization = 'Bearer ' + provider.apiKey;
+    const timeoutMs = Math.max(1000, Number(provider.timeoutMs) || this.timeoutMs);
     const res = await this.fetcher(provider.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
       method: 'POST',
       headers,
       body: JSON.stringify(reqPayload),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const raw = await res.text();
     if (!res.ok) {
@@ -169,4 +191,4 @@ class AiRouter {
   }
 }
 
-module.exports = { AiRouter, buildProviders, redactContact, sanitizePayload };
+module.exports = { AiRouter, buildProviders, redactContact, sanitizePayload, gpt5Family };
