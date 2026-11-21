@@ -1271,8 +1271,8 @@ class Bot {
       if (asksCheckupFee(latestUser)) {
         this.repliedRev.set(this.slot(psid), rev);
         const checkupAnswer = checkupFeeReply(latestUser, t);
-        if (hadMedia) await this.sendMediaAck(psid, checkupAnswer, true, { armVideo: hadVideo });
-        else await this.send(psid, checkupAnswer, { checkupCard: /₱1,000/.test(checkupAnswer) });
+        if (hadMedia) await this.sendMediaAck(psid, checkupAnswer, true, { armVideo: hadVideo, checkupCard: true });
+        else await this.send(psid, checkupAnswer, { checkupCard: true });
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
@@ -1528,12 +1528,18 @@ class Bot {
     try { this.forgetCustomer(String(psid)); this.log.info(`test account ${short(psid)} reset`); } catch (e) { this.log.warn(`test reset failed: ${e.message}`); }
   }
 
-  // Price-card photo after a text that quotes a price. Only when the card's printed price equals a
-  // price in the text, once per card per customer. Never throws: the text is already sent.
+  // Price-card photo immediately after the text, same turn. A repair card wins when its
+  // printed price equals the quoted price. Otherwise a check-up fee answer gets the
+  // check-up card. Once per card per customer. Never throws: the text is already sent.
   async sendPriceCard(psid, text, { size, checkup = false } = {}) {
     try {
       if (!this.cfg.priceCardsEnabled) return false;
-      const card = checkup ? priceCards.checkupCard() : priceCards.cardForQuote({ size, text });
+      const repair = priceCards.cardForQuote({ size, text });
+      let card = repair;
+      // checkup is only a hint. The card is attached when this sent text states the fee.
+      if (!card && (checkup || priceCards.answersCheckupFee(text)) && priceCards.answersCheckupFee(text)) {
+        card = priceCards.checkupCard();
+      }
       if (!card) return false;
       const t = this.store.thread(psid);
       const key = priceCards.cardKey(card);

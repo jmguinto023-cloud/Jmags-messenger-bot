@@ -3,6 +3,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { summarizeConversation } = require('./summary');
+const {
+  asksCheckupFee, checkupFeeReply, HOME_CHECKUP_FEE_ANSWER, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN,
+} = require('./estimate');
 
 const RULES_PATH = path.join(__dirname, '..', 'prompts', 'rules.md');
 
@@ -19,6 +22,8 @@ const ASK_MODEL = 'Ano po ang model number sa sticker sa likod?';
 const ASK_CITY = 'Pwede po malaman kung taga-saan po sila?';
 const ASK_BARANGAY = 'Anong barangay po?';
 const ASK_REPAIRED = 'Na-repair na po ba ito sa ibang shop?';
+const NEED_VIDEO_LINE = 'Depende po sa sira na makikita sa video.';
+const NEED_FACTS_LINE = 'Depende po sa size, sira, at maikling video.';
 
 const CITIES = ['quezon city', 'san pablo', 'general trias', 'santa rosa', 'sta rosa', 'sto tomas', 'cavite city', 'las pinas', 'las piñas', 'biñan', 'binan', 'cabuyao', 'calamba', 'dasmariñas', 'dasmarinas', 'paranaque', 'parañaque', 'muntinlupa', 'valenzuela', 'caloocan', 'mandaluyong', 'marikina', 'manila', 'makati', 'taguig', 'pasig', 'pasay', 'imus', 'bacoor', 'silang', 'carmona', 'tanauan', 'malvar', 'lipa', 'san pedro'];
 const PROVINCES = ['laguna', 'cavite', 'batangas'];
@@ -91,7 +96,13 @@ function isRepairQuote(text) {
 
 function rememberJob(thread) {
   const s = slots(thread);
-  const users = (thread.history || []).filter((h) => h && h.role === 'user').map((h) => h.content || '');
+  const epoch = Number(thread && thread.intakeEpoch) || 0;
+  const users = (thread.history || []).filter((h) => {
+    if (!h || h.role !== 'user' || !h.content) return false;
+    const ts = Number(h.ts) || 0;
+    if (epoch && ts && ts < epoch) return false;
+    return true;
+  }).map((h) => h.content || '');
   const blob = users.join('\n');
   const summary = summarizeConversation([{ content: blob }]);
   if (summary.brand) s.brand = s.brand || summary.brand;
@@ -108,8 +119,8 @@ function rememberJob(thread) {
     thread.videoReceived = true;
   }
   if (isCracked(blob)) s.symptom = 'cracked';
-  else if (/nawala|walang display|no display|backlight|lines|linya|ayaw mag-?on/i.test(blob) && !s.symptom) {
-    s.symptom = s.symptom || 'screen';
+  else if (/nawala|walang (?:display|picture|ilaw)|no display|black screen|backlight|lines|linya|ayaw mag-?on|flicker|blink|kislap|kumikislap/i.test(blob) && !s.symptom) {
+    s.symptom = 'screen';
   }
   return s;
 }
@@ -159,10 +170,37 @@ function stripWarrantyLength(text) {
     .trim();
 }
 
+function isPreparedPriceAnswer(text) {
+  const s = String(text || '').trim();
+  const leads = [HOME_CHECKUP_FEE_ANSWER, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN, NEED_VIDEO_LINE, NEED_FACTS_LINE];
+  return leads.some((lead) => s === lead || s.startsWith(lead));
+}
+
+function sizeAndSymptomKnown(thread) {
+  const s = (thread && thread.slots) || {};
+  return Boolean(s.size && s.symptom && s.symptom !== 'cracked');
+}
+
+// One missing quote-gate question after the answer, unless the answer already asks something.
+function withOneAsk(lead, thread) {
+  const body = String(lead || '').trim();
+  if (/\?/.test(body)) return body;
+  const ask = nextAsk(thread);
+  if (!ask || body.includes(ask)) return body;
+  return body ? `${body} ${ask}` : ask;
+}
+
+function flexiblePriceReply(thread, latest) {
+  if (asksCheckupFee(latest)) return withOneAsk(checkupFeeReply(latest, thread), thread);
+  const lead = sizeAndSymptomKnown(thread) ? NEED_VIDEO_LINE : NEED_FACTS_LINE;
+  return withOneAsk(lead, thread);
+}
+
 function capWords(text) {
   const canonical = [MAGKANO_LINE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
   let s = String(text || '');
   if (/Para mabigyan po namin kayo agad ng presyo/.test(s)) return s.trim();
+  if (isPreparedPriceAnswer(s)) return s.trim();
   if (canonical.includes(s.trim())) return s;
   const emoji = /\p{Extended_Pictographic}/gu;
   const icons = s.match(emoji) || [];
@@ -205,11 +243,12 @@ function shapeReply(thread, text, latest) {
   if (/\b(?:galit|bwisit|tangina|putangina|leche|scam|reklamo)\b/i.test(latest || '')) {
     return { text: HANDOFF_LINE, handoff: true, reason: 'anger', silent: false };
   }
-  if (!passed && isMagkano(latest)) {
-    return { text: MAGKANO_LINE, handoff: false, reason: '', silent: false };
+  if (asksCheckupFee(latest) || (!passed && isMagkano(latest))) {
+    return { text: capWords(flexiblePriceReply(thread, latest)), handoff: false, reason: '', silent: false };
   }
   if (!passed && (isRepairQuote(body) || isScheduleTalk(body) || (/https?:\/\//i.test(body) && /form|book|schedule/i.test(body)))) {
-    return { text: nextAsk(thread) || MAGKANO_LINE, handoff: false, reason: '', silent: false };
+    const explain = sizeAndSymptomKnown(thread) ? NEED_VIDEO_LINE : NEED_FACTS_LINE;
+    return { text: nextAsk(thread) || capWords(withOneAsk(explain, thread)), handoff: false, reason: '', silent: false };
   }
   if (bannedPart(body)) {
     body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
@@ -223,12 +262,15 @@ function shapeReply(thread, text, latest) {
 module.exports = {
   rulesText,
   MAGKANO_LINE,
+  NEED_VIDEO_LINE,
+  NEED_FACTS_LINE,
   WAIT_LINE,
   WARRANTY_ONLY,
   HANDOFF_LINE,
   SCHEDULE_HOLD,
   VIDEO_ACK,
   ASK_VIDEO,
+  flexiblePriceReply,
   rememberJob,
   gatePassed,
   nextAsk,

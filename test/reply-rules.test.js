@@ -13,6 +13,7 @@ const {
   optOutReason, staffEscalation, publicCommentReply, PUBLIC_COMMENT_REPLY, STAFF_HANDOFF_LINE,
 } = require('../src/reply-rules');
 const { PRICE_ASK, PRICE_ASK_AGAIN, CALL_LINE } = require('../src/recency');
+const { NEED_FACTS_LINE, ASK_VIDEO } = require('../src/quote-gate');
 
 const SECRET = 's';
 const MAIN = '102622881557025';
@@ -195,7 +196,7 @@ test('a stale video review does not stall a new price question, and a repeat is 
       assert.doesNotMatch(line, /nagre-review|all-in price soon/i);
     }
     assert.match(schedule, /ilang inches po|video ng TV/i);
-    assert.equal(first, 'Para po masiguro namin ang tamang presyo, kailangan po muna namin makita ang video at model number. Hindi po kami nagbibigay ng presyo na hindi pa nakikita ang unit.');
+    assert.equal(first, `${NEED_FACTS_LINE} ${ASK_VIDEO}`);
     assert.equal(second, first);
     assert.match(fresh, /ilang inches|anong brand/i);
     assert.equal(s.app.store.thread('live').problemViaVideo, false);

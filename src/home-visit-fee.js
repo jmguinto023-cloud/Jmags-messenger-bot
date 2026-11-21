@@ -6,6 +6,9 @@ const HOME_VISIT_FEE_LINE =
   'Bago po magpa-home service: ₱1,000 ang check-up fee kapag pupunta ang technician sa bahay. ' +
   'Waived po ito kapag itinuloy ang repair—walang hiwalay na ₱1,000 check-up charge. ' +
   'Staff pa rin po ang magko-confirm ng schedule.';
+// What a customer hears when they ask the at-home check-up price. Booking disclosure stays the longer line above.
+const HOME_CHECKUP_FEE_ANSWER =
+  '₱1,000 po ang check-up fee sa bahay, ibabawas po ito sa repair kung itutuloy nyo po.';
 
 function homeTerms(text) {
   return /home[\s-]*(?:service|visit|check[\s-]*up)|house\s+visit|sa\s+bahay|bahay\s+(?:ko|namin|natin|po)|on[\s-]*site|puntahan\s+(?:niyo|nyo|po)|pumunta\s+(?:kayo|po)|punta\s+(?:kayo|po)/i.test(String(text || ''));
@@ -44,6 +47,6 @@ function ensureHomeVisitFee(reply, latestUser, history = []) {
 }
 
 module.exports = {
-  HOME_VISIT_CHECKUP_PHP, HOME_VISIT_FEE_LINE,
+  HOME_VISIT_CHECKUP_PHP, HOME_VISIT_FEE_LINE, HOME_CHECKUP_FEE_ANSWER,
   homeTerms, homeVisitIntent, lastAssistantText, ensureHomeVisitFee,
 };

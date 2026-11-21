@@ -17,7 +17,8 @@ const { summarizeConversation, customerLabel } = require('../src/summary');
 const { videoFollowupText, quietDeferUntil } = require('../src/video-followup');
 const { activeNow, statusLine, nextOpenAt } = require('../src/schedule');
 const { loadConfig } = require('../src/config');
-const { CHECKUP_FEE_PLAIN } = require('../src/estimate');
+const { CHECKUP_FEE_PLAIN, HOME_CHECKUP_FEE_ANSWER } = require('../src/estimate');
+const { ASK_VIDEO, NEED_VIDEO_LINE, NEED_FACTS_LINE } = require('../src/quote-gate');
 const { visibleHistory, asksReviewStatus, PENDING_REVIEW_STATUS } = require('../src/recency');
 const {
   genericInboxUrl, businessSuiteThreadUrl, messengerAppHref, inboxLinks, threadItemId,
@@ -1064,7 +1065,7 @@ test('asking the check-up price gets the plain fee and nothing else', async () =
     await s.post(msg('fee', { text: 'magkano po ang check-up?' }));
     assert.equal(s.mock.calls.llm.length, 0);
     assert.equal(s.mock.calls.messages.length, 1);
-    assert.equal(s.mock.calls.messages[0].message.text, 'Para po masiguro namin ang tamang presyo, kailangan po muna namin makita ang video at model number. Hindi po kami nagbibigay ng presyo na hindi pa nakikita ang unit.');
+    assert.equal(s.mock.calls.messages[0].message.text, CHECKUP_FEE_PLAIN);
     assert.equal(s.mock.calls.pass.length, 0);
   } finally { await s.close(); }
 });
@@ -2747,7 +2748,7 @@ test('Page Inbox history is loaded and a known size gets a confirmed price', asy
     const hist = s.app.store.thread('astron-40').history.map((h) => h.content).join('\n');
     assert.match(hist, /Astron 40 inch/);
     const rows = await (await fetch(`${s.base}/admin/conversations`, { headers: { Authorization: 'Bearer adm' } })).json();
-    assert.ok(rows.some((r) => r.role === 'assistant' && /video at model number/.test(r.text) && r.provider === 'rules'));
+    assert.ok(rows.some((r) => r.role === 'assistant' && r.text.startsWith(NEED_FACTS_LINE) && r.provider === 'rules'));
     assert.doesNotMatch(sent, /Confirmed:/);
   } finally { await s.close(); }
 });
@@ -2769,7 +2770,7 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.doesNotMatch(sound, /₱|Makati/);
 
     const bl = await send('live-3', 'magkano po backlight ng 43 lg');
-    assert.equal(bl, 'Para po masiguro namin ang tamang presyo, kailangan po muna namin makita ang video at model number. Hindi po kami nagbibigay ng presyo na hindi pa nakikita ang unit.');
+    assert.equal(bl, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
     assert.doesNotMatch(bl, /₱/);
 
     const mahal = await send('live-2', 'ang mahal naman po');
@@ -2798,7 +2799,7 @@ test('the ten live messages get short rule answers instead of a model essay', as
 
     await send('live-8', 'Astron 40 may linya');
     const price = await send('live-8', 'magkano po kaya');
-    assert.match(price, /Hindi po kami nagbibigay ng presyo/);
+    assert.equal(price, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
     assert.doesNotMatch(price, /₱|LCD modification/);
 
     const disc = await send('live-9', 'pa discount naman po');
@@ -3118,15 +3119,23 @@ test('a repairable verdict sends the matching price card once, and nothing when 
 });
 
 test('the check-up fee answer carries the check-up card once; the card switch turns it off', async () => {
-  const on = await setup({ PRICE_CARDS_ENABLED: 'true' });
+  const on = await setup({ PRICE_CARDS_ENABLED: 'true', PUBLIC_BASE_URL: 'https://bot.test' });
   const t0 = NOON;
   on.app.bot.now = () => t0;
   const imgs = (s) => s.mock.calls.messages.filter((m) => m.message && m.message.attachment).length;
+  const homeReply = `${HOME_CHECKUP_FEE_ANSWER} ${ASK_VIDEO}`;
   try {
     await on.post(msg('chk-1', { text: 'Magkano po check up fee sa bahay?' }, t0));
+    const first = on.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'chk-1');
+    assert.equal(first.length, 2);
+    assert.equal(first[0].message.text, homeReply);
+    assert.equal(first[1].message.attachment.type, 'image');
+    assert.equal(first[1].message.attachment.payload.url, 'https://bot.test/price-cards/checkup.jpg');
     assert.equal(imgs(on), 1);
     await on.post(msg('chk-1', { text: 'Magkano po check up fee sa bahay?' }, t0 + 5000));
     assert.equal(imgs(on), 1);
+    const again = on.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'chk-1' && m.message && m.message.text);
+    assert.equal(again.at(-1).message.text, homeReply);
   } finally { await on.close(); }
   const off = await setup({ PRICE_CARDS_ENABLED: 'false' });
   off.app.bot.now = () => t0;
@@ -3134,6 +3143,34 @@ test('the check-up fee answer carries the check-up card once; the card switch tu
     await off.post(msg('chk-2', { text: 'Magkano po check up fee sa bahay?' }, t0));
     assert.equal(imgs(off), 0);
   } finally { await off.close(); }
+});
+
+test('a pre-video 43 inch walang ilaw price question explains the need with no peso and no card', async () => {
+  const s = await setup({ PRICE_CARDS_ENABLED: 'true', PUBLIC_BASE_URL: 'https://bot.test' });
+  const t0 = NOON;
+  s.app.bot.now = () => t0;
+  try {
+    await s.post(msg('p43', { text: 'Samsung 43 inch po walang ilaw, magkano po?' }, t0));
+    const mine = s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === 'p43');
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].message.text, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
+    assert.doesNotMatch(mine[0].message.text, /₱|ilang inches|anong brand/i);
+    assert.equal(mine.filter((m) => m.message && m.message.attachment).length, 0);
+  } finally { await s.close(); }
+});
+
+test('sendPriceCard prefers a matching repair card over the check-up card', async () => {
+  const s = await setup({ PRICE_CARDS_ENABLED: 'true', PUBLIC_BASE_URL: 'https://bot.test' });
+  try {
+    const psid = 'pref-1';
+    s.app.store.thread(psid);
+    const text = 'Possible backlight po, ₱6,000. Check-up ₱1,000 po.';
+    assert.equal(await s.app.bot.sendPriceCard(psid, text, { size: '43', checkup: true }), true);
+    const img = s.mock.calls.messages.filter((m) => m.message && m.message.attachment);
+    assert.equal(img.length, 1);
+    assert.match(img[0].message.attachment.payload.url, /backlight-43\.jpg$/);
+    assert.equal(await s.app.bot.sendPriceCard(psid, 'Depende po sa sira na makikita sa video.', { size: '43', checkup: true }), false);
+  } finally { await s.close(); }
 });
 
 test('a test allowlist can match by last digits, and a reset tester starts clean once per boot', async () => {

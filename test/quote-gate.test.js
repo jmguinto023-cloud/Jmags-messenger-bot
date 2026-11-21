@@ -9,8 +9,10 @@ const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { compactPrompt } = require('../src/llm');
 const {
-  MAGKANO_LINE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, gatePassed, shapeReply, nextAsk, capWords,
+  NEED_FACTS_LINE, NEED_VIDEO_LINE, ASK_VIDEO, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE,
+  gatePassed, shapeReply, nextAsk, capWords,
 } = require('../src/quote-gate');
+const { HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN } = require('../src/estimate');
 
 const SECRET = 's';
 const MAIN = '102622881557025';
@@ -67,7 +69,7 @@ test('quote gate blocks every price until video, size, brand, model, barangay, c
   s.mock.state.llmResponder = () => 'Samsung 55 po. Possible backlight po, ₱8,500. Kailan po kayo free?';
   try {
     const refused = await s.say('g1', 'magkano po');
-    assert.equal(refused, MAGKANO_LINE);
+    assert.equal(refused, `${NEED_FACTS_LINE} ${ASK_VIDEO}`);
     assert.doesNotMatch(refused, /₱/);
     const early = await s.say('g1', '55 samsung nawala display');
     assert.doesNotMatch(early, /₱|Kailan po kayo free|8,500/);
@@ -175,4 +177,44 @@ test('replies stay near 20 words and keep at most one emoji', () => {
   const long = capWords('One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo extra 🙂 🙂');
   assert.ok(long.split(/\s+/).length <= 22);
   assert.equal((long.match(/\p{Extended_Pictographic}/gu) || []).length, 1);
+});
+
+test('prepared check-up and pre-gate price answers are not cut by the word cap', () => {
+  const home = `${HOME_CHECKUP_FEE_ANSWER} ${ASK_VIDEO}`;
+  assert.ok(home.split(/\s+/).length > 22);
+  assert.equal(capWords(home), home);
+  assert.equal(capWords(CHECKUP_FEE_PLAIN), CHECKUP_FEE_PLAIN);
+  const known = `${NEED_VIDEO_LINE} ${ASK_VIDEO}`;
+  assert.equal(capWords(known), known);
+});
+
+test('a home check-up fee states the fee and one next question', () => {
+  const latest = 'Magkano po check up fee sa bahay?';
+  const thread = { history: [{ role: 'user', content: latest }], slots: {} };
+  const shaped = shapeReply(thread, 'ignored draft', latest);
+  assert.equal(shaped.handoff, false);
+  assert.equal(shaped.text, `${HOME_CHECKUP_FEE_ANSWER} ${ASK_VIDEO}`);
+  assert.equal((shaped.text.match(/\?/g) || []).length, 1);
+});
+
+test('a pre-video repair price with size and symptom explains the need and names no peso', () => {
+  const latest = 'Samsung 43 inch po walang ilaw, magkano po?';
+  const thread = { history: [{ role: 'user', content: latest }], slots: {} };
+  const shaped = shapeReply(thread, 'Possible backlight po, ₱6,000.', latest);
+  assert.equal(shaped.text, `${NEED_VIDEO_LINE} ${ASK_VIDEO}`);
+  assert.doesNotMatch(shaped.text, /₱|ilang inches|anong brand/i);
+  assert.equal(shaped.handoff, false);
+});
+
+test('price flexibility does not replace handoffs', () => {
+  const crack = shapeReply({ history: [], slots: {} }, '₱8,500', 'magkano po ang basag na LCD');
+  assert.equal(crack.text, HANDOFF_LINE);
+  assert.equal(crack.handoff, true);
+  const war = shapeReply({ history: [], slots: {} }, '6 months', 'magkano po ang warranty');
+  assert.equal(war.text, WARRANTY_ONLY);
+  assert.equal(war.handoff, true);
+  const mad = shapeReply({ history: [], slots: {} }, 'ok', 'magkano, bwisit');
+  assert.equal(mad.text, HANDOFF_LINE);
+  assert.equal(mad.handoff, true);
+  assert.equal(nextAsk({ videoReceived: false, slots: { size: '43"', symptom: 'screen', brand: 'Samsung' } }), ASK_VIDEO);
 });
