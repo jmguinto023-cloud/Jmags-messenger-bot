@@ -99,6 +99,13 @@ function applyCard(article, card) {
   const box = article.querySelector('textarea');
   const btn = article.querySelector('.send-reply');
   const note = article.querySelector('.send-note');
+  article.querySelectorAll('.verdict button.verdict-btn, .verdict input').forEach((el) => { el.disabled = !card.windowOpen; });
+  if (!card.windowOpen) {
+    const vs = article.querySelector('.verdict-status');
+    if (vs && !vs.textContent) vs.textContent = 'Lampas na sa 24 oras, i-reply sa Business Suite';
+    const sv = article.querySelector('.send-verdict');
+    if (sv) sv.disabled = true;
+  }
   if (!card.windowOpen) {
     if (box) box.disabled = true;
     if (btn) btn.disabled = true;
@@ -233,3 +240,87 @@ document.addEventListener('click', (event) => {
   if (kind === 'message') showToast('Nakopya ang mensahe — i-paste sa search ng inbox');
   else showToast(`Nakopya ang pangalan ni ${text} — i-paste sa search ng inbox`);
 });
+
+// ---- Verdict: Repairable / Not repairable / Need clearer video ----
+function verdictReady(article) {
+  const kind = article.dataset.verdict || '';
+  const price = article.querySelector('.verdict-price-input');
+  const send = article.querySelector('.send-verdict');
+  if (!send) return;
+  const needsPrice = kind === 'repairable';
+  send.disabled = !kind || (needsPrice && !(Number(price && price.value) > 0)) || article.dataset.sendingVerdict === '1';
+}
+
+document.addEventListener('click', (event) => {
+  const choice = event.target.closest('.verdict-btn');
+  if (choice) {
+    const article = choice.closest('article');
+    article.dataset.verdict = choice.getAttribute('data-verdict');
+    article.querySelectorAll('.verdict-btn').forEach((b) => {
+      b.setAttribute('aria-pressed', b === choice ? 'true' : 'false');
+      b.classList.toggle('ghost', b !== choice);
+    });
+    const priceBox = article.querySelector('.verdict-price');
+    if (priceBox) priceBox.hidden = article.dataset.verdict !== 'repairable';
+    verdictReady(article);
+    return;
+  }
+  const chip = event.target.closest('.price-chip');
+  if (chip) {
+    const article = chip.closest('article');
+    const input = article.querySelector('.verdict-price-input');
+    if (input) input.value = chip.getAttribute('data-price');
+    verdictReady(article);
+    return;
+  }
+  const send = event.target.closest('.send-verdict');
+  if (send) sendVerdict(send.closest('article'));
+});
+
+document.addEventListener('input', (event) => {
+  if (event.target.closest && event.target.closest('.verdict-price-input')) verdictReady(event.target.closest('article'));
+});
+
+async function sendVerdict(article) {
+  if (!article || article.dataset.sendingVerdict === '1') return;
+  const status = article.querySelector('.verdict-status');
+  const kind = article.dataset.verdict || '';
+  const price = article.querySelector('.verdict-price-input');
+  const extra = article.querySelector('.verdict-extra');
+  article.dataset.sendingVerdict = '1';
+  verdictReady(article);
+  if (status) status.textContent = 'Ipinapadala ng bot…';
+  try {
+    const res = await fetch('/dashboard/api/verdict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: article.getAttribute('data-review-id'),
+        verdict: kind,
+        price: price ? price.value : '',
+        note: extra ? extra.value : '',
+      }),
+    });
+    let body = {};
+    try { body = await res.json(); } catch (e) { body = {}; }
+    if (res.ok && body.ok) {
+      if (status) status.textContent = 'Naipadala na ng bot. Naka-mark na reviewed.';
+      const pill = article.querySelector('.pill.new');
+      if (pill) { pill.className = 'pill done'; pill.textContent = 'Reviewed'; }
+      article.dataset.verdict = '';
+      article.querySelectorAll('.verdict-btn').forEach((b) => { b.setAttribute('aria-pressed', 'false'); });
+      const priceBox = article.querySelector('.verdict-price');
+      if (priceBox) priceBox.hidden = true;
+      if (price) price.value = '';
+      if (extra) extra.value = '';
+      await refreshThreads();
+    } else if (status) {
+      status.textContent = body.error || 'Hindi naipadala. Subukan ulit.';
+    }
+  } catch (e) {
+    if (status) status.textContent = 'Hindi naipadala. Subukan ulit.';
+  } finally {
+    article.dataset.sendingVerdict = '';
+    verdictReady(article);
+  }
+}

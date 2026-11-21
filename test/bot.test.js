@@ -2998,3 +2998,43 @@ test('a label HTTP 400 is logged once and not retried for that chat', async () =
     await s.close();
   }
 });
+
+test('staff verdict sends the bot message, marks the video reviewed and does not pause the bot', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm' });
+  const now = NOON;
+  s.app.bot.now = () => now;
+  try {
+    await s.post(msg('verdict-1', {
+      text: 'Samsung 55 inch walang display taga Binan',
+      attachments: [{ type: 'video', payload: { url: 'https://cdn.example/verdict.mp4' } }],
+    }, now));
+    const review = s.app.store.data.reviews[0];
+    const { cookie } = await dashCookie(s.base);
+    const url = `${s.base}/dashboard/api/verdict`;
+    const call = (body, withCookie = true) => fetch(url, {
+      method: 'POST',
+      headers: { ...(withCookie ? { Cookie: cookie } : {}), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    assert.equal((await call({ id: review.id, verdict: 'not_repairable' }, false)).status, 403);
+    assert.equal((await call({ id: review.id, verdict: 'repairable' })).status, 400);
+    assert.equal((await call({ id: review.id, verdict: 'nope' })).status, 400);
+    assert.equal(s.mock.calls.messages.some((m) => m.message && /Good news po/.test(m.message.text || '')), false);
+
+    const ok = await call({ id: review.id, verdict: 'repairable', price: 8500, note: '' });
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).ok, true);
+    assert.equal(s.mock.calls.messages.some((m) => m.message && /₱8,500/.test(m.message.text || '')), true);
+    const t = s.app.store.thread('verdict-1');
+    assert.equal(t.pausedUntil || 0, 0);
+    assert.equal(t.videoVerdict.verdict, 'repairable');
+    assert.equal(t.videoVerdict.price, 8500);
+    assert.equal(s.app.store.data.reviews[0].status, 'reviewed');
+    assert.equal(t.history[t.history.length - 1].via, 'verdict');
+    assert.equal(s.app.store.data.reviews[0].ivanRepliedAt, undefined);
+
+    t.lastUserTs = now - 25 * 3600 * 1000;
+    const late = await call({ id: review.id, verdict: 'not_repairable' });
+    assert.equal(late.status, 409);
+  } finally { await s.close(); }
+});

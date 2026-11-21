@@ -2,6 +2,7 @@
 // Server-rendered Ivan dashboard. No build step.
 const { genericInboxUrl } = require('./inbox-link');
 const { customerLabel } = require('./summary');
+const PRICES = require('../knowledge/prices.json');
 
 const WINDOW_ERROR = 'Lampas na sa 24 oras, i-reply sa Business Suite';
 
@@ -89,7 +90,7 @@ function mediaBlock(row) {
 function threadMessages(history, limit = 10) {
   return (history || []).slice(-limit).map((h) => ({
     role: h.role === 'assistant' ? 'assistant' : 'user',
-    who: h.role === 'user' ? 'Customer' : (h.via === 'ivan' ? 'Ivan' : 'Bot'),
+    who: h.role === 'user' ? 'Customer' : (h.via === 'ivan' ? 'Ivan' : (h.via === 'verdict' ? 'Staff' : 'Bot')),
     text: String(h.content || ''),
     time: manila(h.ts),
   }));
@@ -121,6 +122,36 @@ function jobPicker(row, thread, jobs) {
     <select id="job-${esc(row.id)}" name="jobId">${options}</select>
     <div class="row"><button type="submit">Link</button></div>
   </form>`;
+}
+
+// One-tap verdict: the bot sends the answer, so staff never type in Messenger.
+function priceChips(summary) {
+  const size = Number(String((summary && summary.size) || '').replace(/[^\d]/g, ''));
+  if (!size) return '';
+  const chips = [['LCD mod', PRICES.lcdMod && PRICES.lcdMod[size]], ['Backlight', PRICES.backlight && PRICES.backlight[size]]]
+    .filter(([, v]) => v);
+  return chips.map(([label, v]) => `<button type="button" class="ghost price-chip" data-price="${esc(v)}">${esc(label)} ₱${esc(Number(v).toLocaleString('en-US'))}</button>`).join(' ');
+}
+
+function verdictBlock(row, summary, open) {
+  const dis = open ? '' : ' disabled';
+  const sent = row.status === 'reviewed' ? '<p class="meta">Naka-review na. Pwede pa ring magpadala ng bagong verdict.</p>' : '';
+  return `<div class="verdict" data-id="${esc(row.id)}">
+      <h3 class="thread-title">Verdict</h3>${sent}
+      <div class="row verdict-choice">
+        <button type="button" class="verdict-btn" data-verdict="repairable"${dis}>Repairable</button>
+        <button type="button" class="verdict-btn ghost" data-verdict="not_repairable"${dis}>Not repairable</button>
+        <button type="button" class="verdict-btn ghost" data-verdict="need_video"${dis}>Need clearer video</button>
+      </div>
+      <div class="verdict-price" hidden>
+        <label for="price-${esc(row.id)}">Total price (₱, all in)</label>
+        <input id="price-${esc(row.id)}" class="verdict-price-input" type="number" inputmode="numeric" min="1" step="50" placeholder="e.g. 8500"${dis}>
+        <p class="chips">${priceChips(summary)}</p>
+      </div>
+      <input class="verdict-extra" type="text" maxlength="200" placeholder="Note to customer (optional)"${dis}>
+      <div class="row"><button type="button" class="send-verdict" disabled>Send verdict</button></div>
+      <p class="verdict-status" role="status">${open ? '' : esc(WINDOW_ERROR)}</p>
+    </div>`;
 }
 
 function reviewThread(threads, row) {
@@ -179,6 +210,7 @@ function reviewCard(row, pageId, thread, now, windowMs, jobs) {
     ${mediaBlock(row)}
     <h3 class="thread-title">Huling mensahe</h3>
     <div class="thread-wrap">${messageList(thread && thread.history)}</div>
+    ${verdictBlock(row, summary, open)}
     <div class="reply">
       <label for="reply-${esc(row.id)}">Reply</label>
       <textarea id="reply-${esc(row.id)}" maxlength="2000" rows="3" placeholder="Sulatan si customer"${disabled}></textarea>

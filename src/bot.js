@@ -30,6 +30,7 @@ const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
 const { PageSwitches, pageKey } = require('./page-switches');
 const { mediaReceivedNote, applyCustomerGuard, asksCheckupFee, checkupFeeReply, scriptedReply, quoteKnownTv, CHECKUP_NUDGE } = require('./estimate');
 const { quickReply } = require('./quick-replies');
+const { composeVerdict } = require('./verdict');
 const { ensureHomeVisitFee, HOME_VISIT_FEE_LINE, homeVisitIntent } = require('./home-visit-fee');
 const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
@@ -2193,10 +2194,10 @@ class Bot {
 
   // Ivan typed this on the video dashboard. One RESPONSE send, then the same
   // pause a human inbox reply would set. The echo of our own app is ignored.
-  async replyFromDashboard(reviewId, text) {
+  async replyFromDashboard(reviewId, text, opts = {}) {
     const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
     const page = row ? this.pageForReview(row) : null;
-    if (page && currentPage() !== page) return withPage(page, () => this.replyFromDashboard(reviewId, text));
+    if (page && currentPage() !== page) return withPage(page, () => this.replyFromDashboard(reviewId, text, opts));
     if (row && row.pageId && page && !page.token) {
       return { ok: false, status: 409, error: 'Walang token para sa Page na ito.' };
     }
@@ -2218,7 +2219,7 @@ class Bot {
       this.log.info(`dashboard reply skipped for ${short(psid)}: outside 24h`);
       return { ok: false, status: 409, error: 'Lampas na sa 24 oras, i-reply sa Business Suite' };
     }
-    const promise = this.deliverDashboardReply(psid, clean);
+    const promise = this.deliverDashboardReply(psid, clean, opts);
     this.dashInflight.set(this.slot(psid), { text: clean, promise });
     try {
       return await promise;
@@ -2228,25 +2229,47 @@ class Bot {
     }
   }
 
-  async deliverDashboardReply(psid, clean) {
+  async deliverDashboardReply(psid, clean, opts = {}) {
     const sent = await this.graph.sendPageText(psid, clean);
     const mid = sent && sent.message_id;
     if (mid) this.store.seen(mid);
     const now = this.now();
     const t = this.store.thread(psid);
-    t.pausedUntil = now + this.pauseMs();
-    t.lastHumanEchoAt = now;
-    t.pauseSource = 'dashboard reply';
-    this.clearStaffResume(psid);
-    this.stopVideoFollowup(psid, 'Ivan replied from the dashboard');
+    // A staff verdict is part of the bot's own conversation: the bot is not paused afterwards.
+    if (!opts.verdict) {
+      t.pausedUntil = now + this.pauseMs();
+      t.lastHumanEchoAt = now;
+      t.pauseSource = 'dashboard reply';
+      this.clearStaffResume(psid);
+    }
+    this.stopVideoFollowup(psid, opts.verdict ? 'staff verdict sent' : 'Ivan replied from the dashboard');
     this.cancelPending(psid);
-    this.store.addTurn(psid, 'assistant', clean, now, { via: 'ivan' });
+    this.store.addTurn(psid, 'assistant', clean, now, { via: opts.verdict ? 'verdict' : 'ivan' });
     const page = currentPage();
-    this.store.markIvanReplied(psid, now, page && page.id);
+    if (!opts.verdict) this.store.markIvanReplied(psid, now, page && page.id);
     this.dashRecent.set(this.slot(psid), { text: clean, at: now });
     this.store.save();
-    this.log.info(`dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseMinutes}m`);
+    this.log.info(opts.verdict
+      ? `staff verdict sent to ${short(psid)} (${clean.length} chars) - bot not paused`
+      : `dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseMinutes}m`);
     return { ok: true, status: 200 };
+  }
+
+  // Staff pick Repairable / Not repairable / Need clearer video on a video card; the bot sends the answer.
+  async sendVerdict(reviewId, verdict, price, note) {
+    const composed = composeVerdict({ verdict, price, note });
+    if (!composed.ok) return { ok: false, status: 400, error: composed.error };
+    const res = await this.replyFromDashboard(reviewId, composed.text, { verdict: true });
+    if (!res.ok) return res;
+    const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
+    if (row && row.psid) {
+      const now = this.now();
+      this.store.markReviewed(reviewId, now);
+      const t = this.store.thread(row.psid);
+      t.videoVerdict = { verdict: String(verdict), price: composed.price, at: now };
+      this.store.save();
+    }
+    return res;
   }
 
   async handoff(psid, reason, holdingText, sendOpts = {}) {
