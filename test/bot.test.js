@@ -2881,11 +2881,11 @@ test('the prompt sent to a provider is one size row and stays under the Groq lim
   assert.match(prompt, /35,000/);
   assert.match(prompt, /26,500/);
   assert.doesNotMatch(prompt, /Santan|Makati|Gen\.?\s*Trias|JMAGS Behavior Bank/);
-  assert.doesNotMatch(prompt, /₱2,500|₱16,000|₱22,000/);
+  assert.doesNotMatch(prompt, /₱3,000|₱18,000|₱22,000/);
   assert.ok(estimateTokens(payload) < 6000);
   const small = compactPrompt([{ role: 'user', content: 'lg 32 inch po' }], {});
-  assert.match(small, /Price for this chat only: 32" backlight ₱2,500/);
-  assert.doesNotMatch(small, /Price for this chat only:[\s\S]*₱22,000|Price for this chat only:[\s\S]*₱16,000/);
+  assert.match(small, /Price for this chat only: 32" backlight ₱3,000/);
+  assert.doesNotMatch(small, /Price for this chat only:[\s\S]*₱22,000|Price for this chat only:[\s\S]*₱18,000/);
   const llm = new LLM({ systemPromptFile: path.join(__dirname, '..', 'prompts', 'system-prompt.md') });
   assert.ok(estimateTokens(llm.systemPrompt()) > 6000);
 });

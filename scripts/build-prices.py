@@ -9,9 +9,9 @@ OUT = os.path.join(os.path.dirname(__file__), '..', 'knowledge', 'prices.json')
 
 # Owner-confirmed (Jm, memory) - these are what the bot quotes.
 OWNER = {
-  'lcdMod': {32: 2500, 40: 4500, 43: 5000, 50: 6500, 55: 8500, 60: 9500, 65: 9500, 70: 12500, 75: 14000},
-  'backlight': {32: 2500, 40: 4000, 43: 4500, 50: 5500, 55: 8500, 60: 9000, 65: 9500, 70: 12000, 75: 16000},
-  'backlight85': {'other': 22000, 'premium': 28000, 'premiumBrands': ['samsung', 'sony', 'sharp', 'lg', 'hisense', 'devant']},
+  'lcdMod': {32: 2500, 40: 4500, 43: 6500, 50: 7500, 55: 8500, 60: 9500, 65: 9500, 70: 15000, 75: 17000, 80: 18500},
+  'backlight': {32: 3000, 40: 4500, 43: 6000, 50: 7500, 55: 8500, 60: 9500, 65: 11000, 70: 16000, 75: 18000, 80: 22000, 85: 25000},
+  'backlight85': {'other': 25000, 'premium': 25000, 'premiumBrands': ['samsung', 'sony', 'sharp', 'lg', 'hisense', 'devant']},
 }
 KEYS = [('Palit LCD', 'newLcd'), ('Backlight - EDGE', 'backlightEdge'), ('Backlight - Round', 'backlightRound'),
         ('LCD Repair', 'lcdMod'), ('MotherBoard - Smart', 'motherboardSmart'), ('MotherBoard - Basic', 'motherboardBasic'),

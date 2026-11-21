@@ -129,6 +129,10 @@ function applyCustomerGuard(thread, text, latestUser) {
 const LCD_MOD = numKeys(PRICES.lcdMod);
 const BACKLIGHT = numKeys(PRICES.backlight);
 const BL85 = PRICES.backlight85;
+const BL85_TEXT = BL85.other === BL85.premium
+  ? `${peso85(BL85.other)} all brands`
+  : `${peso85(BL85.other)} other brands, ${peso85(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant`;
+function peso85(n) { return `₱${Number(n).toLocaleString('en-US')}`; }
 const PREMIUM_85 = new RegExp(`\\b(?:${BL85.premiumBrands.join('|')})\\b`, 'i');
 const PSU_BASIC = numKeys(PRICES.xlsx && PRICES.xlsx.powerSupplyBasic);
 const PSU_SMART = numKeys(PRICES.xlsx && PRICES.xlsx.powerSupplySmart);
@@ -199,7 +203,7 @@ function lcdQuote(label, price) {
 function priceHint(size) {
   const n = Number(size) || 0;
   if (!n) return 'No size yet. Ask brand and size. Do not invent a price.';
-  if (n === 85) return `85" backlight ${phpAmount(BL85.other)} other brands, ${phpAmount(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant. No LCD modification price. Hand off for LCD modification.`;
+  if (n === 85) return `85" backlight ${BL85_TEXT}. No LCD modification price. Hand off for LCD modification.`;
   const bits = [];
   if (BACKLIGHT[n]) bits.push(`backlight ${phpAmount(BACKLIGHT[n])}`);
   if (LCD_MOD[n]) bits.push(`LCD modification ${phpAmount(LCD_MOD[n])}`);
@@ -226,7 +230,8 @@ function confirmedPriceReply(latest, thread = {}) {
       const premium = PREMIUM_85.test(blob);
       const price = premium ? BL85.premium : BL85.other;
       const who = premium ? 'Samsung, Sony, Sharp, LG, Hisense, Devant' : 'ibang brand';
-      return `${label} po sir. ${possible ? 'Possible backlight po' : 'Palit backlight'}, ${phpAmount(price)} (${who}). 6 months warranty, home service.`;
+      const brandNote = BL85.other === BL85.premium ? '' : ` (${who})`;
+      return `${label} po sir. ${possible ? 'Possible backlight po' : 'Palit backlight'}, ${phpAmount(price)}${brandNote}. 6 months warranty, home service.`;
     }
     const price = BACKLIGHT[size];
     if (!price) return '';
@@ -238,7 +243,7 @@ function confirmedPriceReply(latest, thread = {}) {
   }
   if (!asksPrice(ask)) return '';
   if (size === 85) {
-    return `85" po sir. Backlight ${phpAmount(BL85.other)} other brands, ${phpAmount(BL85.premium)} Samsung, Sony, Sharp, LG, Hisense, Devant. LCD modification, ang technician po namin ang magko-confirm.\nAno po ang sira?`;
+    return `85" po sir. Backlight ${BL85_TEXT}. LCD modification, ang technician po namin ang magko-confirm.\nAno po ang sira?`;
   }
   const back = BACKLIGHT[size];
   const mod = LCD_MOD[size];
