@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { CARDS, amountsIn, cardForQuote, checkupCard, cardUrl, cardKey } = require('../src/price-cards');
+const { CARDS, amountsIn, cardForQuote, checkupCard, answersCheckupFee, cardUrl, cardKey } = require('../src/price-cards');
 
 test('every card in the manifest has a photo on disk', () => {
   for (const c of CARDS) assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', 'price-cards', c.file)), c.file);
@@ -29,6 +29,14 @@ test('a size where backlight and LCD mod share a price needs the word to pick on
   assert.equal(cardForQuote({ size: 55, text: 'Total ₱8,500 po all in.' }), null);
   assert.equal(cardKey(cardForQuote({ size: 55, text: 'Backlight po, ₱8,500.' })), 'backlight-55');
   assert.equal(cardKey(cardForQuote({ size: 55, text: 'LCD modification ₱8,500.' })), 'lcd-55');
+});
+
+test('a check-up fee answer is recognized and a repair quote is not', () => {
+  assert.equal(answersCheckupFee('₱1,000 po ang check-up fee sa bahay, ibabawas po ito sa repair kung itutuloy nyo po.'), true);
+  assert.equal(answersCheckupFee('₱300 po ang check-up kapag dadalhin ninyo ang TV sa shop.'), true);
+  assert.equal(answersCheckupFee('Depende po sa sira na makikita sa video.'), false);
+  assert.equal(answersCheckupFee('Possible backlight po, ₱6,000.'), false);
+  assert.equal(cardForQuote({ size: 43, text: 'Possible backlight po, ₱6,000. Check-up ₱1,000 po.' }).kind, 'backlight');
 });
 
 test('card url is built from the public base and only for manifest files', () => {

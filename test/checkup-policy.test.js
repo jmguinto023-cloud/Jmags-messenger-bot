@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  SHOP_CHECKUP_PHP, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN,
+  SHOP_CHECKUP_PHP, SHOP_CHECKUP_FEE_PLAIN, CHECKUP_FEE_PLAIN, HOME_CHECKUP_FEE_ANSWER,
   CHECKUP_NUDGE, checkupFeeReply, applyCustomerGuard, asksCheckupFee,
 } = require('../src/estimate');
 const { HOME_VISIT_FEE_LINE } = require('../src/home-visit-fee');
@@ -10,6 +10,7 @@ const { quickReply } = require('../src/quick-replies');
 
 test('owner-confirmed ₱300 for customer bringing any size TV to shop', () => {
   assert.equal(SHOP_CHECKUP_PHP, 300);
+  assert.equal(SHOP_CHECKUP_FEE_PLAIN, '₱300 po ang check-up kapag dadalhin ninyo ang TV sa shop.');
   assert.match(SHOP_CHECKUP_FEE_PLAIN, /₱300/);
   assert.doesNotMatch(SHOP_CHECKUP_FEE_PLAIN, /waived|₱500|₱1,000/i);
   for(const q of [
@@ -25,7 +26,8 @@ test('at-home rate remains ₱1,000, waived if repair proceeds', () => {
     'How much ang check-up for home service?',
     'Magkano ang checkup pag sa bahay kayo pupunta?',
     'Magkano checkup fee kung puntahan niyo po kami?',
-  ]) assert.equal(checkupFeeReply(q), HOME_VISIT_FEE_LINE, q);
+  ]) assert.equal(checkupFeeReply(q), HOME_CHECKUP_FEE_ANSWER, q);
+  assert.equal(HOME_CHECKUP_FEE_ANSWER, '₱1,000 po ang check-up fee sa bahay, ibabawas po ito sa repair kung itutuloy nyo po.');
   assert.match(HOME_VISIT_FEE_LINE, /₱1,000/);
   assert.match(HOME_VISIT_FEE_LINE, /Waived/);
   assert.match(HOME_VISIT_FEE_LINE, /walang hiwalay/);
@@ -41,12 +43,12 @@ test('ambiguous checkup question offers both options and asks one question', () 
 test('latest service option overrides older context', () => {
   const thread = { history: [{role:'user',content:'Dadalhin ko sa shop'}] };
   assert.equal(checkupFeeReply('magkano po ang check-up?',thread), SHOP_CHECKUP_FEE_PLAIN);
-  assert.equal(checkupFeeReply('magkano ang checkup home service?',thread), HOME_VISIT_FEE_LINE);
+  assert.equal(checkupFeeReply('magkano ang checkup home service?',thread), HOME_CHECKUP_FEE_ANSWER);
 });
 test('history home-service context is respected for follow-up fee question', () => {
   const thread = { history: [{role:'assistant', content:'Pwede po mag-home service.'},
     {role:'user',content:'Sige po punta kayo sa bahay'}] };
-  assert.equal(checkupFeeReply('How much po ang checkup?',thread), HOME_VISIT_FEE_LINE);
+  assert.equal(checkupFeeReply('How much po ang checkup?',thread), HOME_CHECKUP_FEE_ANSWER);
 });
 test('guards never revert to the former small-TV rate', () => {
   assert.equal(asksCheckupFee('magkano po check-up?'),true);

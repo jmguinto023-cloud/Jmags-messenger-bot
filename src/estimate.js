@@ -1,7 +1,7 @@
 'use strict';
 // Preliminary ranges, the plain check-up fee, and guards for video-received chats.
 const { questionTopic } = require('./intake');
-const { HOME_VISIT_FEE_LINE, homeTerms } = require('./home-visit-fee');
+const { HOME_VISIT_FEE_LINE, HOME_CHECKUP_FEE_ANSWER, homeTerms } = require('./home-visit-fee');
 
 // All prices come from knowledge/prices.json (built by scripts/build-prices.py from the
 // 2026 price list xlsx plus owner-confirmed TV prices). Edit that file, not this one.
@@ -12,7 +12,7 @@ const PRICE_RANGE = numKeys(PRICES.priceRange);
 
 // Owner-confirmed service rates. Never imply a waiver for shop checkups.
 const SHOP_CHECKUP_PHP = 300;
-const SHOP_CHECKUP_FEE_PLAIN = '₱300 po ang check-up kapag dadalhin ninyo ang TV sa JMAGS shop.';
+const SHOP_CHECKUP_FEE_PLAIN = '₱300 po ang check-up kapag dadalhin ninyo ang TV sa shop.';
 const CHECKUP_FEE_PLAIN = '₱300 po ang check-up kung dadalhin ang TV sa shop. Kung home service naman, ₱1,000 po ang check-up; waived ito kapag itinuloy ang repair. Sa shop po ba o home service?';
 const CHECKUP_NUDGE = 'Pero mas mainam pa rin po na ma-check ng technician personally ang TV para mas eksakto ang estimate. Pwede po tayong mag-request ng home-service check-up: ₱1,000 po, waived kung itutuloy ang repair.';
 const SHOP_TERMS = /\b(?:shop|branch|walk[\s-]?in|drop[\s-]?off)\b|\b(?:dadalhin|dalhin|dinala|magdadala|punta)\b.{0,35}\b(?:shop|branch)\b/i;
@@ -20,12 +20,12 @@ const SHOP_TERMS = /\b(?:shop|branch|walk[\s-]?in|drop[\s-]?off)\b|\b(?:dadalhin
 function checkupFeeReply(latestUser, thread = {}) {
   const current = String(latestUser || '');
   // Prefer the explicitly requested option over older chat history.
-  if (homeTerms(current)) return HOME_VISIT_FEE_LINE;
+  if (homeTerms(current)) return HOME_CHECKUP_FEE_ANSWER;
   if (SHOP_TERMS.test(current)) return SHOP_CHECKUP_FEE_PLAIN;
   // On an ambiguous follow-up, consider the latest explicitly selected mode.
   const recent = (thread.history || []).slice(-6).reverse().find((m) =>
     m && m.role === 'user' && (homeTerms(m.content) || SHOP_TERMS.test(m.content)));
-  if (recent) return homeTerms(recent.content) ? HOME_VISIT_FEE_LINE : SHOP_CHECKUP_FEE_PLAIN;
+  if (recent) return homeTerms(recent.content) ? HOME_CHECKUP_FEE_ANSWER : SHOP_CHECKUP_FEE_PLAIN;
   return CHECKUP_FEE_PLAIN;
 }
 
@@ -48,7 +48,7 @@ function mediaReceivedNote(kind, ts, tz) {
 
 function asksCheckupFee(text) {
   const t = String(text || '');
-  if (!/check-?\s*up|checkup|tsek-?\s*ap|tsekap/i.test(t)) return false;
+  if (!/check-?\s*up|checkup|tsek-?\s*ap|tsekap|diagnos(?:is|tic)/i.test(t)) return false;
   return /magkano|how much|\bhm\b|\bfee\b|presyo|price|gasto/i.test(t);
 }
 
@@ -368,6 +368,8 @@ module.exports = {
   CHECKUP_FEE_PLAIN,
   SHOP_CHECKUP_PHP,
   SHOP_CHECKUP_FEE_PLAIN,
+  HOME_CHECKUP_FEE_ANSWER,
+  HOME_VISIT_FEE_LINE,
   checkupFeeReply,
   CHECKUP_NUDGE,
   mediaReceivedNote,

@@ -40,6 +40,14 @@ function checkupCard() {
   return CARDS.find((c) => c.kind === 'checkup') || null;
 }
 
+// The outgoing text states the shop or home check-up fee, and is not a repair quote.
+function answersCheckupFee(text) {
+  const t = String(text || '');
+  if (!/check-?\s*up|checkup|tsek-?\s*ap|tsekap/i.test(t)) return false;
+  if (/backlight|lcd modification|power supply|motherboard|reprogramming/i.test(t)) return false;
+  return /₱\s?(?:300|1,?000)\b/.test(t);
+}
+
 function cardKey(card) {
   return card ? `${card.kind}-${card.size}` : '';
 }
@@ -49,4 +57,4 @@ function cardUrl(origin, card) {
   return `${String(origin || '').replace(/\/$/, '')}/price-cards/${card.file}`;
 }
 
-module.exports = { CARDS, FILES, FILE_RE, amountsIn, cardForQuote, checkupCard, cardKey, cardUrl };
+module.exports = { CARDS, FILES, FILE_RE, amountsIn, cardForQuote, checkupCard, answersCheckupFee, cardKey, cardUrl };
