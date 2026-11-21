@@ -946,6 +946,7 @@ class Bot {
     if (!customerName && convo && convo.name) customerName = convo.name;
     if (!customerName && summary.name) customerName = summary.name;
     const shown = customerLabel(customerName, psid);
+    const inquiry = await this.inquiryContext(psid, t);
     for (const m of items) {
       const type = m.type === 'image' ? 'photo' : m.type;
       const reviewId = crypto.randomBytes(8).toString('hex');
@@ -969,6 +970,7 @@ class Bot {
         conversationLink: convo?.link || '',
         conversationUpdatedTime: convo?.updatedTime || '',
         mid: m.mid || '',
+        inquiry,
         ...(quiet ? { quietNote: 'bot not replying, standby/paused' } : {}),
       }, this.now());
       await this.alertWebhook(psid, { type, url: m.url || '' }, snippet, when, {
@@ -2253,6 +2255,24 @@ class Bot {
       ? `staff verdict sent to ${short(psid)} (${clean.length} chars) - bot not paused`
       : `dashboard reply to ${short(psid)} (${clean.length} chars) – bot paused ${this.cfg.humanPauseMinutes}m`);
     return { ok: true, status: 200 };
+  }
+
+  // What the customer actually wrote before the video, so staff know the context of the inquiry.
+  // Prefers the Page Inbox history (it also holds messages from before the bot saw this chat),
+  // falls back to the bot's own saved history. Never throws.
+  async inquiryContext(psid, t) {
+    const clean = (txt) => String(txt || '')
+      .replace(/\[Customer sent a (?:video|photo)[^\]]*\]/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+    let rows = [];
+    try {
+      rows = await this.graph.recentMessages(psid, { limit: 40, withinMs: 7 * 86400e3 });
+    } catch { rows = []; }
+    if (!rows || !rows.length) rows = (t && t.history) || [];
+    return rows
+      .filter((h) => h && (h.role === 'user' || h.role === 'assistant'))
+      .map((h) => ({ role: h.role === 'user' ? 'user' : 'page', text: clean(h.content), ts: Number(h.ts) || 0 }))
+      .filter((h) => h.text)
+      .slice(-12);
   }
 
   // Staff pick Repairable / Not repairable / Need clearer video on a video card; the bot sends the answer.
