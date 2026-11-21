@@ -127,6 +127,67 @@ test('retries both providers once after a shared outage, then fails', async () =
   assert.equal(slept, 25);
 });
 
+test('OpenAI is selected only when the order and key are set', () => {
+  const both = {
+    aiAllowExternalData: true, openaiApiKey: 'oa', groqApiKey: 'g',
+    aiProviderOrder: 'openai,groq', openaiModel: 'gpt-5.4-mini', openaiReasoningEffort: 'low',
+    openaiTimeoutMs: 15000,
+  };
+  assert.deepEqual(buildProviders(both).map((p) => p.name), ['openai', 'groq']);
+  assert.equal(buildProviders(both)[0].timeoutMs, 15000);
+  assert.equal(buildProviders({ ...both, openaiApiKey: '' }).map((p) => p.name).includes('openai'), false);
+  assert.deepEqual(buildProviders({ aiAllowExternalData: true, groqApiKey: 'g' }).map((p) => p.name), ['groq']);
+});
+
+test('GPT-5 requests use max_completion_tokens, reasoning_effort, and no temperature', async () => {
+  let payload;
+  let signal;
+  const provider = buildProviders({
+    aiAllowExternalData: true, openaiApiKey: 'oa', aiProviderOrder: 'openai',
+    openaiModel: 'gpt-5.4-mini', openaiReasoningEffort: 'low', openaiTimeoutMs: 15000,
+  })[0];
+  const router = new AiRouter({
+    providers: [provider],
+    fetcher: async (_url, opts) => {
+      payload = JSON.parse(opts.body);
+      signal = opts.signal;
+      return ok('OpenAI passed');
+    },
+  });
+  const reply = await router.complete({
+    messages: [{ role: 'user', content: 'hello' }], max_tokens: 120, temperature: 0.4,
+  });
+  assert.equal(reply, 'OpenAI passed');
+  assert.equal(payload.model, 'gpt-5.4-mini');
+  assert.equal(payload.max_completion_tokens, 120);
+  assert.equal(payload.max_tokens, undefined);
+  assert.equal(payload.temperature, undefined);
+  assert.equal(payload.reasoning_effort, 'low');
+  assert.ok(signal);
+  assert.equal(router.lastProvider, 'openai');
+  assert.equal(router.lastModel, 'gpt-5.4-mini');
+});
+
+test('OpenAI 5xx falls back to Groq', async () => {
+  const called = [];
+  const router = new AiRouter({
+    providers: buildProviders({
+      aiAllowExternalData: true, openaiApiKey: 'oa', groqApiKey: 'g',
+      aiProviderOrder: 'openai,groq',
+    }),
+    retryBackoffMs: 0,
+    sleep: async () => {},
+    fetcher: async (url) => {
+      called.push(url);
+      return url.includes('api.openai.com') ? failure(503) : ok('Groq backup');
+    },
+  });
+  assert.equal(await router.complete({ messages: [{ role: 'user', content: 'hi' }] }), 'Groq backup');
+  assert.equal(called.some((url) => url.includes('api.openai.com')), true);
+  assert.equal(called.some((url) => url.includes('api.groq.com')), true);
+  assert.equal(router.lastProvider, 'groq');
+});
+
 test('Groq GPT-OSS uses low reasoning and enough completion tokens', async () => {
   let payload;
   const provider = buildProviders(cfg())[1];

@@ -9,7 +9,7 @@ const { startMock } = require('./mock-meta-llm');
 const { build } = require('../src/index');
 const { compactPrompt } = require('../src/llm');
 const {
-  NEED_FACTS_LINE, NEED_VIDEO_LINE, ASK_VIDEO, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE,
+  NEED_FACTS_LINE, NEED_VIDEO_LINE, ASK_VIDEO, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE,
   gatePassed, shapeReply, nextAsk, capWords,
 } = require('../src/quote-gate');
 const { HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN } = require('../src/estimate');
@@ -75,9 +75,10 @@ test('quote gate blocks every price until video, size, brand, model, barangay, c
     assert.doesNotMatch(early, /₱|Kailan po kayo free|8,500/);
     assert.equal(gatePassed(s.app.store.thread('g1')), false);
     const cracked = await s.say('crack', 'basag ang LCD ng Samsung 55');
-    assert.equal(cracked, HANDOFF_LINE);
+    assert.equal(cracked, CRACKED_PRICE_LINE);
     assert.doesNotMatch(cracked, /₱/);
     assert.equal(s.app.store.thread('crack').handedOff, true);
+    assert.equal(Boolean(s.app.store.thread('crack').gateClosed), false);
   } finally { await s.close(); }
 });
 
@@ -208,8 +209,9 @@ test('a pre-video repair price with size and symptom explains the need and names
 
 test('price flexibility does not replace handoffs', () => {
   const crack = shapeReply({ history: [], slots: {} }, '₱8,500', 'magkano po ang basag na LCD');
-  assert.equal(crack.text, HANDOFF_LINE);
+  assert.equal(crack.text, CRACKED_PRICE_LINE);
   assert.equal(crack.handoff, true);
+  assert.equal(crack.closeGate, false);
   const war = shapeReply({ history: [], slots: {} }, '6 months', 'magkano po ang warranty');
   assert.equal(war.text, WARRANTY_ONLY);
   assert.equal(war.handoff, true);
@@ -217,4 +219,30 @@ test('price flexibility does not replace handoffs', () => {
   assert.equal(mad.text, HANDOFF_LINE);
   assert.equal(mad.handoff, true);
   assert.equal(nextAsk({ videoReceived: false, slots: { size: '43"', symptom: 'screen', brand: 'Samsung' } }), ASK_VIDEO);
+});
+
+test('guardrails strip invented prices, names, a day or time, and a bot mention', () => {
+  const shaped = shapeReply(
+    { history: [{ role: 'user', content: 'hello po' }], slots: {} },
+    'Si Pedro po ang technician. Bot ako. Bukas 9am, ₱99,999 po.',
+    'hello po',
+  );
+  assert.doesNotMatch(shaped.text, /Pedro|technician|\bbot\b|9am|99,?999|bukas/i);
+  assert.match(shaped.text, /staff po namin|video|depende/i);
+});
+
+test('basag then 65 no display magkano still gets a reply', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => '65 inches po, ₱11,000. [HANDOFF: panel damage]';
+  try {
+    const cracked = await s.say('after-basag', 'basag ang screen');
+    assert.equal(cracked, CRACKED_PRICE_LINE);
+    assert.equal(Boolean(s.app.store.thread('after-basag').gateClosed), false);
+    const before = s.mock.calls.messages.length;
+    const next = await s.say('after-basag', '65 no display magkano');
+    assert.ok(next);
+    assert.equal(s.mock.calls.messages.length > before, true);
+    assert.equal(Boolean(s.app.store.thread('after-basag').gateClosed), false);
+    assert.doesNotMatch(next, /quote-gate handoff/);
+  } finally { await s.close(); }
 });

@@ -51,21 +51,24 @@ class LLM {
   systemPrompt() {
     if (this._prompt === null) {
       const raw = fs.readFileSync(this.cfg.systemPromptFile, 'utf8').trim();
+      const rulesFile = path.join(__dirname, '..', 'prompts', 'business-rules.md');
       const url = this.cfg.bookingFormUrl || '';
       let text = raw.replaceAll('{{BOOKING_FORM_URL}}', () => url);
       if (url && !text.includes(url)) text += `\n\nSchedule form URL: ${url}`;
       const refFile = this.cfg.brandNewReferenceFile || path.join(__dirname, '..', 'prompts', 'brand-new-reference.md');
       text += `\n\n${fs.readFileSync(refFile, 'utf8').trim()}`;
-      this._prompt = text + '\n\n## JMAGS Behavior Bank (approved customer-service behavior, no new prices)\n' + behaviorBaseline();
+      this._prompt = text + '\n\n' + fs.readFileSync(rulesFile, 'utf8').trim()
+        + '\n\n## JMAGS Behavior Bank (approved customer-service behavior, no new prices)\n' + behaviorBaseline();
     }
     return this._prompt;
   }
 
-  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus } = {}) {
+  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus, preparedNote } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
+    const fallback = String(preparedNote || '').trim();
     const messages = [
       { role: 'system', content: compactPrompt(history, this.cfg) },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Reply only to the customer's latest message in 2 or 3 short Taglish lines, under 200 characters, with po and sir or maam. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}`.trim() },
+      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Answer the customer's latest question first, in 1 to 3 short Taglish sentences, with po. Then ask at most one next-step question. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line and still answer the question. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}${fallback ? ` Safe fallback if a rule blocks your draft: ${fallback}` : ''}`.trim() },
       ...normalizeTurns(history, { attachmentNote }),
     ];
     return this.chat(messages, { priority: 'high' });
@@ -96,9 +99,11 @@ class LLM {
       try {
         const answer = await this.gate.schedule(() => this.router.complete(this.payload(messages)), { priority });
         this.lastProvider = this.router.lastProvider || '';
+        this.lastModel = this.router.lastModel || '';
         return answer;
       } catch (e) {
         this.lastProvider = '';
+        this.lastModel = '';
         this.noteError(e);
         throw e;
       }
@@ -124,13 +129,16 @@ class LLM {
     try {
       const answer = await this.gate.schedule(() => this.complete(messages), { priority });
       this.lastProvider = this.cfg.llmModel || 'llm';
+      this.lastModel = this.cfg.llmModel || '';
       return answer;
     } catch (e) {
       this.lastProvider = '';
+      this.lastModel = '';
       if (!this.shouldDropTemperature(e)) throw e;
       this.omitTemperature = true;
       const answer = await this.gate.schedule(() => this.complete(messages), { priority });
       this.lastProvider = this.cfg.llmModel || 'llm';
+      this.lastModel = this.cfg.llmModel || '';
       return answer;
     }
   }
@@ -206,6 +214,11 @@ function parseHandoff(raw) {
   const text = raw.replace(re, '').replace(/\n{3,}/g, '\n\n').trim();
   return { text, handoff: reason !== null, reason: reason || '' };
 }
+function businessRulesText() {
+  const file = path.join(__dirname, '..', 'prompts', 'business-rules.md');
+  return fs.readFileSync(file, 'utf8').trim();
+}
+
 function estimateTokens(text) {
   return Math.ceil(String(text || '').length / 4);
 }
@@ -236,6 +249,7 @@ function compactPrompt(history, cfg = {}) {
     'Price for this chat only: ' + priceHint(size),
     'Before any repair price ask for a short on-TV video, then a photo of the model sticker. One question. Do not re-ask a known brand, size, or sira. Do not hand off just because they repeat themselves.',
     'Example: Samsung 55 may sound walang display -> Pwede po pa-send ng short video ng TV habang naka-on, para makita ng technician namin ang sira?',
+    businessRulesText(),
   ];
   if (url) lines.push(bookingFormMessage(url));
   return lines.join('\n');

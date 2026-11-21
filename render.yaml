@@ -155,6 +155,18 @@ services:
       # Empty keeps the code default (15 requests per minute). 0 turns the gap off. A wait is capped at 20 seconds.
       - key: LLM_MAX_RPM
         sync: false
+      # Preferred customer model. Empty key means the OpenAI provider is skipped.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: OPENAI_REASONING_EFFORT
+        sync: false
+      - key: OPENAI_TIMEOUT_MS
+        sync: false
+      # Recommended: openai,groq. Empty keeps the code default (groq only).
+      - key: AI_PROVIDER_ORDER
+        sync: false
       # Empty keeps SMS off. Turn on in the dashboard only after Semaphore is ready.
       - key: SMS_ENABLED
         sync: false
