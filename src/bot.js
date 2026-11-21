@@ -18,7 +18,7 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk, questionTopic, QUESTIONS } = require('./intake');
 const { noteEvidence, nextEvidenceAsk, nextStep, coreReady, remindsMissingProof, declinesEvidence, steerTurn, ASK_VIDEO } = require('./evidence');
-const { rememberJob, shapeReply, isWait, WAIT_LINE, staffVoice, gatePassed } = require('./quote-gate');
+const { rememberJob, shapeReply, isWait, WAIT_LINE, staffVoice, gatePassed, isCracked, isPanelPriceHandoff } = require('./quote-gate');
 const {
   customerBrief, withWelcome, wantsBooking, saysFormDone, formUrlFor, formMessage,
   FORM_OK, FORM_MISSING, localJobs, submissionMatches, netlifySubmissions, phoneInThread,
@@ -1376,6 +1376,10 @@ class Bot {
         else if (handoff && guarded === text) {
           const steered = steerTurn(t, text || lines.holding, latestUser);
           if (steered && steered !== text && (nextEvidenceAsk(t) || remindsMissingProof(latestUser))) await this.send(psid, steered, { provider: 'rules' });
+          else if (isPanelPriceHandoff(reason) || isCracked(latestUser)) {
+            // Staff prices the cracked panel. The thread stays open for the next message.
+            await this.handoff(psid, reason || 'cracked lcd', this.presentReply(text) || lines.holding);
+          }
           else {
             t.gateClosed = true;
             await this.handoff(psid, reason || 'model', this.presentReply(text) || lines.holding);
@@ -1463,7 +1467,8 @@ class Bot {
       rememberJob(thread);
       const shaped = shapeReply(thread, clean, latestUserText(thread));
       if (shaped.handoff) {
-        thread.gateClosed = true;
+        // closeGate false: cracked/panel price is flagged, later messages still get a reply.
+        if (shaped.closeGate !== false) thread.gateClosed = true;
         if (!thread.handedOff) {
           await this.handoff(psid, shaped.reason || 'rules', shaped.text, { ...opts, skipGate: true });
           return true;

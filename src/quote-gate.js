@@ -13,6 +13,8 @@ const MAGKANO_LINE = 'Para po masiguro namin ang tamang presyo, kailangan po mun
 const WAIT_LINE = 'Sige po, hintayin po namin. Thank you po.';
 const WARRANTY_ONLY = 'May warranty po ang repair namin. I-ko-confirm lang po ng staff namin ang exact coverage para sa unit ninyo.';
 const HANDOFF_LINE = 'I-che-check lang po ng staff namin ito at mag-me-message po sila sa inyo shortly.';
+// Cracked LCD: staff prices that fault only. The chat stays open for the next question.
+const CRACKED_PRICE_LINE = 'I-che-check po ng staff namin ang presyo ng basag na screen.';
 const SCHEDULE_HOLD = 'I-che-check lang po namin ang schedule, babalikan po namin kayo agad.';
 const VIDEO_ACK = 'Staff na po namin ang magrereview ng photo or video na sinend nyo, pa hintay na lang po salamat po 🙂';
 const ASK_VIDEO = 'Pwede po pa-send ng video ng TV habang naka-on?';
@@ -67,6 +69,11 @@ function repairedAnswer(text) {
 
 function isCracked(text) {
   return /basag|cracked|smashed|broken lcd|durog na lcd/i.test(String(text || ''));
+}
+
+// Panel-price handoff flags staff for that fault. It must not close the thread.
+function isPanelPriceHandoff(reason) {
+  return /panel(?:\s|-)?damage|cracked lcd|cracked|basag|broken lcd/i.test(String(reason || ''));
 }
 
 function isMagkano(text) {
@@ -197,7 +204,7 @@ function flexiblePriceReply(thread, latest) {
 }
 
 function capWords(text) {
-  const canonical = [MAGKANO_LINE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
+  const canonical = [MAGKANO_LINE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
   let s = String(text || '');
   if (/Para mabigyan po namin kayo agad ng presyo/.test(s)) return s.trim();
   if (isPreparedPriceAnswer(s)) return s.trim();
@@ -227,8 +234,9 @@ function shapeReply(thread, text, latest) {
   let body = staffVoice(stripWarrantyLength(text));
   const passed = gatePassed(thread);
   const reason = [];
-  if (isCracked(latest) || (thread.slots && thread.slots.symptom === 'cracked')) {
-    return { text: HANDOFF_LINE, handoff: true, reason: 'cracked lcd', silent: false };
+  // Only the message that reports the crack. A later question is answered normally.
+  if (isCracked(latest)) {
+    return { text: CRACKED_PRICE_LINE, handoff: true, reason: 'cracked lcd', silent: false, closeGate: false };
   }
   if (/\[\[?\s*HANDOFF/i.test(body)) {
     body = body.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, '').trim();
@@ -267,6 +275,7 @@ module.exports = {
   WAIT_LINE,
   WARRANTY_ONLY,
   HANDOFF_LINE,
+  CRACKED_PRICE_LINE,
   SCHEDULE_HOLD,
   VIDEO_ACK,
   ASK_VIDEO,
@@ -277,6 +286,7 @@ module.exports = {
   isWait,
   isMagkano,
   isCracked,
+  isPanelPriceHandoff,
   shapeReply,
   stripWarrantyLength,
   capWords,
