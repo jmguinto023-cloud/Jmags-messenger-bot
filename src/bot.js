@@ -876,7 +876,8 @@ class Bot {
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.isTestPsid(psid)) return 'not in BOT_TEST_PSIDS allowlist';
     if (t.handedOff) return `handed off to Ivan (${t.handoffReason})`;
-    if (this.humanPaused(t, now)) return 'paused: a human replied recently';
+    // A tester account under BOT_TEST_RESET ignores the human-reply pause: Page automations echo as a human.
+    if (this.humanPaused(t, now) && !(this.cfg.testReset && this.isTestPsid(psid))) return 'paused: a human replied recently';
     if (!isActiveNow(this.cfg, new Date(now))) return 'outside BOT_ACTIVE_HOURS';
     if (now - (ts || t.lastUserTs) > this.cfg.replyWindowHours * HOUR) return 'outside 24h messaging window';
     return '';
