@@ -298,7 +298,7 @@ function createServer({ cfg, bot, log }) {
       return send(403, 'Forbidden');
     }
 
-    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply' || url.pathname === '/dashboard/api/booking-link' || url.pathname === '/dashboard/link-job' || url.pathname === '/ops/action');
+    const dashPost = req.method === 'POST' && (url.pathname === '/dashboard/login' || url.pathname === '/dashboard/logout' || url.pathname === '/dashboard/reviewed' || url.pathname === '/dashboard/api/reply' || url.pathname === '/dashboard/api/verdict' || url.pathname === '/dashboard/api/booking-link' || url.pathname === '/dashboard/link-job' || url.pathname === '/ops/action');
     if (req.method === 'POST' && (url.pathname === '/webhook' || url.pathname.startsWith('/admin/') || url.pathname === '/dashboard/api/subscribe' || url.pathname === '/data-deletion-callback' || url.pathname === '/sms/inbound' || dashPost)) {
       const chunks = [];
       let size = 0;
@@ -309,6 +309,7 @@ function createServer({ cfg, bot, log }) {
         if (url.pathname === '/dashboard/logout') return dashboardLogout();
         if (url.pathname === '/dashboard/reviewed') return dashboardReviewed(req, raw);
         if (url.pathname === '/dashboard/api/reply') return dashboardReply(req, raw);
+        if (url.pathname === '/dashboard/api/verdict') return dashboardVerdict(req, raw);
         if (url.pathname === '/dashboard/api/booking-link') return dashboardBookingLink(req, raw);
         if (url.pathname === '/dashboard/link-job') return dashboardLinkJob(req, raw);
         if (url.pathname === '/ops/action') return opsAction(req, raw);
@@ -453,6 +454,21 @@ function createServer({ cfg, bot, log }) {
         (result) => sendJson(result.status || 400, { ok: Boolean(result.ok), error: result.error || '', duplicate: Boolean(result.duplicate) }),
         (e) => {
           log.error('dashboard reply failed', e.message);
+          sendJson(502, { ok: false, error: 'Hindi naipadala. Subukan ulit.' });
+        },
+      );
+    }
+
+    function dashboardVerdict(rq, raw) {
+      if (!dashOk(cfg, rq)) return send(403, 'Forbidden');
+      let body;
+      try { body = JSON.parse(raw.toString('utf8')); } catch { return sendJson(400, { ok: false, error: 'Bad JSON' }); }
+      const id = String((body && body.id) || '').trim();
+      if (!id) return sendJson(400, { ok: false, error: 'id required' });
+      bot.sendVerdict(id, body.verdict, body.price, body.note).then(
+        (result) => sendJson(result.status || 400, { ok: Boolean(result.ok), error: result.error || '', duplicate: Boolean(result.duplicate) }),
+        (e) => {
+          log.error('dashboard verdict failed', e.message);
           sendJson(502, { ok: false, error: 'Hindi naipadala. Subukan ulit.' });
         },
       );

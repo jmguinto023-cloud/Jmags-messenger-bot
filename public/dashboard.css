@@ -125,3 +125,12 @@ textarea {
 button:disabled, textarea:disabled { opacity: 0.55; }
 .send-note { min-height: 1.2em; margin: 8px 0 0; }
 .pill.ivan { background: #1f7a4d; color: #f4f7fb; }
+
+/* Verdict block: one tap for staff, the bot sends the answer. */
+.verdict { margin: 1rem 0; padding: .75rem; border: 1px solid #d9d6f0; border-radius: 12px; background: #faf9ff; }
+.verdict .verdict-choice { display: flex; flex-wrap: wrap; gap: .5rem; }
+.verdict .verdict-btn[aria-pressed="true"] { background: #1e1a4d; color: #fff; border-color: #1e1a4d; }
+.verdict .verdict-price { margin-top: .6rem; }
+.verdict input[type="number"], .verdict input[type="text"] { width: 100%; box-sizing: border-box; margin-top: .4rem; }
+.verdict .chips { margin: .4rem 0 0; display: flex; flex-wrap: wrap; gap: .4rem; }
+.verdict .verdict-status { min-height: 1.2em; margin: .4rem 0 0; font-size: .9rem; }
