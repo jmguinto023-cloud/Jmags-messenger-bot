@@ -1427,8 +1427,10 @@ class Bot {
         t.passedByBot = true;
         this.stopVideoFollowup(psid, 'handed to Ivan');
         this.store.save();
-        try { await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`); }
-        catch (err) { this.log.error('pass_thread_control failed', err.message); }
+        if (this.cfg.passThreadControl) {
+          try { await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`); }
+          catch (err) { this.log.error('pass_thread_control failed', err.message); }
+        }
       }
       this.log.error(`LLM outage for ${short(psid)} still down; not sending another holding line`);
       return;
@@ -2360,9 +2362,13 @@ class Bot {
     this.store.save();
     this.log.info(`HANDOFF ${short(psid)}: ${reason}`);
     try { await this.send(psid, holdingText, sendOpts); } catch (e) { this.log.error('holding line failed', e.message); }
-    try {
-      await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`);
-    } catch (e) { this.log.error('pass_thread_control failed', e.message); }
+    // The bot keeps the thread: staff can still reply from the Page Inbox, and handedOff keeps the bot quiet.
+    // Passing control away left chats stuck in standby until someone pressed Done in the inbox.
+    if (this.cfg.passThreadControl) {
+      try {
+        await this.graph.passThreadControl(psid, this.cfg.pageInboxAppId, `Needs Ivan: ${reason}`);
+      } catch (e) { this.log.error('pass_thread_control failed', e.message); }
+    }
     if (this.cfg.needsIvanLabel) {
       try { await this.graph.addLabel(psid, this.cfg.needsIvanLabel); }
       catch (e) { this.log.warn('label failed (optional)', e.message); }

@@ -35,7 +35,7 @@ async function setup(extraEnv = {}, mockOpts = {}) {
     PAGE_ACCESS_TOKEN: 'PAGE_TOKEN', GRAPH_API_BASE: mock.base, LLM_BASE_URL: `${mock.base}/v1`,
     LLM_API_KEY: 'sk-test', LLM_MODEL: 'mock-model', BOT_ENABLED: 'true', BATCH_WINDOW_MS: '0',
     SUPABASE_URL: mock.base, SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
-    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', INTEREST_FOLLOWUP_ENABLED: 'false', PRICE_CARDS_ENABLED: 'false', ...extraEnv,
+    DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jmags-bot-')), LOG_LEVEL: 'silent', INTEREST_FOLLOWUP_ENABLED: 'false', PRICE_CARDS_ENABLED: 'false', PASS_THREAD_CONTROL_ON_HANDOFF: 'true', ...extraEnv,
   };
   const app = build(env);
   app.llm.sleep = async () => {};
@@ -3151,5 +3151,16 @@ test('a test allowlist can match by last digits, and a reset tester starts clean
     assert.equal(s.app.store.thread('1234569161').bookingStaffOnly, undefined);
     await s.post(msg('7770000000', { text: 'Magkano po check up fee sa bahay?' }, t0));
     assert.equal(to('7770000000').length, 0); // not on the allowlist
+  } finally { await s.close(); }
+});
+
+test('by default a handoff keeps the thread with the bot instead of passing it to the Page Inbox', async () => {
+  const s = await setup({ PASS_THREAD_CONTROL_ON_HANDOFF: 'false' });
+  const t0 = NOON;
+  s.app.bot.now = () => t0;
+  try {
+    await s.post(msg('keep-1', { text: 'gusto ko makausap ang tao' }, t0));
+    assert.equal(s.app.store.thread('keep-1').handedOff, true);
+    assert.equal(s.mock.calls.pass.length, 0);
   } finally { await s.close(); }
 });

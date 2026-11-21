@@ -43,6 +43,7 @@ function loadConfig(env = process.env) {
     pageSwitchCacheMs: num(env.PAGE_SWITCH_CACHE_MS, 15000),
     graphBase: (env.GRAPH_API_BASE || 'https://graph.facebook.com').replace(/\/+$/, ''),
     graphVersion: env.GRAPH_API_VERSION || 'v26.0',
+    passThreadControl: bool(env.PASS_THREAD_CONTROL_ON_HANDOFF, false),
     pageInboxAppId: String(env.PAGE_INBOX_APP_ID || '263902037430900'),
     ignoreEchoAppIds: list(env.IGNORE_ECHO_APP_IDS),
     // Echoes from these app ids are Meta automations, not a person in Page Inbox.
