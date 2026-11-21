@@ -119,12 +119,45 @@ test('retries both providers once after a shared outage, then fails', async () =
   const router = new AiRouter({
     providers: buildProviders(cfg()),
     retryBackoffMs: 25,
+    rateLimitBackoffMs: 25,
     sleep: async (ms) => { slept += ms; },
     fetcher: async (url) => { called.push(url); return failure(429); },
   });
   await assert.rejects(router.complete({ messages: [] }), /AI providers unavailable/);
   assert.equal(called.length, 4);
   assert.equal(slept, 25);
+});
+
+test('a 429 tries the next provider before the rate-limit wait', async () => {
+  const called = [];
+  let slept = 0;
+  const router = new AiRouter({
+    providers: buildProviders({
+      aiAllowExternalData: true, openaiApiKey: 'oa', groqApiKey: 'g',
+      aiProviderOrder: 'openai,groq', openaiModel: 'gpt-5.4-mini',
+    }),
+    sleep: async (ms) => { slept += ms; },
+    fetcher: async (url) => {
+      called.push(url);
+      return url.includes('api.openai.com') ? failure(429) : ok('groq ok');
+    },
+  });
+  assert.equal(await router.complete({ messages: [] }), 'groq ok');
+  assert.deepEqual(called.map((url) => url.includes('api.openai.com') ? 'openai' : 'groq'), ['openai', 'groq']);
+  assert.equal(slept, 0);
+});
+
+test('Groq 429 waits 1500ms before the one retry', async () => {
+  let slept = 0;
+  let calls = 0;
+  const router = new AiRouter({
+    providers: buildProviders({ aiAllowExternalData: true, groqApiKey: 'g' }),
+    sleep: async (ms) => { slept += ms; },
+    fetcher: async () => { calls += 1; return failure(429); },
+  });
+  await assert.rejects(router.complete({ messages: [] }), /AI providers unavailable/);
+  assert.equal(calls, 2);
+  assert.equal(slept, 1500);
 });
 
 test('OpenAI is selected only when the order and key are set', () => {

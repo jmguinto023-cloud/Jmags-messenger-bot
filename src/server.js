@@ -130,7 +130,9 @@ function createServer({ cfg, bot, log }) {
     }
     if (req.method === 'GET' && url.pathname.startsWith('/price-cards/')) {
       const name = url.pathname.slice('/price-cards/'.length);
-      if (!priceCards.FILE_RE.test(name) || !priceCards.FILES.has(name)) return send(404, 'Not found');
+      const onDisk = priceCards.FILE_RE.test(name)
+        && fs.existsSync(path.join(PUBLIC, 'price-cards', name));
+      if (!onDisk) return send(404, 'Not found');
       return sendFile(res, `price-cards/${name}`, 'image/jpeg', 'public, max-age=86400');
     }
     if (req.method === 'GET' && FILES[url.pathname]) {

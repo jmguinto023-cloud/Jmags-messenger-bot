@@ -362,15 +362,15 @@ test('LLM failure does not send the canned greeting and hands the chat to Ivan o
     s.app.log.info = (...a) => notes.push(a.map(String).join(' '));
     await s.post(msg('chat-ai-4401', { text: 'hm po' }));
     assert.equal(s.mock.calls.llm.length, 3);
-    assert.ok(notes.some((l) => /replied to/.test(l) && !/provider=/.test(l)));
+    assert.ok(notes.some((l) => /replied to/.test(l) && /provider=rules/.test(l)));
     assert.equal(notes.some((l) => /provider=gemini|provider=groq/.test(l)), false);
-    const holding = s.app.store.readConversations().find((r) => /Sandali lang po, titingnan po namin ito/.test(r.text));
-    assert.equal(holding.provider, undefined);
+    const asked = s.app.store.readConversations().find((r) => /Ilang inches po ang TV/.test(r.text));
+    assert.equal(asked.provider, 'rules');
     assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
     assert.equal(s.mock.calls.messages.length, 1);
-    assert.equal(s.mock.calls.messages[0].message.text, 'Sandali lang po, titingnan po namin ito.');
+    assert.match(s.mock.calls.messages[0].message.text, /Ilang inches po ang TV/);
     assert.equal(s.mock.calls.pass.length, 0);
-    assert.equal(s.app.store.thread('chat-ai-4401').handedOff, true);
+    assert.equal(Boolean(s.app.store.thread('chat-ai-4401').handedOff), false);
     assert.equal(Boolean(s.app.store.thread('chat-ai-4401').gateClosed), false);
     assert.equal(s.app.store.thread('chat-ai-4401').aiNeedsIvan, true);
     assert.match(s.app.store.thread('chat-ai-4401').handoffReason, /HTTP 429/);
@@ -381,7 +381,8 @@ test('LLM failure does not send the canned greeting and hands the chat to Ivan o
     assert.equal(health.llmLastError.includes('chat-ai-4401'), false);
 
     await s.post(msg('chat-ai-4401', { text: 'hello ulit po' }));
-    assert.equal(s.mock.calls.messages.filter((m) => /Sandali lang po, titingnan po namin ito/.test(m.message.text)).length, 2);
+    assert.equal(s.mock.calls.messages.filter((m) => /Ilang inches po ang TV/.test(m.message.text)).length, 2);
+    assert.equal(s.mock.calls.messages.filter((m) => /Sandali lang po, titingnan po namin ito/.test(m.message.text)).length, 0);
     assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
 
     const lines = require('../src/messages');
@@ -395,8 +396,6 @@ test('LLM failure does not send the canned greeting and hands the chat to Ivan o
     assert.match(ops, /data-ai-handoff="4401"/);
     assert.match(ops, /AI unavailable: HTTP 429/);
     assert.equal(ops.includes('chat-ai-4401'), false);
-    const paused = await (await fetch(`${s.base}/admin/paused`, { headers: { Authorization: 'Bearer adm' } })).json();
-    assert.ok(paused.some((row) => row.handoffReason === 'AI unavailable: HTTP 429'));
   } finally {
     console.error = orig;
     await s.close();
@@ -490,9 +489,11 @@ test('billing and config errors hand off without the canned greeting', async () 
     await s.post(msg('cfg', { text: 'hello ulit po' }));
     assert.equal(s.mock.calls.pass.length, 0);
     assert.equal(s.mock.calls.messages.filter((m) => /brand at size/.test(m.message.text)).length, 0);
-    assert.equal(s.mock.calls.messages.filter((m) => /Sandali lang po, titingnan po namin ito/.test(m.message.text)).length, 2);
+    assert.equal(s.mock.calls.messages.filter((m) => /Ilang inches po ang TV/.test(m.message.text)).length, 2);
+    assert.equal(s.mock.calls.messages.filter((m) => /Sandali lang po, titingnan po namin ito/.test(m.message.text)).length, 0);
     assert.equal(Boolean(s.app.store.thread('cfg').gateClosed), false);
-    assert.equal(s.app.store.thread('cfg').history.some((h) => h.role === 'assistant'), false);
+    assert.equal(Boolean(s.app.store.thread('cfg').handedOff), false);
+    assert.match(s.app.store.thread('cfg').history.filter((h) => h.role === 'assistant').map((h) => h.content).join('\n'), /Ilang inches po ang TV/);
     assert.ok(logged.some((l) => /\bERROR\b/.test(l) && /400/.test(l) && /No canned greeting/.test(l)));
   } finally {
     console.error = orig;
@@ -516,8 +517,8 @@ test('temperature 400 is retried once without temperature and then omitted', asy
     assert.equal(s.mock.calls.pass.length, 0);
     await s.post(msg('temp', { text: '55 inch samsung po' }));
     assert.equal(s.mock.calls.llm.length, 2, 'brand, size, and symptom already known: one price, no extra model call');
-    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /₱8,500|Kailan po sila free/);
-    assert.match(s.mock.calls.messages.at(-1).message.text, /video|model|inches|barangay|ibang shop/i);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Nasa ₱8,500 po ang backlight para sa Samsung 55/);
+    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /Kailan po sila free/);
     assert.equal(s.app.store.thread('temp').handedOff, false);
   } finally { await s.close(); }
 });
@@ -1043,7 +1044,8 @@ test('a received video stays in later model calls and is never treated as missin
     await s.post(msg('vid1', { text: 'magkano po ang estimate?' }));
     const outbound = s.mock.calls.messages.map((m) => m.message.text).join('\n');
     assert.doesNotMatch(outbound, /ulit i-send|paki-send ulit|\bresend\b/i);
-    assert.doesNotMatch(s.mock.calls.messages.at(-1).message.text, /problema|₱/i);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Para sa 55"/);
+    assert.match(s.mock.calls.messages.at(-1).message.text, /Ano po ang sira/);
     assert.equal(s.app.store.thread('vid1').awaitingVideo, false);
   } finally { await s.close(); }
 });
@@ -1054,8 +1056,8 @@ test('lines on a known size quote LCD modification without a checkup essay', asy
   try {
     await s.post(msg('rng', { text: 'may lines po sa TCL 40 inch, taga Cabuyao' }));
     const text = s.mock.calls.messages[0].message.text;
-    assert.match(text, /video ng TV habang naka-on/);
-    assert.doesNotMatch(text, /₱|Cabuyao/);
+    assert.match(text, /Nasa ₱4,500 po ang LCD modification para sa TCL 40/);
+    assert.doesNotMatch(text, /Cabuyao|9,000/);
   } finally { await s.close(); }
 });
 
@@ -2764,17 +2766,19 @@ test('Page Inbox history is loaded and a known size gets a confirmed price', asy
   try {
     await s.post(msg('astron-40', { text: 'Magkano po kaya' }));
     const sent = s.mock.calls.messages.at(-1).message.text;
-    assert.match(sent, /video at model number|video ng TV habang naka-on/);
-    assert.doesNotMatch(sent, /₱/);
-    assert.doesNotMatch(sent, /4,500/);
+    assert.match(sent, /Para sa 40"/);
+    assert.match(sent, /backlight ₱4,500/);
+    assert.match(sent, /LCD modification ₱4,500/);
+    assert.match(sent, /LCD replacement ₱10,000/);
+    assert.match(sent, /Ano po ang sira/);
     assert.doesNotMatch(sent, /Anong brand at size/);
     assert.doesNotMatch(sent, /\p{Extended_Pictographic}/u);
     assert.ok(sent.length <= 300);
-    assert.equal(s.mock.calls.llm.length, 1);
+    assert.equal(s.mock.calls.llm.length, 0);
     const hist = s.app.store.thread('astron-40').history.map((h) => h.content).join('\n');
     assert.match(hist, /Astron 40 inch/);
     const rows = await (await fetch(`${s.base}/admin/conversations`, { headers: { Authorization: 'Bearer adm' } })).json();
-    assert.ok(rows.some((r) => r.role === 'assistant' && r.text.startsWith(NEED_FACTS_LINE) && r.provider === 'rules'));
+    assert.ok(rows.some((r) => r.role === 'assistant' && r.text.startsWith('Para sa 40') && r.provider === 'rules'));
     assert.doesNotMatch(sent, /Confirmed:/);
   } finally { await s.close(); }
 });
@@ -2792,8 +2796,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.doesNotMatch(vague, /₱|Makati/);
 
     const sound = await send('live-2', 'samsung 55 inch may sound pero walang display');
-    assert.match(sound, /video ng TV habang naka-on/);
-    assert.doesNotMatch(sound, /₱|Makati/);
+    assert.match(sound, /Nasa ₱8,500 po ang backlight para sa Samsung 55/);
+    assert.doesNotMatch(sound, /Makati/);
 
     const bl = await send('live-3', 'magkano po backlight ng 43 lg');
     assert.match(bl, /Nasa ₱6,000 po ang backlight para sa LG 43/);
@@ -2829,12 +2833,11 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.match(price, /final po after makita ng staff ang video/i);
 
     const disc = await send('live-9', 'pa discount naman po');
-    assert.match(disc, /Fixed po ang presyo/);
-    assert.match(disc, /warranty/);
-    assert.match(disc, /home service/);
-    assert.doesNotMatch(disc, /discount|tawad|promo|₱|ibababa/i);
-    assert.equal(s.app.store.thread('live-9').handedOff, true);
-    assert.match(s.app.store.thread('live-9').handoffReason, /discount/);
+    assert.match(disc, /Fixed price na po ito/);
+    assert.match(disc, /all-in na po parts and labor with warranty/);
+    assert.match(disc, /Gusto nyo po ba ituloy/);
+    assert.doesNotMatch(disc, /\bsir\b|discount|tawad|promo|₱|ibababa/i);
+    assert.equal(Boolean(s.app.store.thread('live-9').handedOff), false);
 
     assert.ok(s.mock.calls.llm.length > 0);
     for (const text of s.mock.calls.messages.map((m) => m.message.text)) {
@@ -2855,8 +2858,8 @@ test('flicker quotes backlight, repair time stays unstated, and tomorrow asks wh
   try {
     for (const text of ['LG 50 nag fflicker', 'kumikislap po ang LG 50', 'blinking po yung LG 50 inch']) {
       const quote = await send(`flick-${text.length}`, text);
-      assert.match(quote, /video ng TV habang naka-on/);
-      assert.doesNotMatch(quote, /₱|3 araw/);
+      assert.match(quote, /Nasa ₱7,500 po ang backlight para sa LG 50/);
+      assert.doesNotMatch(quote, /3 araw/);
       assert.ok(quote.length <= 200, quote);
     }
     const duration = 'Depende po sa sira sir. Anong brand at size po ng TV para ma-check namin?';
@@ -3223,6 +3226,48 @@ test('a test allowlist can match by last digits, and a reset tester starts clean
     assert.equal(s.app.store.thread('1234569161').bookingStaffOnly, undefined);
     await s.post(msg('7770000000', { text: 'Magkano po check up fee sa bahay?' }, t0));
     assert.equal(to('7770000000').length, 0); // not on the allowlist
+  } finally { await s.close(); }
+});
+
+test('65 then 32 basag quotes the new size and sends that card, even if the model is down', async () => {
+  const s = await setup({ PRICE_CARDS_ENABLED: 'true', PUBLIC_BASE_URL: 'https://bot.test' });
+  s.mock.state.llmFail = true;
+  s.mock.state.llmStatus = 429;
+  const texts = (id) => s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === id && m.message && m.message.text).map((m) => m.message.text);
+  const images = (id) => s.mock.calls.messages.filter((m) => m.recipient && m.recipient.id === id && m.message && m.message.attachment).map((m) => m.message.attachment.payload.url);
+  try {
+    await s.post(msg('9161', { text: '65 inches nabasag' }));
+    assert.match(texts('9161').at(-1), /Nasa ₱30,500 po ang palit LCD para sa 65"/);
+    assert.match(images('9161').at(-1), /lcd-65\.jpg$/);
+
+    await s.post(msg('9161', { text: 'Wala ba discount?' }));
+    assert.match(texts('9161').at(-1), /Fixed price na po ito, all-in na po parts and labor with warranty/);
+    assert.match(texts('9161').at(-1), /Gusto nyo po ba ituloy/);
+    assert.doesNotMatch(texts('9161').at(-1), /\bsir\b/);
+
+    await s.post(msg('9161', { text: 'Magkano naman kapag 32 inches nabasag kasi' }));
+    assert.match(texts('9161').at(-1), /Nasa ₱5,000 po ang palit LCD para sa 32"/);
+    assert.doesNotMatch(texts('9161').at(-1), /30,500|2,500/);
+    assert.match(images('9161').at(-1), /lcd-32\.jpg$/);
+
+    const before = images('9161').length;
+    await s.post(msg('9161', { text: '32 inches lang' }));
+    assert.match(texts('9161').at(-1), /Nasa ₱5,000 po ang palit LCD para sa 32"/);
+    assert.equal(images('9161').length, before);
+
+    await s.post(msg('9161', { text: 'Laguna' }));
+    assert.match(texts('9161').at(-1), /Anong brand po ng TV/);
+    await s.post(msg('9161', { text: 'Sharp' }));
+    assert.match(texts('9161').at(-1), /video ng TV habang naka-on/);
+    assert.equal(texts('9161').some((t) => /Sandali lang po, titingnan po namin ito/.test(t)), false);
+
+    await s.post(msg('menu', { text: 'trenta y dos' }));
+    await s.post(msg('menu', { text: 'magkano po?' }));
+    assert.match(texts('menu').at(-1), /Para sa 32"/);
+    assert.match(texts('menu').at(-1), /backlight ₱3,000/);
+    assert.match(texts('menu').at(-1), /LCD modification ₱2,500/);
+    assert.match(texts('menu').at(-1), /LCD replacement ₱5,000/);
+    assert.equal(images('menu').length, 0);
   } finally { await s.close(); }
 });
 

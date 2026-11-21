@@ -17,6 +17,17 @@ const prices = require('../knowledge/prices.json');
 // Wed Nov 4 2026, 8:00 PM Manila.
 const NOW = Date.parse('2026-11-04T12:00:00Z');
 
+test('a later size wins, including inches, quotes, and Tagalog', () => {
+  assert.equal(estimate.knownSize('Sony 65 inches, tapos 32 inches nabasag'), 32);
+  assert.equal(estimate.knownSize('32"'), 32);
+  assert.equal(estimate.knownSize('55in'), 55);
+  assert.equal(estimate.knownSize('trenta y dos'), 32);
+  assert.equal(estimate.knownSize('singkuwenta y singko'), 55);
+  assert.match(estimate.listEstimate('magkano po?', { history: [{ role: 'user', content: '65 inches' }], slots: {} }), /backlight ₱11,000/);
+  assert.match(estimate.listEstimate('magkano po?', { history: [{ role: 'user', content: '65 inches' }], slots: {} }), /LCD replacement ₱30,500/);
+  assert.doesNotMatch(estimate.listEstimate('magkano po?', { history: [{ role: 'user', content: '65 inches' }], slots: {} }), /Starting price/);
+});
+
 test('prices.json: owner TV prices are what the bot quotes', () => {
   assert.equal(estimate.LCD_MOD[40], 4500);
   assert.equal(estimate.LCD_MOD[43], 6500);

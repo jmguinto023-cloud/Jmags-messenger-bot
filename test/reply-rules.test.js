@@ -196,7 +196,10 @@ test('a stale video review does not stall a new price question, and a repeat is 
       assert.doesNotMatch(line, /nagre-review|all-in price soon/i);
     }
     assert.match(schedule, /ilang inches po|video ng TV/i);
-    assert.equal(first, `${NEED_FACTS_LINE} ${ASK_VIDEO}`);
+    assert.match(first, /Para sa 55"/);
+    assert.match(first, /backlight ₱8,500/);
+    assert.match(first, /LCD replacement ₱19,500/);
+    assert.match(first, /Ano po ang sira/);
     assert.equal(second, first);
     assert.match(fresh, /ilang inches|anong brand/i);
     assert.equal(s.app.store.thread('live').problemViaVideo, false);

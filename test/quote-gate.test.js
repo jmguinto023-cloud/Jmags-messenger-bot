@@ -72,12 +72,13 @@ test('quote gate blocks every price until video, size, brand, model, barangay, c
     assert.equal(refused, `${NEED_FACTS_LINE} ${ASK_VIDEO}`);
     assert.doesNotMatch(refused, /₱/);
     const early = await s.say('g1', '55 samsung nawala display');
-    assert.doesNotMatch(early, /₱|Kailan po kayo free|8,500/);
+    assert.match(early, /Nasa ₱8,500 po ang backlight para sa Samsung 55/);
+    assert.doesNotMatch(early, /Kailan po kayo free/);
     assert.equal(gatePassed(s.app.store.thread('g1')), false);
     const cracked = await s.say('crack', 'basag ang LCD ng Samsung 55');
     assert.match(cracked, /₱19,500/);
     assert.match(cracked, /final po after makita ng staff ang video/i);
-    assert.equal(s.app.store.thread('crack').handedOff, true);
+    assert.equal(Boolean(s.app.store.thread('crack').handedOff), false);
     assert.equal(Boolean(s.app.store.thread('crack').gateClosed), false);
   } finally { await s.close(); }
 });
