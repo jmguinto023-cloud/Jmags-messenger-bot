@@ -145,6 +145,7 @@ function loadConfig(env = process.env) {
     // Keep the Page-scoped PSID in Render environment variables, never in GitHub.
     mainWelcomeTestPsid: String(env.MAIN_WELCOME_TEST_PSID || '').trim(),
     testPsids: list(env.BOT_TEST_PSIDS),
+    testReset: bool(env.BOT_TEST_RESET, false),
     activeHours: env.BOT_ACTIVE_HOURS || '', // e.g. "18:00-08:00" (empty = 24/7)
     alwaysOnDays: list(env.BOT_ALWAYS_ON_DAYS).map((d) => d.toLowerCase().slice(0, 3)), // e.g. "sat,sun"
     // Reply window that replaces an outside cron. Empty = on whenever BOT_ENABLED is on.
