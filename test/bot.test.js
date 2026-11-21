@@ -3038,3 +3038,25 @@ test('staff verdict sends the bot message, marks the video reviewed and does not
     assert.equal(late.status, 409);
   } finally { await s.close(); }
 });
+
+test('a new video card keeps what the customer wrote before it so staff know the inquiry', async () => {
+  const s = await setup({ DASHBOARD_PASSWORD: 'secret', ADMIN_TOKEN: 'adm' });
+  const now = NOON;
+  s.app.bot.now = () => now;
+  s.app.bot.graph.recentMessages = async () => ([
+    { role: 'user', content: 'Magkano po magpagawa ng TCL 43 inch walang ilaw?', ts: now - 60000 },
+    { role: 'assistant', content: 'Hello po! Pakisend po ng video.', ts: now - 50000 },
+    { role: 'user', content: '[Customer sent a video at 12:00 - RECEIVED]', ts: now - 1000 },
+  ]);
+  try {
+    await s.post(msg('inq-1', { attachments: [{ type: 'video', payload: { url: 'https://cdn.example/inq.mp4' } }] }, now));
+    const review = s.app.store.data.reviews[0];
+    assert.ok(Array.isArray(review.inquiry));
+    assert.equal(review.inquiry.filter((m) => m.role === 'user').length, 1);
+    assert.match(review.inquiry[0].text, /TCL 43 inch/);
+    const { cookie } = await dashCookie(s.base);
+    const html = await (await fetch(`${s.base}/dashboard`, { headers: { Cookie: cookie } })).text();
+    assert.match(html, /Inquiry ng customer/);
+    assert.match(html, /Magkano po magpagawa ng TCL 43 inch walang ilaw\?/);
+  } finally { await s.close(); }
+});

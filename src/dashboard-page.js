@@ -107,6 +107,18 @@ function messageList(history) {
   return `<ol class="thread">${rows.map((m) => `<li class="${m.role === 'user' ? 'from-customer' : 'from-us'}"><span class="who-line">${esc(m.who)} · ${esc(m.time)}</span><p>${esc(m.text)}</p></li>`).join('')}</ol>`;
 }
 
+// The customer's own words before the video, so staff know what the inquiry is about.
+function inquiryBlock(row) {
+  const rows = Array.isArray(row.inquiry) ? row.inquiry : [];
+  const mine = rows.filter((m) => m.role === 'user').slice(-6);
+  const body = mine.length
+    ? `<ol class="thread inquiry-list">${mine.map((m) => `<li class="from-customer"><span class="who-line">Customer${m.ts ? ` · ${esc(manila(m.ts))}` : ''}</span><p>${esc(m.text)}</p></li>`).join('')}</ol>`
+    : (row.firstMessage
+      ? `<ol class="thread inquiry-list"><li class="from-customer"><span class="who-line">Customer</span><p>${esc(row.firstMessage)}</p></li></ol>`
+      : '<p class="meta">Walang text na kasama. Video o photo lang ang pinadala ng customer.</p>');
+  return `<div class="inquiry"><h3 class="thread-title">Inquiry ng customer</h3>${body}</div>`;
+}
+
 function jobPicker(row, thread, jobs) {
   const list = jobs || [];
   const linked = list.find((j) => j.psid && row.psid && j.psid === row.psid);
@@ -206,6 +218,7 @@ function reviewCard(row, pageId, thread, now, windowMs, jobs) {
     <h2 class="who">${esc(who)} <span class="pill ${status === 'New' ? 'new' : 'done'}">${status}</span>${ivan}</h2>
     <p class="meta">${esc(manila(row.timestamp))} · ${esc(row.type || 'photo')}</p>
     ${row.quietNote ? `<p class="meta quiet">${esc(row.quietNote)}</p>` : ''}
+    ${inquiryBlock(row)}
     ${dl}
     ${mediaBlock(row)}
     <h3 class="thread-title">Huling mensahe</h3>
