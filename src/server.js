@@ -14,6 +14,7 @@ const { opsPage } = require('./ops-page');
 const { activeNow } = require('./schedule');
 const bookingConfirm = require('./booking-confirm');
 const { linkForCard } = require('./form-link-card');
+const priceCards = require('./price-cards');
 
 const PUBLIC_ORIGIN = 'https://jmags-messenger-bot.onrender.com';
 
@@ -126,6 +127,11 @@ function createServer({ cfg, bot, log }) {
         send(200, dashboardHtml(), 'text/html; charset=utf-8');
       });
       return;
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/price-cards/')) {
+      const name = url.pathname.slice('/price-cards/'.length);
+      if (!priceCards.FILE_RE.test(name) || !priceCards.FILES.has(name)) return send(404, 'Not found');
+      return sendFile(res, `price-cards/${name}`, 'image/jpeg', 'public, max-age=86400');
     }
     if (req.method === 'GET' && FILES[url.pathname]) {
       const [file, type] = FILES[url.pathname];
@@ -574,11 +580,11 @@ function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function sendFile(res, name, type) {
+function sendFile(res, name, type, cache) {
   const file = path.join(PUBLIC, name);
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': type });
+    res.writeHead(200, cache ? { 'Content-Type': type, 'Cache-Control': cache } : { 'Content-Type': type });
     res.end(buf);
   });
 }

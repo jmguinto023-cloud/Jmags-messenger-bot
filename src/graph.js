@@ -145,6 +145,17 @@ class Graph {
     }
     return results;
   }
+  // One image by public URL, messaging_type RESPONSE. Used for the price-card photos.
+  async sendImage(psid, url) {
+    const u = String(url || '');
+    if (!/^https:\/\//i.test(u)) throw new Error('image url must be https');
+    return this.call('POST', `${this.pageNode()}/messages`, {
+      body: {
+        recipient: { id: psid }, messaging_type: 'RESPONSE',
+        message: { attachment: { type: 'image', payload: { url: u, is_reusable: true } } },
+      },
+    });
+  }
   // One Messenger text, messaging_type RESPONSE. No HUMAN_AGENT tag. Max 2000 characters.
   async sendPageText(psid, text) {
     const c = String(text || '');

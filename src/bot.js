@@ -38,6 +38,7 @@ const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
 const { BookingDashboard } = require('./booking-dashboard');
 const inquiryReminder = require('./inquiry-reminder');
+const priceCards = require('./price-cards');
 const applianceOneTime = require('./appliance-one-time');
 const MAIN_FIRST_INQUIRY = `Good day Mam/Sir para po masagot ng admin staff ng Jmags Appliances ang inquire nyo about sa TV nila. Maari po ba namin mahingi agad ang mga sumusunod upang mareplayan po agad kayo. 🙂
 
@@ -1265,7 +1266,7 @@ class Bot {
         this.repliedRev.set(this.slot(psid), rev);
         const checkupAnswer = checkupFeeReply(latestUser, t);
         if (hadMedia) await this.sendMediaAck(psid, checkupAnswer, true, { armVideo: hadVideo });
-        else await this.send(psid, checkupAnswer);
+        else await this.send(psid, checkupAnswer, { checkupCard: /₱1,000/.test(checkupAnswer) });
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
@@ -1495,9 +1496,35 @@ class Bot {
       provider,
     });
     this.log.info(`replied to ${short(psid)} (${clean.length} chars)${provider ? ` provider=${provider}` : ''}`);
+    if (!opts.ops && !opts.tips && !opts.videoFollowup) {
+      await this.sendPriceCard(psid, clean, { size: thread.slots && thread.slots.size, checkup: opts.checkupCard });
+    }
     if (opts.armVideo) this.armVideoFollowup(psid);
     if (!opts.tips && clean === sanitizeOutgoing(CLOSE_LINE)) await this.sendTipsOnce(psid);
     return true;
+  }
+
+  // Price-card photo after a text that quotes a price. Only when the card's printed price equals a
+  // price in the text, once per card per customer. Never throws: the text is already sent.
+  async sendPriceCard(psid, text, { size, checkup = false } = {}) {
+    try {
+      if (!this.cfg.priceCardsEnabled) return false;
+      const card = checkup ? priceCards.checkupCard() : priceCards.cardForQuote({ size, text });
+      if (!card) return false;
+      const t = this.store.thread(psid);
+      const key = priceCards.cardKey(card);
+      if (t.priceCardsSent && t.priceCardsSent[key]) return false;
+      const url = priceCards.cardUrl(this.cfg.publicBaseUrl, card);
+      if (!url) return false;
+      await this.graph.sendImage(psid, url);
+      t.priceCardsSent = { ...(t.priceCardsSent || {}), [key]: this.now() };
+      this.store.save();
+      this.log.info(`price card ${key} sent to ${short(psid)}`);
+      return true;
+    } catch (e) {
+      this.log.warn(`price card not sent to ${short(psid)}: ${e.message}`);
+      return false;
+    }
   }
 
   // One booking-type confirmation. Does not look at BOT_ENABLED or the Page on/off
@@ -2283,6 +2310,12 @@ class Bot {
     const res = await this.replyFromDashboard(reviewId, composed.text, { verdict: true });
     if (!res.ok) return res;
     const row = (this.store.data.reviews || []).find((r) => r.id === reviewId);
+    if (row && row.psid && String(verdict) === 'repairable') {
+      const page = this.pageForReview(row);
+      const size = (row.summary && row.summary.size) || (this.store.thread(row.psid).slots || {}).size;
+      const send = () => this.sendPriceCard(row.psid, composed.text, { size });
+      await (page && currentPage() !== page ? withPage(page, send) : send());
+    }
     if (row && row.psid) {
       const now = this.now();
       this.store.markReviewed(reviewId, now);
