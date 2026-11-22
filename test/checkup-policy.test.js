@@ -27,7 +27,7 @@ test('at-home rate remains ₱1,000, waived if repair proceeds', () => {
     'Magkano ang checkup pag sa bahay kayo pupunta?',
     'Magkano checkup fee kung puntahan niyo po kami?',
   ]) assert.equal(checkupFeeReply(q), HOME_CHECKUP_FEE_ANSWER, q);
-  assert.equal(HOME_CHECKUP_FEE_ANSWER, '₱1,000 po ang check-up fee sa bahay, ibabawas po ito sa repair kung itutuloy nyo po.');
+  assert.equal(HOME_CHECKUP_FEE_ANSWER, '₱1,000 po ang check-up fee sa bahay, waived po ito kapag itinuloy ang repair.');
   assert.match(HOME_VISIT_FEE_LINE, /₱1,000/);
   assert.match(HOME_VISIT_FEE_LINE, /Waived/);
   assert.match(HOME_VISIT_FEE_LINE, /walang hiwalay/);

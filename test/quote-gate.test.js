@@ -160,9 +160,8 @@ test('[[HANDOFF]] is stripped, the thread is closed, and the bot stops', async (
 
 test('after the gate, one price stays and power supply is not named', () => {
   const rules = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'rules.md'), 'utf8');
-  assert.match(rules, /₱1,000, deducted from the repair/);
-  assert.match(rules, /₱500 max/);
-  assert.match(rules, /₱500 off for check-ups booked within the week/);
+  assert.match(rules, /₱1,000, waived if they push through/);
+  assert.doesNotMatch(rules, /deducted|ibabawas|₱500 max|₱500 off/);
   assert.match(rules, /Manila: \+₱1,000/);
   assert.match(rules, /never "power supply" or "mainboard"/);
   const thread = { history: [], slots: {} };

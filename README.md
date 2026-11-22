@@ -38,7 +38,7 @@ npm start           # run (needs env, see .env.example)
   The bot must not say the file was missing or ask for a resend. A review-status question gets "Ivan is reviewing it, all-in price soon",
   plus the price-list range when brand and size are known. If the problem is only in the video and they ask for an estimate, that range is the answer.
   Any preliminary range also says a personal home-service check-up is more exact and names the check-up fee.
-- If they ask how much the check-up is, the reply is only: ₱1,000 check-up fee (₱500 for 32" and 40" TVs), waived if they proceed with the repair.
+- If they ask how much the check-up is, the reply is only: ₱1,000 home check-up fee for any TV size, waived if they proceed with the repair, or ₱300 if they bring the TV to the shop. There is no ₱500 rate and no discount.
 - Once a video is in and they have given location and TV age, intake stops. One thank-you says Ivan is reviewing the video and will send the all-in price,
   then the free-tips message goes out once (`TIPS_MESSAGE` can replace it). After that the bot only answers what they ask.
 - Chat messages sent to the model are merged when the same role speaks twice in a row, and trailing
