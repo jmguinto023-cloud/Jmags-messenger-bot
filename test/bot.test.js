@@ -3387,3 +3387,32 @@ test('AI_REASONS_FIRST: OpenAI explains in its own words, list prices are facts,
     assert.equal(s.app.store.thread('aif').handedOff, true, 'warranty still goes to staff');
   } finally { await s.close(); }
 });
+
+test('stuck on the logo is reprogramming, the newest brand wins, and "reprogramming" is not doubled (live test chat)', async () => {
+  const { listEstimate, reprogramPrice } = require('../src/estimate');
+  const { rememberJob, shapeAiReply, isWait } = require('../src/quote-gate');
+  const thread = { slots: {}, history: [
+    { role: 'user', content: 'Samsung 55 walang display' },
+    { role: 'user', content: 'Yung isa kong tv mag stock sa logo tcl 55 inches' },
+  ] };
+  rememberJob(thread);
+  assert.equal(thread.slots.brand, 'TCL');
+  assert.equal(thread.slots.symptom, 'reprogram');
+  const quote = listEstimate('Yung isa kong tv mag stock sa logo tcl 55 inches', thread);
+  assert.match(quote, /reprogramming para sa TCL 55/);
+  assert.match(quote, /hindi backlight/);
+  assert.doesNotMatch(quote, /Samsung|₱8,500/);
+  assert.equal(reprogramPrice(55), 8100);
+  for (const t of ['hang sa logo po', 'naghang sa logo', 'logo lang lumalabas', 'tumigil sa logo', 'stuck sa logo']) {
+    assert.match(listEstimate(`${t} lg 43`, { history: [] }), /reprogramming/, t);
+  }
+  assert.equal(shapeAiReply({ history: [] }, 'Possible po power supply or motherboard.', 'bakit nag off').text, 'Possible po reprogramming.');
+  assert.equal(isWait('Isesend ko video'), true);
+
+  const s = await setup();
+  try {
+    await s.post(msg('logo', { text: 'tcl 55 stuck sa logo magkano po?' }));
+    const sent = s.mock.calls.messages.map((m) => m.message.text).filter(Boolean).at(-1);
+    assert.match(sent, /^Kapag nag-stuck po sa logo[\s\S]*reprogramming para sa TCL 55/);
+  } finally { await s.close(); }
+});
