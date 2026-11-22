@@ -283,10 +283,10 @@ function wantsLcdRepair(latest, users) {
 // Stuck on the logo / boot loop: a software (firmware) fault, quoted as reprogramming, never backlight.
 const STUCK_LOGO = /(?:stuck|stock|stack|naka-?stuck|nag-?stuck|hang|nag-?hang|naghang|na-?hang|tumigil|hinto|huminto|nakatigil|naiwan|loop|paulit[\s-]*ulit)\b[^.?!\n]{0,30}\blogo\b|\blogo\b[^.?!\n]{0,20}\b(?:lang|only|stuck|stock|hang|tumitigil|nag-?restart|restart)\b|\bboot\s*loop\b|\bbootloop\b|nag-?re-?restart\s+lang/i;
 
-// About 15% under that size's backlight price (business rule), rounded to ₱100.
+// About 5% under that size's backlight price (owner rule), rounded to ₱100.
 function reprogramPrice(size) {
   const b = BACKLIGHT[parseInt(size, 10)];
-  return b ? Math.round((b * 0.85) / 100) * 100 : 0;
+  return b ? Math.round((b * 0.95) / 100) * 100 : 0;
 }
 
 function reprogramQuote(size, label) {

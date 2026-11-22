@@ -3402,7 +3402,7 @@ test('stuck on the logo is reprogramming, the newest brand wins, and "reprogramm
   assert.match(quote, /reprogramming para sa TCL 55/);
   assert.match(quote, /hindi backlight/);
   assert.doesNotMatch(quote, /Samsung|₱8,500/);
-  assert.equal(reprogramPrice(55), 7200);
+  assert.equal(reprogramPrice(55), 8100);
   for (const t of ['hang sa logo po', 'naghang sa logo', 'logo lang lumalabas', 'tumigil sa logo', 'stuck sa logo']) {
     assert.match(listEstimate(`${t} lg 43`, { history: [] }), /reprogramming/, t);
   }
