@@ -222,6 +222,7 @@ function capWords(text) {
   if (isPreparedPriceAnswer(s)) return s.trim();
   if (canonical.includes(s.trim())) return s;
   if (/^Nasa ₱/i.test(s) || /final po after makita ng staff/i.test(s)) return s.trim();
+  if (/^Para po sa \d+ inches:/.test(s)) return s.trim();
   // A booking-form message is sent whole. The word cap must not drop the link.
   if (/schedule form|booking form/i.test(s) && /https?:\/\//i.test(s)) return s.trim();
   const emoji = /\p{Extended_Pictographic}/gu;
@@ -316,7 +317,7 @@ function stripPersonNames(text) {
 function isSafeTemplate(text) {
   const t = String(text || '').trim();
   if (!t) return false;
-  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Nasa ₱', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
+  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Para po sa ', 'Nasa ₱', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
   return leads.some((lead) => t === lead || t.startsWith(lead));
 }
 
@@ -436,7 +437,7 @@ function legacyShape(thread, text, latest) {
 // Validator. A clean model draft is kept. A draft that breaks a hard rule falls back to the old template.
 function shapeReply(thread, text, latest) {
   rememberJob(thread);
-  if (/^Nasa ₱/i.test(String(text || '')) || /^Para sa \d/i.test(String(text || ''))) {
+  if (/^Nasa ₱/i.test(String(text || '')) || /^Para (?:po )?sa \d/i.test(String(text || ''))) {
     return { text: String(text || '').trim(), handoff: false, reason: '', silent: false, closeGate: false, fallback: false };
   }
   if (gatePassed(thread) && /https?:\/\//i.test(text) && /form|book|schedule/i.test(text)) {

@@ -1120,7 +1120,7 @@ class Bot {
     let next = '';
     try {
       next = await this.llm.chat([
-        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 200 characters. Conversational Taglish with po and sir or maam. Do not restate the customer. No empathy. Do not use inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan. No emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
+        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 200 characters. Conversational Taglish with po and sir or maam. Do not restate the customer. No empathy. Do not use inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan. At most one ":)" on good news, no other emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
         { role: 'user', content: String(raw).slice(0, 800) },
       ], { priority: 'high' });
       this.log.info(`rewrote long reply for ${short(psid)}`);

@@ -69,6 +69,7 @@ class LLM {
     return [
       "# JMAG's Appliances orientation (background: who we are, how our staff talk, how a chat goes)",
       this.systemPrompt(),
+      fs.readFileSync(path.join(__dirname, '..', 'prompts', 'staff-playbook.md'), 'utf8').trim(),
       HUMAN_VOICE,
       '# CURRENT RULES. These override anything above, including older examples that quote a price before the video.',
       compactPrompt(history, this.cfg),

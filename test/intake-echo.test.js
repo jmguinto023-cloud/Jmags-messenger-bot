@@ -139,7 +139,7 @@ test('lines without a size ask inches, then quote; a dead set names the cause', 
     assert.equal(ask, QUESTIONS.size);
     assert.doesNotMatch(ask, /TCL|Laguna/);
     const quote = await s.say('tcl', '40 inches po');
-    assert.match(quote, /Nasa ₱4,500 po ang LCD modification para sa TCL 40/);
+    assert.match(quote, /Para po sa 40 inches:\nLCD MODIFICATION: ₱4,500[\s\S]*BRAND NEW LCD REPLACEMENT: ₱10,000/);
     assert.doesNotMatch(quote, /Kailan po sila free/);
     const dead = await s.say('lg', 'LG 32 inch po, ayaw mag-on, taga Imus Cavite');
     assert.match(dead, /video ng TV habang naka-on/);

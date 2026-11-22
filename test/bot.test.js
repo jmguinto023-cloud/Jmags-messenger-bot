@@ -1056,7 +1056,7 @@ test('lines on a known size quote LCD modification without a checkup essay', asy
   try {
     await s.post(msg('rng', { text: 'may lines po sa TCL 40 inch, taga Cabuyao' }));
     const text = s.mock.calls.messages[0].message.text;
-    assert.match(text, /Nasa ₱4,500 po ang LCD modification para sa TCL 40/);
+    assert.match(text, /Para po sa 40 inches:\nLCD MODIFICATION: ₱4,500[\s\S]*BRAND NEW LCD REPLACEMENT: ₱10,000/);
     assert.doesNotMatch(text, /Cabuyao|9,000/);
   } finally { await s.close(); }
 });
@@ -1092,7 +1092,7 @@ test('a sized no-display price question quotes the LCD modification list price',
   try {
     await s.post(msg('pre-video', { text: '65 no display magkano' }));
     const text = s.mock.calls.messages.map((m) => m.message.text || '').join('\n');
-    assert.match(text, /Nasa ₱9,500 po ang LCD modification/);
+    assert.match(text, /LCD MODIFICATION: ₱9,500[\s\S]*BRAND NEW LCD REPLACEMENT: ₱30,500/);
     assert.match(text, /final po after makita ng staff ang video/i);
     assert.doesNotMatch(text, /11,?000|8,?500/);
   } finally { await s.close(); }
@@ -2831,7 +2831,7 @@ test('the ten live messages get short rule answers instead of a model essay', as
 
     await send('live-8', 'Astron 40 may linya');
     const price = await send('live-8', 'magkano po kaya');
-    assert.match(price, /Nasa ₱4,500 po ang LCD modification para sa Astron 40/);
+    assert.match(price, /Para po sa 40 inches:\nLCD MODIFICATION: ₱4,500[\s\S]*BRAND NEW LCD REPLACEMENT/);
     assert.match(price, /final po after makita ng staff ang video/i);
 
     const disc = await send('live-9', 'pa discount naman po');
@@ -2842,7 +2842,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.equal(Boolean(s.app.store.thread('live-9').handedOff), false);
 
     assert.ok(s.mock.calls.llm.length > 0);
-    for (const text of s.mock.calls.messages.map((m) => m.message.text)) {
+    // The two-option LCD price block (Meta guide format) is the one prepared answer allowed to be longer.
+    for (const text of s.mock.calls.messages.map((m) => m.message.text).filter((t) => !/^Para po sa \d+ inches:/.test(t))) {
       assert.ok(text.length <= 200, text);
       assert.ok(text.split('\n').filter(Boolean).length <= 3, text);
       assert.doesNotMatch(text, /\b(?:inyong|ninyong|iyong|nararanasan|maaari)\b|pasensya na|naiintindihan ko|nauunawaan/i);

@@ -21,7 +21,7 @@ npm start           # run (needs env, see .env.example)
   The wait uses `Retry-After` or a Gemini `retryDelay` when the provider sends one. If it still fails, the customer
   does not get the canned greeting. The chat is handed to Ivan (one holding line at most for that outage) and listed
   on the operations Today tab under "Needs Ivan". `GET /health` includes `llmErrors` and `llmLastError`.
-  OpenAI gets the full JMAG's orientation: `prompts/system-prompt.md`, the brand-new reference, business rules, the behavior bank, and a short "sound like JMAG's staff" section, followed by the current quote-gate rules, which override it. Groq keeps the compact prompt, because the full one is too big for it. The shop's own phone numbers in the orientation are not redacted; customer messages still are.
+  OpenAI gets the full JMAG's orientation: `prompts/system-prompt.md`, the brand-new reference, business rules, the behavior bank, `prompts/staff-playbook.md` (owner-approved tone, question order, video ask, booking and handoff lines from the Meta Business Agent guide; the full paste is in `docs/meta-agent-handling-guide.md`), and a short "sound like JMAG's staff" section, followed by the current quote-gate rules, which override it. Groq keeps the compact prompt, because the full one is too big for it. The shop's own phone numbers in the orientation are not redacted; customer messages still are.
   Call starts are spaced by `LLM_MAX_RPM` (default 15; 0 turns the gap off). Calls run in parallel: a slow call or retry for one customer does not hold up replies to other customers. A backed-up call waits at most 20 seconds, then still runs. A fresh customer reply is served before a follow-up.
   A 400 that says temperature is rejected is retried once without temperature, then omitted for the process.
 - Schedule form (`BOOKING_FORM_URL`, default the Netlify form) is injected into the system prompt. The model sends it
@@ -39,6 +39,7 @@ npm start           # run (needs env, see .env.example)
   The bot must not say the file was missing or ask for a resend. A review-status question gets "Ivan is reviewing it, all-in price soon",
   plus the price-list range when brand and size are known. If the problem is only in the video and they ask for an estimate, that range is the answer.
   Any preliminary range also says a personal home-service check-up is more exact and names the check-up fee.
+- An LCD price question (LCD, lines, dots or colors, blue screen) with a known size gets both options in one message: LCD modification and brand-new LCD replacement from the official list, all-in, "final po after makita ng staff ang video", then the video ask. Basag gets only the replacement. At most one ":)" on good news.
 - If they ask how much the check-up is, the reply is only: ₱1,000 home check-up fee for any TV size, waived if they proceed with the repair, or ₱300 if they bring the TV to the shop. There is no ₱500 rate and no discount.
 - Once a video is in and they have given location and TV age, intake stops. One thank-you says Ivan is reviewing the video and will send the all-in price,
   then the free-tips message goes out once (`TIPS_MESSAGE` can replace it). After that the bot only answers what they ask.

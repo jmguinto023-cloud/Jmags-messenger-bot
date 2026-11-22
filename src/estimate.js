@@ -238,6 +238,8 @@ function listKind(text) {
   const dark = /walang (?:display|picture|ilaw)|no (?:display|picture)|black screen/i.test(t);
   if (FLICKER.test(t) || ((/sound|tunog/i.test(t) && dark))) return 'backlight';
   if (/may linya|\blinya\b|\blines\b|lcd modification|\bmodif|no display|walang (?:display|picture)/i.test(t)) return 'mod';
+  // Dots or colors and blue screen are LCD faults (Meta guide). A bare "LCD" price ask gets both LCD options.
+  if (/\blcd\b|dots|tuldok|iba[\s'-]*ibang kulay|blue screen|asul na screen/i.test(t)) return 'mod';
   if (/backlight|walang ilaw/i.test(t)) return 'backlight';
   return '';
 }
@@ -251,6 +253,19 @@ function sizeOptions(size) {
   ].filter(Boolean);
   if (!bits.length) return '';
   return `Para sa ${size}": ${bits.join(', ')}. Ano po ang sira, backlight, may lines, o basag?`;
+}
+
+// Meta-guide LCD answer: both options for the size, all-in, then ask for the video.
+// Sent whole (quote-gate passes lines starting "Para po sa N inches:"). ":)" is text, not an emoji.
+function lcdOptions(size) {
+  if (!LCD_MOD[size] || !LCD_REPLACE[size]) return '';
+  return [
+    `Para po sa ${size} inches:`,
+    `LCD MODIFICATION: ${phpAmount(LCD_MOD[size])}, para sa unit na pwede pang i-modify depende sa aktwal na sira.`,
+    `BRAND NEW LCD REPLACEMENT: ${phpAmount(LCD_REPLACE[size])}, palit ng bagong LCD para sa basag o sirang panel.`,
+    'Kasama na po sa presyo ang home service, labor, travel at warranty :)',
+    'Estimate po ito, final po after makita ng staff ang video. Pwede po pa-send ng short video ng TV habang naka-on?',
+  ].join('\n');
 }
 
 function slotKind(thread = {}) {
@@ -273,6 +288,10 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   if (!kind) {
     if (!asksPrice(latestText)) return '';
     return sizeOptions(size);
+  }
+  if (kind === 'mod') {
+    const both = lcdOptions(size);
+    if (both) return both;
   }
   const label = unitLabel(`${latestText}\n${blob}`, size);
   const price = kind === 'replace' ? LCD_REPLACE[size] : kind === 'mod' ? LCD_MOD[size] : BACKLIGHT[size];
@@ -417,6 +436,7 @@ function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
 }
 
 module.exports = {
+  lcdOptions,
   PRICES,
   PRICE_RANGE,
   LCD_MOD,
