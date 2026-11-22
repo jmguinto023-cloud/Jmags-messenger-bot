@@ -197,7 +197,14 @@ function brandLabel(name) {
 }
 
 function unitLabel(blob, size) {
-  const brand = BRANDS.find((b) => new RegExp(`\\b${b}\\b`, 'i').test(blob));
+  // The most recently mentioned brand wins (a second TV in the same chat).
+  let brand = '';
+  let at = -1;
+  for (const b of BRANDS) {
+    const re = new RegExp(`\\b${b}\\b`, 'gi');
+    let m;
+    while ((m = re.exec(blob))) if (m.index > at) { at = m.index; brand = b; }
+  }
   return brand ? `${brandLabel(brand)} ${size}` : `${size}"`;
 }
 
@@ -273,8 +280,25 @@ function wantsLcdRepair(latest, users) {
   return lcdChat && !backlightChat;
 }
 
+// Stuck on the logo / boot loop: a software (firmware) fault, quoted as reprogramming, never backlight.
+const STUCK_LOGO = /(?:stuck|stock|stack|naka-?stuck|nag-?stuck|hang|nag-?hang|naghang|na-?hang|tumigil|hinto|huminto|nakatigil|naiwan|loop|paulit[\s-]*ulit)\b[^.?!\n]{0,30}\blogo\b|\blogo\b[^.?!\n]{0,20}\b(?:lang|only|stuck|stock|hang|tumitigil|nag-?restart|restart)\b|\bboot\s*loop\b|\bbootloop\b|nag-?re-?restart\s+lang/i;
+
+// About 15% under that size's backlight price (business rule), rounded to ₱100.
+function reprogramPrice(size) {
+  const b = BACKLIGHT[parseInt(size, 10)];
+  return b ? Math.round((b * 0.85) / 100) * 100 : 0;
+}
+
+function reprogramQuote(size, label) {
+  const price = reprogramPrice(size);
+  const why = 'Kapag nag-stuck po sa logo, software/firmware po ang madalas na problema, hindi backlight';
+  if (!price) return `${why}, reprogramming po ang ayos para sa ${label}. Final price po after makita ng staff ang video.`;
+  return `${why}. Nasa around ${phpAmount(price)} po ang reprogramming para sa ${label}. Estimate po iyan, final po after makita ng staff ang video.`;
+}
+
 function listKind(text) {
   const t = String(text || '');
+  if (STUCK_LOGO.test(t)) return 'reprogram';
   if (REPAIR_ONLY.test(t)) return 'repair';
   if (/basag|cracked|smashed|broken lcd|durog|palit lcd|lcd replacement|replace(?:ment)? lcd/i.test(t)) return 'replace';
   // Sound with a dark screen is a backlight fault, same as walang ilaw.
@@ -335,6 +359,9 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   if (kind === 'mod') {
     const both = lcdOptions(size);
     if (both) return both;
+  }
+  if (kind === 'reprogram') {
+    return reprogramQuote(size, unitLabel(`${latestText}\n${blob}`, size));
   }
   if (kind === 'power') {
     return powerQuote(latestText, size, unitLabel(`${latestText}\n${blob}`, size));
@@ -463,6 +490,7 @@ function quoteKnownTv(thread = {}) {
     if (!price) return '';
     return `${label} po sir. Possible backlight po, ${phpAmount(price)}. Kasama testing, 6 months warranty, at home service. ${when}`;
   }
+  if (s.symptom === 'reprogram') return reprogramQuote(n, label);
   if (s.symptom === 'power') {
     const range = powerPriceRange(n);
     if (!range) return `${label} po sir. Possible power supply o motherboard po. Wala pang listed price para sa ${n}". Check-up po para mas eksakto. ${when}`;
@@ -492,6 +520,8 @@ function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
 
 module.exports = {
   lcdOptions,
+  STUCK_LOGO,
+  reprogramPrice,
   wantsLcdRepair,
   PRICES,
   PRICE_RANGE,

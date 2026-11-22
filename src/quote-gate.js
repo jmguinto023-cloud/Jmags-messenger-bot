@@ -99,7 +99,7 @@ function isWait(text, { mediaAsked = false } = {}) {
   // A bare "mamaya po" / "later" only means "I'll send it later" right after we asked for a video or photo;
   // after "kailan po kayo free?" it is a booking time.
   if (mediaAsked && /^(?:mamaya|later|maya-?maya|mamayang)\b[\s\S]{0,60}$/i.test(t)) return true;
-  return /\b(?:nasa\s+(?:work|trabaho|office|opisina|labas|byahe|biyahe)|wala\s+(?:pa\s+)?ako\s+sa\s+bahay|pag[\s-]*uwi(?:\s+ko)?|pagkauwi|pauwi\s+pa|busy\s+pa|send\s+ko\s+(?:mamaya|later|bukas|pag)|i-?send\s+ko\s+(?:mamaya|later|bukas|pag)|isend\s+ko\s+(?:mamaya|later|bukas|pag)|(?:mamaya|bukas|later)\s+(?:ko\s+)?(?:na\s+)?(?:po\s+)?i-?send)\b/i.test(t);
+  return /\b(?:nasa\s+(?:work|trabaho|office|opisina|labas|byahe|biyahe)|wala\s+(?:pa\s+)?ako\s+sa\s+bahay|pag[\s-]*uwi(?:\s+ko)?|pagkauwi|pauwi\s+pa|busy\s+pa|send\s+ko\s+(?:mamaya|later|bukas|pag)|i-?send\s+ko\s+(?:mamaya|later|bukas|pag)|isend\s+ko\s+(?:mamaya|later|bukas|pag)|(?:mamaya|bukas|later)\s+(?:ko\s+)?(?:na\s+)?(?:po\s+)?i-?send|i-?se-?send\s+ko(?:\s+(?:na|po|nalang|na lang|yung|ang))*\s+(?:video|vid|picture|pic|litrato))\b/i.test(t);
 }
 
 function isScheduleTalk(text) {
@@ -127,7 +127,10 @@ function rememberJob(thread) {
   const blob = users.join('\n');
   const latestMsg = users[users.length - 1] || '';
   const summary = summarizeConversation([{ content: blob }]);
-  if (summary.brand) s.brand = s.brand || summary.brand;
+  // The brand in the newest message wins ("yung isa kong tv, TCL 55" after a Samsung).
+  const latestBrand = summarizeConversation([{ content: latestMsg }]).brand;
+  if (latestBrand) s.brand = latestBrand;
+  else if (summary.brand) s.brand = s.brand || summary.brand;
   const latestSize = knownSize(latestMsg);
   if (latestSize) s.size = `${latestSize}"`;
   else if (summary.size) s.size = s.size || summary.size;
@@ -143,7 +146,8 @@ function rememberJob(thread) {
     thread.videoReceived = true;
   }
   const latestFault = listKind(latestMsg);
-  if (latestFault === 'replace' || isCracked(latestMsg)) s.symptom = 'cracked';
+  if (latestFault === 'reprogram') s.symptom = 'reprogram';
+  else if (latestFault === 'replace' || isCracked(latestMsg)) s.symptom = 'cracked';
   else if (latestFault === 'mod' || latestFault === 'repair') s.symptom = 'lines';
   else if (latestFault === 'backlight') s.symptom = 'backlight';
   else if (isCracked(blob) && !s.symptom) s.symptom = 'cracked';
@@ -250,6 +254,14 @@ function capWords(text) {
   return s.trim();
 }
 
+// "power supply or motherboard" -> "reprogramming or reprogramming": say it once.
+function toReprogramming(text) {
+  return String(text || '')
+    .replace(/power supply|mainboard|motherboard/gi, 'reprogramming')
+    .replace(/reprogramming(?:\s*(?:,|\/|o|or|at|and|o kaya)\s*reprogramming)+/gi, 'reprogramming')
+    .replace(/reprogramming\s+(?:o\s+|or\s+)?reprogramming/gi, 'reprogramming');
+}
+
 function bannedPart(text) {
   return /power supply|mainboard|motherboard/i.test(String(text || ''));
 }
@@ -326,7 +338,7 @@ function stripPersonNames(text) {
 function isSafeTemplate(text) {
   const t = String(text || '').trim();
   if (!t) return false;
-  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Para po sa ', 'Nasa ₱', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
+  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Para po sa ', 'Nasa ₱', 'Kapag nag-stuck po sa logo', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
   return leads.some((lead) => t === lead || t.startsWith(lead));
 }
 
@@ -358,7 +370,7 @@ function guardCustomerReply(thread, text, latest) {
   let body = stripPersonNames(staffVoice(stripWarrantyLength(original.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, ''))));
   body = stripDayTime(body);
   body = stripUnknownPesos(body, passed);
-  if (bannedPart(body)) body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
+  if (bannedPart(body)) body = toReprogramming(body);
   body = body.replace(/\s{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').replace(/\.{2,}/g, '.').trim();
   const scripted = scriptedReply(latest, thread, { allowPrice: !(thread && (thread.problemViaVideo || (thread.mediaNotes || []).length)) });
   const thin = !body || (body.length < 12 && original.trim().length > body.length + 12);
@@ -435,7 +447,7 @@ function legacyShape(thread, text, latest) {
     return { text: nextAsk(thread) || capWords(withOneAsk(explain, thread)), handoff: false, reason: '', silent: false };
   }
   if (bannedPart(body)) {
-    body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
+    body = toReprogramming(body);
   }
   if (passed && /kailan po (?:kayo|sila) free|i-?book|schedule/i.test(latest || '') && /confirmed|naka-?book na|see you/i.test(body)) {
     body = SCHEDULE_HOLD;
@@ -481,7 +493,7 @@ function shapeAiReply(thread, text, latest, facts = '') {
     invented = true;
     return '';
   });
-  if (bannedPart(body) && !bannedPart(`${last}\n${facts}`)) body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
+  if (bannedPart(body) && !bannedPart(`${last}\n${facts}`)) body = toReprogramming(body);
   body = body.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').replace(/\.{2,}/g, '.').replace(/\n{3,}/g, '\n\n').trim();
   const fallbackText = String(facts || '').split('\n\n')[0].trim();
   if (invented || !body) {
@@ -494,7 +506,7 @@ function shapeAiReply(thread, text, latest, facts = '') {
 // Validator. A clean model draft is kept. A draft that breaks a hard rule falls back to the old template.
 function shapeReply(thread, text, latest) {
   rememberJob(thread);
-  if (/^Nasa ₱/i.test(String(text || '')) || /^Para (?:po )?sa \d/i.test(String(text || ''))) {
+  if (/^Nasa ₱/i.test(String(text || '')) || /^Para (?:po )?sa \d/i.test(String(text || '')) || /^Kapag nag-stuck po sa logo/.test(String(text || ''))) {
     return { text: String(text || '').trim(), handoff: false, reason: '', silent: false, closeGate: false, fallback: false };
   }
   if (gatePassed(thread) && /https?:\/\//i.test(text) && /form|book|schedule/i.test(text)) {
