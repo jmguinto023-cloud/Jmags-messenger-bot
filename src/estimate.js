@@ -162,13 +162,14 @@ const SIZE_PHRASES = [
 
 // The rightmost size in the text wins, so a later "32 inches" beats an earlier 65.
 function knownSize(text) {
-  const s = String(text || '').toLowerCase();
+  // Blank out clock times ("video at 07:40") so the minutes never read as inches. Same length keeps positions.
+  const s = String(text || '').toLowerCase().replace(/\b\d{1,2}:\d{2}\b/g, (t) => ' '.repeat(t.length));
   let best = { at: -1, n: 0 };
   for (const [phrase, n] of SIZE_PHRASES) {
     const at = s.lastIndexOf(phrase);
     if (at > best.at) best = { at, n };
   }
-  const re = /\b(32|40|43|48|49|50|55|60|65|70|75|80|85)\s*(?:["”″]|''|inches?|in\b|pulgada)?/gi;
+  const re = /(?<![\d,.₱])\b(32|40|43|48|49|50|55|60|65|70|75|80|85)(?!\d)\s*(?:["”″]|''|inches?|in\b|pulgada)?/gi;
   let m;
   while ((m = re.exec(s))) {
     if (m.index >= best.at) best = { at: m.index, n: Number(m[1]) };

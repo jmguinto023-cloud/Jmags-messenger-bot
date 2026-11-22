@@ -248,3 +248,13 @@ test('basag then 65 no display magkano still gets a reply', async () => {
     assert.doesNotMatch(next, /quote-gate handoff/);
   } finally { await s.close(); }
 });
+
+test('a clock time or a peso amount is never read as the TV size', () => {
+  const { knownSize } = require('../src/estimate');
+  assert.equal(knownSize('Samsung 55 inch po\n[Customer sent a video at 07:40 - RECEIVED, forwarded to the technician for review.]'), 55);
+  assert.equal(knownSize('[Customer sent a video at 10:50 - RECEIVED]'), 0);
+  assert.equal(knownSize('₱8,500 po ba talaga?'), 0);
+  assert.equal(knownSize('500 pesos lang'), 0);
+  assert.equal(knownSize('43 inches po, 10:30 ko sinend'), 43);
+  assert.equal(knownSize('TCL 40" po'), 40);
+});
