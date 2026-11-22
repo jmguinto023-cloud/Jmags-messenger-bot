@@ -1365,7 +1365,9 @@ class Bot {
           const modelName = this.llm.lastModel || '';
           const u = this.llm.router && this.llm.router.lastUsage;
           const tokens = u ? ` tokens in=${u.input} cached=${u.cached} out=${u.output} reasoning=${u.reasoning}` : '';
-          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}${tokens}`);
+          const skipped = (this.llm.router && this.llm.router.lastFailures) || [];
+          const fellBack = skipped.length ? ` | backup used after: ${skipped.join('; ')}` : '';
+          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}${tokens}${fellBack}`);
         }
         raw = await this.fitModelReply(psid, raw, aiFirst ? { maxChars: 500, maxLines: 6 } : undefined);
       } catch (e) {

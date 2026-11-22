@@ -4,6 +4,7 @@ const { makeLogger } = require('./log');
 const { Store } = require('./store');
 const { Graph } = require('./graph');
 const { LLM } = require('./llm');
+const { buildProviders } = require('./ai-router');
 const { Bot } = require('./bot');
 const { Push } = require('./push');
 const { createServer } = require('./server');
@@ -63,6 +64,8 @@ if (require.main === module) {
   log.info(`Cavite fixed inquiry greeting: ${cfg.caviteFirstInquiryEnabled
     ? (livePages.split('+').includes('cavite') ? 'enabled' : 'waiting for Cavite Page token')
     : 'off'}`);
+  const aiNames = cfg.aiRouterEnabled ? buildProviders(cfg).map((p) => `${p.name}${p.model ? `(${p.model})` : ''}`) : [];
+  log.info(`AI providers in order: ${aiNames.length ? aiNames.join(' -> ') : 'none'} (AI_PROVIDER_ORDER=${cfg.aiProviderOrder || ''})`);
   app.server.listen(cfg.port, () => log.info(`JMAG's Messenger bot listening on :${cfg.port} | BOT_ENABLED=${cfg.botEnabled} | allowlist=${cfg.testPsids.length} | hours=${cfg.activeHours || '24/7'} | schedule=${cfg.schedule || 'always'} | pages=${livePages}${heldPages.length ? ` | no-token=${heldPages.join('+')}` : ''}`));
   if (app.bot.dashboardBookings && app.bot.dashboardBookings.enabled()) {
     const mirrorBookings = () => app.bot.dashboardBookings.sync().catch(() => log.warn('booking dashboard sync failed'));

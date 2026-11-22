@@ -109,13 +109,20 @@ class AiRouter {
       throw err;
     }
     const failures = [];
+    this.lastFailures = failures;
     const triedThisCall = new Set();
     for (let round = 0; round < 2; round++) {
       let retryable = false;
       let rateLimited = false;
       for (const provider of this.providers) {
         const cooling = (this.cooldowns.get(provider.name) || 0) > this.now();
-        if (cooling && !triedThisCall.has(provider.name)) continue;
+        if (cooling && !triedThisCall.has(provider.name)) {
+          const why = this.lastErrorBy && this.lastErrorBy[provider.name];
+          if (!failures.some((f) => f.startsWith(provider.name + ':'))) {
+            failures.push(`${provider.name}: resting after an error${why ? ` (${why})` : ''}`);
+          }
+          continue;
+        }
         if (!this.quotaAvailable()) {
           const err = new Error('AI daily request limit reached');
           err.status = 429;
@@ -137,7 +144,11 @@ class AiRouter {
           triedThisCall.add(provider.name);
           if (!status || status === 429 || status >= 500) retryable = true;
           if (status === 429) rateLimited = true;
-          failures.push(provider.name + ': HTTP ' + (status || 'network/timeout'));
+          const line = 'HTTP ' + (status || 'network/timeout')
+            + (err.detail ? ` ${String(err.detail).replace(/\s+/g, ' ').slice(0, 160)}` : '');
+          this.lastErrorBy = this.lastErrorBy || {};
+          this.lastErrorBy[provider.name] = line;
+          failures.push(`${provider.name}: ${line}`);
         }
       }
       if (round === 0 && retryable) {
@@ -269,12 +280,15 @@ AiRouter.prototype.askAnthropic = async function askAnthropic(provider, payload)
   } catch (e) {
     const err = new Error(`anthropic API HTTP ${e && e.status ? e.status : 'error'}`);
     err.status = (e && e.status) || 0;
+    // Anthropic's own reason (bad key, no credit, unknown model). Never contains the key.
+    err.detail = String((e && e.error && e.error.error && e.error.error.message) || (e && e.message) || '').slice(0, 200);
     err.billingIssue = /credit balance|billing|insufficient/i.test(String((e && e.message) || ''));
     throw err;
   }
   if (res.stop_reason === 'refusal') {
     const err = new Error('anthropic declined the request');
     err.status = 422;
+    err.detail = 'refusal';
     throw err;
   }
   const answer = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
