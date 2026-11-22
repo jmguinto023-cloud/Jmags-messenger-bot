@@ -18,7 +18,7 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk, questionTopic, QUESTIONS } = require('./intake');
 const { noteEvidence, nextEvidenceAsk, nextStep, coreReady, remindsMissingProof, declinesEvidence, steerTurn, ASK_VIDEO } = require('./evidence');
-const { rememberJob, shapeReply, isWait, WAIT_LINE, staffVoice, gatePassed, isCracked, isPanelPriceHandoff } = require('./quote-gate');
+const { rememberJob, shapeReply, isWait, WAIT_LINE, VIDEO_WAIT_LINE, staffVoice, gatePassed, isCracked, isPanelPriceHandoff } = require('./quote-gate');
 const {
   customerBrief, withWelcome, wantsBooking, saysFormDone, formUrlFor, formMessage,
   FORM_OK, FORM_MISSING, localJobs, submissionMatches, netlifySubmissions, phoneInThread,
@@ -1179,14 +1179,16 @@ class Bot {
       });
       t.customerContext = brief.text;
       t.returning = brief.returning;
-      if (t.waiting && isWait(latestSoFar)) {
+      const lastBotText = String((t.history || []).filter((h) => h && h.role === 'assistant').map((h) => h.content || '').slice(-1)[0] || '');
+      const mediaAsked = Boolean(t.awaitingVideo) || /video|picture|litrato|photo|sticker/i.test(lastBotText);
+      if (t.waiting && isWait(latestSoFar, { mediaAsked })) {
         this.repliedRev.set(this.slot(psid), rev);
         return;
       }
-      if (isWait(latestSoFar)) {
+      if (isWait(latestSoFar, { mediaAsked })) {
         t.waiting = true;
         this.repliedRev.set(this.slot(psid), rev);
-        await this.send(psid, WAIT_LINE, { provider: 'rules' });
+        await this.send(psid, mediaAsked ? VIDEO_WAIT_LINE : WAIT_LINE, { provider: 'rules' });
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }

@@ -3319,3 +3319,30 @@ test('a repair word in a backlight chat keeps the backlight price, and "palit na
   const lcd = { history: [{ role: 'user', content: 'magkano po palit lcd samsung 65' }] };
   assert.match(listEstimate('sige palit na lang magkano', lcd), /₱30,500/);
 });
+
+test('"mamaya isend ko, nasa work ako" after a video ask gets one wait line, then silence (live test chat)', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Pwede po pa-send ng video ng TV habang naka-on?';
+  const texts = () => s.mock.calls.messages.map((m) => m.message.text).filter(Boolean);
+  try {
+    await s.post(msg('later', { text: 'hello po sira tv ko' }));
+    assert.match(texts().at(-1), /video/);
+    const before = texts().length;
+    await s.post(msg('later', { text: 'Mamaya isend ko nasa work ako' }));
+    assert.equal(texts().at(-1), "Sige po, no problem. Pag na-send niyo na po ang video, type niyo lang po 'sent po' :)");
+    const afterWait = texts().length;
+    assert.equal(afterWait, before + 1);
+    await s.post(msg('later', { text: 'Mamaya po' }));
+    assert.equal(texts().length, afterWait, 'no second video ask');
+    assert.doesNotMatch(texts().join('\n').split("type niyo lang po 'sent po'")[1] || '', /Pwede po pa-send ng video/);
+  } finally { await s.close(); }
+});
+
+test('"mamaya po" or "bukas po" without a video ask is not a wait', () => {
+  const { isWait } = require('../src/quote-gate');
+  assert.equal(isWait('Mamaya po'), false);
+  assert.equal(isWait('bukas po', { mediaAsked: true }), false);
+  assert.equal(isWait('mamaya po pwede kayo pumunta?', { mediaAsked: true }), false);
+  assert.equal(isWait('nasa work pa ako'), true);
+  assert.equal(isWait('bukas ko na isend'), true);
+});

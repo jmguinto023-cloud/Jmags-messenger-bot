@@ -14,6 +14,8 @@ const RULES_PATH = path.join(__dirname, '..', 'prompts', 'rules.md');
 
 const MAGKANO_LINE = 'Para po masiguro namin ang tamang presyo, kailangan po muna namin makita ang video at model number. Hindi po kami nagbibigay ng presyo na hindi pa nakikita ang unit.';
 const WAIT_LINE = 'Sige po, hintayin po namin. Thank you po.';
+// Staff guide: when they will send the video later, do not ask again; tell them how to flag it.
+const VIDEO_WAIT_LINE = "Sige po, no problem. Pag na-send niyo na po ang video, type niyo lang po 'sent po' :)";
 const WARRANTY_ONLY = 'May warranty po ang repair namin. I-ko-confirm lang po ng staff namin ang exact coverage para sa unit ninyo.';
 const HANDOFF_LINE = 'I-che-check lang po ng staff namin ito at mag-me-message po sila sa inyo shortly.';
 // Cracked LCD: staff prices that fault only. The chat stays open for the next question.
@@ -85,12 +87,19 @@ function isMagkano(text) {
   return /\bmagkano\b|\bhow much\b|\bpresyo\b|\bprice\b/i.test(String(text || ''));
 }
 
-function isWait(text) {
+function isWait(text, { mediaAsked = false } = {}) {
   const t = String(text || '').trim();
   if (!t || /ibang shop|another shop/i.test(t)) return false;
-  return /^(?:teka|sandali|hintay|ipapadala ko pa|hahanapin ko pa)\b/i.test(t)
+  if (/^(?:teka|sandali|hintay|ipapadala ko pa|hahanapin ko pa)\b/i.test(t)
     || /^wala pa(?!\s+ba\b)/i.test(t)
-    || /\b(?:teka muna|sandali lang|hintay(?:in)? lang|ipapadala ko pa|hahanapin ko pa)\b/i.test(t);
+    || /\b(?:teka muna|sandali lang|hintay(?:in)? lang|ipapadala ko pa|hahanapin ko pa)\b/i.test(t)) return true;
+  // "Mamaya isend ko, nasa work ako", "pag uwi ko", "later po": they will send it later.
+  // Not a question and not a booking time ("mamaya po pwede kayo pumunta?").
+  if (/\?/.test(t) || /pumunta|punta|schedule|sched|book|technician|available/i.test(t)) return false;
+  // A bare "mamaya po" / "later" only means "I'll send it later" right after we asked for a video or photo;
+  // after "kailan po kayo free?" it is a booking time.
+  if (mediaAsked && /^(?:mamaya|later|maya-?maya|mamayang)\b[\s\S]{0,60}$/i.test(t)) return true;
+  return /\b(?:nasa\s+(?:work|trabaho|office|opisina|labas|byahe|biyahe)|wala\s+(?:pa\s+)?ako\s+sa\s+bahay|pag[\s-]*uwi(?:\s+ko)?|pagkauwi|pauwi\s+pa|busy\s+pa|send\s+ko\s+(?:mamaya|later|bukas|pag)|i-?send\s+ko\s+(?:mamaya|later|bukas|pag)|isend\s+ko\s+(?:mamaya|later|bukas|pag)|(?:mamaya|bukas|later)\s+(?:ko\s+)?(?:na\s+)?(?:po\s+)?i-?send)\b/i.test(t);
 }
 
 function isScheduleTalk(text) {
@@ -216,7 +225,7 @@ function flexiblePriceReply(thread, latest) {
 }
 
 function capWords(text) {
-  const canonical = [MAGKANO_LINE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
+  const canonical = [MAGKANO_LINE, WAIT_LINE, VIDEO_WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
   let s = String(text || '');
   if (/Para mabigyan po namin kayo agad ng presyo/.test(s)) return s.trim();
   if (isPreparedPriceAnswer(s)) return s.trim();
@@ -471,6 +480,7 @@ module.exports = {
   NEED_VIDEO_LINE,
   NEED_FACTS_LINE,
   WAIT_LINE,
+  VIDEO_WAIT_LINE,
   WARRANTY_ONLY,
   HANDOFF_LINE,
   CRACKED_PRICE_LINE,
