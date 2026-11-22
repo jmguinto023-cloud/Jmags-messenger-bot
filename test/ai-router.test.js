@@ -389,3 +389,27 @@ test('a long chat keeps the last 16 messages word for word and a digest of every
   assert.deepEqual(out.slice(1), rows.slice(-RECENT_TURNS), 'recent messages are unchanged');
   assert.deepEqual(trimHistory(rows.slice(0, 10)), rows.slice(0, 10), 'short chats are sent whole');
 });
+
+test('OpenAI requests carry one prompt_cache_key, and a 400 about it drops the field and retries once', async () => {
+  const bodies = [];
+  let reject = false;
+  const router = new AiRouter({
+    providers: buildProviders({ aiAllowExternalData: true, openaiApiKey: 'oa', aiProviderOrder: 'openai' }),
+    fetcher: async (url, opts) => {
+      const b = JSON.parse(opts.body);
+      bodies.push(b);
+      if (reject && b.prompt_cache_key) return { ok: false, status: 400, text: async () => '{"error":{"message":"Unrecognized request argument supplied: prompt_cache_key"}}' };
+      return ok('OK po');
+    },
+  });
+  const payload = { messages: [{ role: 'system', content: 'C', richContent: 'RICH' }, { role: 'user', content: 'hi' }] };
+  assert.equal(await router.complete(payload), 'OK po');
+  assert.equal(bodies[0].prompt_cache_key, 'jmags-orientation');
+  reject = true;
+  router.noPromptCacheKey = false;
+  bodies.length = 0;
+  assert.equal(await router.complete(payload), 'OK po');
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].prompt_cache_key, undefined);
+  assert.equal(router.noPromptCacheKey, true);
+});

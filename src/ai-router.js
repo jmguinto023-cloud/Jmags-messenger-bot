@@ -204,16 +204,26 @@ class AiRouter {
       delete reqPayload.max_tokens;
       delete reqPayload.temperature;
     }
+    // Every reply shares the same cached instruction block; one cache key routes them to the same cache.
+    // If the API ever rejects the field, it is dropped for this process and the call is retried once.
+    if (provider.name === 'openai' && useRich && !this.noPromptCacheKey) reqPayload.prompt_cache_key = 'jmags-orientation';
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers.Authorization = 'Bearer ' + provider.apiKey;
     const timeoutMs = Math.max(1000, Number(provider.timeoutMs) || this.timeoutMs);
-    const res = await this.fetcher(provider.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
+    const send = () => this.fetcher(provider.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
       method: 'POST',
       headers,
       body: JSON.stringify(reqPayload),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    const raw = await res.text();
+    let res = await send();
+    let raw = await res.text();
+    if (!res.ok && res.status === 400 && reqPayload.prompt_cache_key && /prompt_cache_key/i.test(raw)) {
+      this.noPromptCacheKey = true;
+      delete reqPayload.prompt_cache_key;
+      res = await send();
+      raw = await res.text();
+    }
     if (!res.ok) {
       const err = new Error(provider.name + ' API HTTP ' + res.status);
       err.status = res.status;
