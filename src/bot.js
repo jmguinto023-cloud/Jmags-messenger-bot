@@ -159,6 +159,13 @@ function keywordHit(text, keywords) {
   });
 }
 
+// "Pwde mag paschedule bukas?", "pa-book po", "pa-home service", "appointment": the customer wants to book now.
+function asksToSchedule(text) {
+  const t = String(text || '');
+  if (/\b(?:cancel|ayaw|huwag|wag|hindi\s+(?:na|muna))\b/i.test(t)) return false;
+  return /\b(?:(?:mag)?pa-?\s?book\w*|i-?book|booking|(?:mag)?\s?pa-?\s?sched\w*|i-?sched\w*|schedule|sched|appointment|pa-?appointment|(?:mag)?pa-?\s?home\s*service|(?:mag)?pa-?\s?check-?\s?up|pa-?punta|papuntahin)\b/i.test(t);
+}
+
 class Bot {
   constructor({ cfg, store, graph, llm, log, push = null, now = () => Date.now(), switches = null }) {
     Object.assign(this, { cfg, store, graph, llm, log, push, now });
@@ -1199,12 +1206,17 @@ class Bot {
         this.repliedRev.set(this.slot(psid), rev);
         if (reported) return;
       }
-      if (gatePassed(t) && wantsBooking(latestSoFar) && !t.bookingFormSent) {
+      // A clear ask to book or schedule gets the booking form link right away (owner rule), even before every
+      // intake fact is in. A bare "sige po"/"opo" only counts once the gate has passed.
+      // With BOOKING_AGENT_ENABLED the in-chat booking agent handles a booking ask instead.
+      const earlyForm = !this.cfg.bookingAgentEnabled && asksToSchedule(latestSoFar);
+      if (!t.bookingFormSent && ((gatePassed(t) && wantsBooking(latestSoFar)) || earlyForm)) {
         const link = formUrlFor(this.cfg.bookingFormUrl, t, psid);
         t.bookingFormSent = true;
         t.formSentAt = this.now();
         this.repliedRev.set(this.slot(psid), rev);
-        await this.send(psid, formMessage(link), { provider: 'rules' });
+        // skipGate: the link is the answer here; the pre-gate link filter must not swap it for an intake question.
+        await this.send(psid, formMessage(link), { provider: 'rules', skipGate: earlyForm });
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
