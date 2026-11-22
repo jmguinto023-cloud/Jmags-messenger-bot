@@ -1363,7 +1363,9 @@ class Bot {
         });
         if (this.llm && this.llm.lastProvider) {
           const modelName = this.llm.lastModel || '';
-          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}`);
+          const u = this.llm.router && this.llm.router.lastUsage;
+          const tokens = u ? ` tokens in=${u.input} cached=${u.cached} out=${u.output} reasoning=${u.reasoning}` : '';
+          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}${tokens}`);
         }
         raw = await this.fitModelReply(psid, raw, aiFirst ? { maxChars: 500, maxLines: 6 } : undefined);
       } catch (e) {

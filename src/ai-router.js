@@ -209,6 +209,14 @@ class AiRouter {
     if (typeof answer !== 'string' || !answer.trim()) {
       throw new Error(provider.name + ' returned an empty response');
     }
+    // Token use for the cost log: input, cached input, output (reasoning is part of output).
+    const u = (json && json.usage) || {};
+    this.lastUsage = {
+      input: Number(u.prompt_tokens) || 0,
+      cached: Number(u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0,
+      output: Number(u.completion_tokens) || 0,
+      reasoning: Number(u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens) || 0,
+    };
     return answer.trim();
   }
 }

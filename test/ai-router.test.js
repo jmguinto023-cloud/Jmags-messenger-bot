@@ -278,3 +278,22 @@ test('OpenAI gets the full JMAG orientation, Groq gets the compact prompt, richC
   assert.equal(bodies.groq.messages[0].content, 'COMPACT');
   for (const b of Object.values(bodies)) assert.equal(JSON.stringify(b).includes('richContent'), false);
 });
+
+test('the OpenAI orientation stays slim, and token use is read from the response', async () => {
+  const { LLM, estimateTokens } = require('../src/llm');
+  const llm = new LLM({ systemPromptFile: require('node:path').join(__dirname, '..', 'prompts', 'system-prompt.md'), llmMaxRpm: 0 });
+  const rich = llm.richPrompt([{ role: 'user', content: 'samsung 55 walang display' }]);
+  assert.ok(estimateTokens(rich) < 9000, `orientation is ${estimateTokens(rich)} tokens`);
+  assert.match(rich, /## 1\. Voice/);
+  assert.match(rich, /## 1b\. Short examples/);
+  assert.doesNotMatch(rich, /## 5\. Price table/);
+  const router = new AiRouter({
+    providers: buildProviders({ aiAllowExternalData: true, openaiApiKey: 'oa', aiProviderOrder: 'openai' }),
+    fetcher: async () => ({ ok: true, status: 200, text: async () => JSON.stringify({
+      choices: [{ message: { content: 'OK po' } }],
+      usage: { prompt_tokens: 8100, prompt_tokens_details: { cached_tokens: 7900 }, completion_tokens: 120, completion_tokens_details: { reasoning_tokens: 64 } },
+    }) }),
+  });
+  assert.equal(await router.complete({ messages: [{ role: 'user', content: 'hi' }] }), 'OK po');
+  assert.deepEqual(router.lastUsage, { input: 8100, cached: 7900, output: 120, reasoning: 64 });
+});
