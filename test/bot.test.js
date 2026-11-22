@@ -3416,3 +3416,18 @@ test('stuck on the logo is reprogramming, the newest brand wins, and "reprogramm
     assert.match(sent, /^Kapag nag-stuck po sa logo[\s\S]*reprogramming para sa TCL 55/);
   } finally { await s.close(); }
 });
+
+test('"Pwde mag paschedule bukas?" gets the booking form link, not in-chat name and mobile questions (live test chat)', async () => {
+  const s = await setup({ BOOKING_AGENT_ENABLED: 'false' });
+  s.mock.state.llmResponder = () => 'Possible backlight po. Pwede po pa-send ng video?';
+  const texts = () => s.mock.calls.messages.map((m) => m.message.text).filter(Boolean);
+  try {
+    await s.post(msg('sched', { text: 'Samsung 65 walang display' }));
+    await s.post(msg('sched', { text: 'Pwde mag paschedule bukas?' }));
+    const reply = texts().at(-1);
+    assert.match(reply, /jmagscutomerform\.netlify\.app/);
+    assert.doesNotMatch(reply, /buong pangalan|mobile number/i);
+    await s.post(msg('sched', { text: 'opo' }));
+    assert.equal(texts().filter((t) => /jmagscutomerform/.test(t)).length, 1, 'the form is sent once');
+  } finally { await s.close(); }
+});
