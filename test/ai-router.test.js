@@ -297,3 +297,57 @@ test('the OpenAI orientation stays slim, and token use is read from the response
   assert.equal(await router.complete({ messages: [{ role: 'user', content: 'hi' }] }), 'OK po');
   assert.deepEqual(router.lastUsage, { input: 8100, cached: 7900, output: 120, reasoning: 64 });
 });
+
+test('Claude Haiku answers first with the JMAG orientation cached, and OpenAI takes over on an error or a refusal', async () => {
+  const cfgBoth = { aiAllowExternalData: true, anthropicApiKey: 'ak', openaiApiKey: 'oa', aiProviderOrder: 'anthropic,openai' };
+  assert.deepEqual(buildProviders(cfgBoth).map((p) => p.name), ['anthropic', 'openai']);
+  assert.equal(buildProviders(cfgBoth)[0].model, 'claude-haiku-5-5');
+  const claudeReply = (body) => new Response(JSON.stringify({
+    id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', stop_reason: body.stop || 'end_turn',
+    content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: body.text || '' }],
+    usage: { input_tokens: 300, cache_read_input_tokens: 8000, cache_creation_input_tokens: 0, output_tokens: 90 },
+  }), { status: body.status || 200, headers: { 'content-type': 'application/json' } });
+  let claudeBody;
+  let mode = 'ok';
+  const calls = [];
+  const router = new AiRouter({
+    providers: buildProviders(cfgBoth), retryBackoffMs: 0, rateLimitBackoffMs: 0,
+    fetcher: async (url, opts) => {
+      const u = String(url);
+      if (u.includes('api.anthropic.com')) {
+        calls.push('anthropic');
+        claudeBody = JSON.parse(opts.body);
+        if (mode === 'error') return new Response(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'boom' } }), { status: 500, headers: { 'content-type': 'application/json' } });
+        if (mode === 'refusal') return claudeReply({ text: '', stop: 'refusal' });
+        return claudeReply({ text: 'Possible backlight po, 55" Samsung ₱8,500.' });
+      }
+      calls.push('openai');
+      return ok('openai backup po');
+    },
+  });
+  const payload = { temperature: 0.4, max_tokens: 400, messages: [
+    { role: 'system', content: 'COMPACT', richContent: 'FULL JMAG ORIENTATION 09386369374' },
+    { role: 'system', content: 'Per-turn note' },
+    { role: 'assistant', content: 'Hello po' },
+    { role: 'user', content: 'samsung 55 walang display 09171234567' },
+  ] };
+  assert.equal(await router.complete(payload), 'Possible backlight po, 55" Samsung ₱8,500.');
+  assert.equal(claudeBody.model, 'claude-haiku-5-5');
+  assert.equal(claudeBody.system[0].text, 'FULL JMAG ORIENTATION 09386369374');
+  assert.deepEqual(claudeBody.system[0].cache_control, { type: 'ephemeral' });
+  assert.equal(claudeBody.system[1].text, 'Per-turn note');
+  assert.equal(claudeBody.temperature, undefined, 'temperature is not sent');
+  assert.deepEqual(claudeBody.output_config, { effort: 'low' });
+  assert.equal(claudeBody.messages[0].role, 'user', 'the conversation starts with the customer');
+  assert.doesNotMatch(claudeBody.messages[0].content, /09171234567/, 'customer numbers are redacted');
+  assert.deepEqual(router.lastUsage, { input: 8300, cached: 8000, output: 90, reasoning: 0 });
+  assert.equal(router.lastProvider, 'anthropic');
+
+  for (const m of ['error', 'refusal']) {
+    mode = m;
+    router.cooldowns.clear();
+    calls.length = 0;
+    assert.equal(await router.complete(payload), 'openai backup po', m);
+    assert.deepEqual(calls, ['anthropic', 'openai'], m);
+  }
+});

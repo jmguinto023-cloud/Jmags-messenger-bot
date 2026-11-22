@@ -158,6 +158,12 @@ services:
       # true: OpenAI writes every normal reply in its own words; list prices and templates become facts it must use.
       - key: AI_REASONS_FIRST
         sync: false
+      # Claude (Anthropic) API key. Used when AI_PROVIDER_ORDER lists anthropic (recommended: anthropic,openai).
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Default claude-haiku-5-5.
+      - key: ANTHROPIC_MODEL
+        sync: false
       # Preferred customer model. Empty key means the OpenAI provider is skipped.
       - key: OPENAI_API_KEY
         sync: false

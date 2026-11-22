@@ -1,4 +1,4 @@
-# JMAG's Messenger bot. web-push is the only production dependency.
+# JMAG's Messenger bot. Production dependencies: web-push and @anthropic-ai/sdk.
 FROM node:20-alpine
 ENV NODE_ENV=production \
     DATA_DIR=/data \

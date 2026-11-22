@@ -82,6 +82,12 @@ function loadConfig(env = process.env) {
     groqModel: env.GROQ_MODEL || 'openai/gpt-oss-20b',
     // OpenAI is preferred when AI_PROVIDER_ORDER lists it first, for example openai,groq.
     openaiApiKey: env.OPENAI_API_KEY || '',
+    // Claude (Anthropic) when AI_PROVIDER_ORDER lists anthropic, e.g. anthropic,openai.
+    anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    anthropicModel: env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
+    // Short chat replies: low effort keeps thinking (and cost) small. low | medium | high.
+    anthropicEffort: env.ANTHROPIC_EFFORT || 'low',
+    anthropicTimeoutMs: num(env.ANTHROPIC_TIMEOUT_MS, 20000),
     openaiModel: env.OPENAI_MODEL || 'gpt-5.4-mini',
     openaiReasoningEffort: env.OPENAI_REASONING_EFFORT || 'low',
     openaiTimeoutMs: num(env.OPENAI_TIMEOUT_MS, 15000),
