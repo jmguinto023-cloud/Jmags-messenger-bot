@@ -443,6 +443,54 @@ function legacyShape(thread, text, latest) {
   return { text: capWords(body), handoff: false, reason: reason[0] || '', silent: false };
 }
 
+// AI_REASONS_FIRST validator. The model's own words are kept. Only what breaks a hard rule is removed:
+// invented prices (anything not on the price list or in this turn's facts), staff names, a specific day or
+// clock time, a link before the gate. Warranty, anger and a correction still go to staff as before.
+function shapeAiReply(thread, text, latest, facts = '') {
+  rememberJob(thread);
+  const original = String(text || '');
+  const last = String(latest || '');
+  if (/warranty|garantiya|back-?job|backjob/i.test(last)
+      || /\b(?:galit|bwisit|tangina|putangina|leche|scam|reklamo)\b/i.test(last)
+      || /mali (?:po )?(?:yan|yun|yon)|hindi tama|mali po kayo|you(?:'re| are) wrong/i.test(last)) {
+    return { ...legacyShape(thread, original, last), fallback: true };
+  }
+  let handoff = false;
+  let reason = '';
+  const found = original.match(/\[+\s*HANDOFF\s*:?\s*([^\]]*)\]+/i);
+  if (found) { handoff = true; reason = (found[1] || '').trim() || 'model'; }
+  let body = stripPersonNames(staffVoice(stripWarrantyLength(original.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, ''))));
+  // Never propose a day or a time. Asking when they are free is fine.
+  body = body
+    .replace(/\b(?:sa\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|lunes|martes|miyerkules|huwebes|biyernes|sabado|linggo)\b(?:\s+(?:ng\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?/gi, '')
+    .replace(/\b(?:alas\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, '');
+  if (!gatePassed(thread)) body = body.replace(/https?:\/\/\S+/gi, '');
+  // Only the check-up fees, this turn's facts, and the list rows for this customer's size. A price that is on
+  // the list for another size (₱25,000 is an 85" backlight) is still invented for this chat.
+  const allowed = new Set([300, 1000]);
+  const users = ((thread && thread.history) || []).filter((h) => h && h.role === 'user').map((h) => h.content || '').join('\n');
+  const size = knownSize(`${users}\n${last}`);
+  for (const key of ['backlight', 'lcdMod', 'lcdReplace']) {
+    const n = PRICE_TABLE && PRICE_TABLE[key] && PRICE_TABLE[key][size];
+    if (Number(n) >= 100) allowed.add(Math.round(Number(n)));
+  }
+  String(facts || '').replace(/₱\s?(\d{1,3}(?:,\d{3})+|\d+)/g, (m, raw) => { allowed.add(pesoValue(raw)); return m; });
+  let invented = false;
+  body = body.replace(/₱\s?(\d{1,3}(?:,\d{3})+|\d+)/g, (full, raw) => {
+    if (allowed.has(pesoValue(raw))) return full;
+    invented = true;
+    return '';
+  });
+  if (bannedPart(body) && !bannedPart(`${last}\n${facts}`)) body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
+  body = body.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').replace(/\.{2,}/g, '.').replace(/\n{3,}/g, '\n\n').trim();
+  const fallbackText = String(facts || '').split('\n\n')[0].trim();
+  if (invented || !body) {
+    if (fallbackText) return { text: fallbackText, handoff: false, reason: '', silent: false, closeGate: false, fallback: true };
+    return { ...legacyShape(thread, original, last), fallback: true };
+  }
+  return { text: body, handoff, reason, silent: false, closeGate: false, fallback: false };
+}
+
 // Validator. A clean model draft is kept. A draft that breaks a hard rule falls back to the old template.
 function shapeReply(thread, text, latest) {
   rememberJob(thread);
@@ -476,6 +524,7 @@ function shapeReply(thread, text, latest) {
 
 module.exports = {
   rulesText,
+  shapeAiReply,
   MAGKANO_LINE,
   NEED_VIDEO_LINE,
   NEED_FACTS_LINE,

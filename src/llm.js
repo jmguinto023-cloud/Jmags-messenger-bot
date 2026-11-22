@@ -76,12 +76,14 @@ class LLM {
     ].join('\n\n');
   }
 
-  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus, preparedNote } = {}) {
+  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus, preparedNote, facts } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const fallback = String(preparedNote || '').trim();
+    const factText = String(facts || '').trim();
     const messages = [
       { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt(history) },
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Answer the customer's latest question first, in 1 to 3 short Taglish sentences, with po. Then ask at most one next-step question. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line and still answer the question. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}${fallback ? ` Safe fallback if a rule blocks your draft: ${fallback}` : ''}`.trim() },
+      ...(factText ? [{ role: 'system', content: `FACTS FOR THIS REPLY (exact, from JMAG's price list and rules): ${factText}\nUse these peso amounts exactly if you mention a price; never any other amount. Do not copy these sentences. Answer in your own words like JMAG's staff: what the problem most likely is and why (say "possible" unless it is clear), what the repair involves and includes, then one useful next question.` }] : []),
       ...normalizeTurns(history, { attachmentNote }),
     ];
     return this.chat(messages, { priority: 'high' });
@@ -238,6 +240,14 @@ const HUMAN_VOICE = [
   '- Still follow every current rule below: one question at a time, no empathy paragraph, no restating their whole message, no made-up prices.',
 ].join('\n');
 
+const AI_REASONS_FIRST = [
+  '# You answer the customer yourself (this overrides the handoff lists above)',
+  '- Think about the TV problem like an experienced JMAG technician and explain it in plain Taglish: the likely cause, why, what the repair involves. Say "possible" when it is not certain.',
+  '- Do not say "itatanong ko sa staff/technician" or hand off just because a question is technical, a price is not on file, or you are unsure of a detail. Give your best explanation and ask for the video or the model sticker so the technician can confirm.',
+  '- Hand off ([HANDOFF: reason]) ONLY for: a complaint or angry customer, warranty or backjob or refund, a discount or tawad request, the customer asking for a person or a call, a non-TV appliance or a CRT, or a booking that is ready for the form.',
+  '- Prices: use only the peso amounts in the FACTS or the price line for this chat. Never propose a day or a time.',
+].join('\n');
+
 function businessRulesText() {
   const file = path.join(__dirname, '..', 'prompts', 'business-rules.md');
   return fs.readFileSync(file, 'utf8').trim();
@@ -276,6 +286,7 @@ function compactPrompt(history, cfg = {}) {
     businessRulesText(),
   ];
   if (url) lines.push(bookingFormMessage(url));
+  if (cfg.aiReasonsFirst) lines.push(AI_REASONS_FIRST);
   return lines.join('\n');
 }
 

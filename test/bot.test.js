@@ -3359,3 +3359,31 @@ test('"power supply pumutok" after an LCD chat quotes the power supply, not the 
   assert.match(listEstimate('motherboard naman magkano', thread), /motherboard/);
   assert.match(listEstimate('Kapag basag naman magkano?', thread), /₱30,500/);
 });
+
+test('AI_REASONS_FIRST: OpenAI explains in its own words, list prices are facts, invented prices fall back', async () => {
+  const s = await setup({ AI_REASONS_FIRST: 'true' });
+  const texts = () => s.mock.calls.messages.map((m) => m.message.text).filter(Boolean);
+  const reasoning = 'Base po sa sinabi nyo, possible na sira na po ang panel ng LCD kaya may linya. '
+    + 'Ang LCD modification po ay ₱9,500 para sa 65", inaayos po ang koneksyon ng panel imbes na palitan, kasama na po ang home service at warranty. '
+    + 'Pwede po pa-send ng short video habang naka-on para ma-confirm ng technician?';
+  try {
+    s.mock.state.llmResponder = () => reasoning;
+    await s.post(msg('aif', { text: 'Samsung 65 may linya po, magkano repair?' }));
+    const call = s.mock.calls.llm.at(-1).body.messages.map((m) => m.content).join('\n');
+    assert.match(call, /FACTS FOR THIS REPLY[\s\S]*₱9,500/, 'list price is given to the model as a fact');
+    assert.match(call, /You answer the customer yourself/);
+    assert.equal(texts().at(-1), reasoning.replace('ng technician?', 'ng staff po namin?'), 'the model reply is sent whole (staff voice), not swapped for a template');
+
+    s.mock.state.llmResponder = () => 'Nasa ₱25,000 po iyan sir. Kailan po kayo free?';
+    await s.post(msg('aif', { text: 'magkano po lahat?' }));
+    assert.doesNotMatch(texts().at(-1), /25,000/, 'an invented price never goes out');
+
+    s.mock.state.llmResponder = () => 'Possible po na power board ang problema. Pwede po kami pumunta sa Sabado 9am.';
+    await s.post(msg('aif', { text: 'bakit po kaya nag-off bigla?' }));
+    assert.doesNotMatch(texts().at(-1), /Sabado|9am/i, 'no day or time is proposed');
+    assert.match(texts().at(-1), /Possible po/);
+
+    await s.post(msg('aif', { text: 'covered pa po ba ng warranty yung repair nyo dati?' }));
+    assert.equal(s.app.store.thread('aif').handedOff, true, 'warranty still goes to staff');
+  } finally { await s.close(); }
+});
