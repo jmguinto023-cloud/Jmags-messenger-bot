@@ -236,6 +236,22 @@ function priceHint(size) {
 // LCD repaired (modification), not replaced. Checked before "palit lcd" so a "hindi" is not ignored.
 const REPAIR_ONLY = /\b(?:repair|ayos|ayusin|ipaayos|paayos|gawa|gawin|pagawa|modif\w*)\s+(?:lang|only|muna|na lang)\b|\b(?:hindi|hndi|hnd|hinde|di|wag|huwag|ayaw|ayoko)\s+(?:na\s+|po\s+|muna\s+)*(?:mag[\s-]*)?(?:pa[\s-]*)?palit|\brepair\s+(?:modification|lcd)|\blcd\s+(?:repair|modification)|\bmodification\b|\bnot\s+replace/i;
 
+// Any word that means "fix it" rather than "replace it".
+const REPAIR_WORD = /\b(?:repair\w*|ni-?repair|ayos\w*|ayusin|maayos|inayos|paayos|ipaayos|pa-?ayos|pagawa|ipagawa|magpagawa|gawa(?:in)?|gawin|ginawa|fix\w*|modif\w*|i-?modify|remedyo|remedy|kaya\s+pa(?:\s+ba)?|pwede\s+pa(?:\s+ba)?\s+(?:ma)?(?:ayos|gawa|repair))\b/i;
+// "palit/replace" that is not negated ("hindi palit" is a repair request).
+const WANTS_REPLACE = /(?<!\b(?:hindi|hndi|hnd|hinde|di|wag|huwag|ayaw|ayoko|not)\s+(?:na\s+|po\s+|muna\s+)*(?:mag[\s-]*)?(?:pa[\s-]*)?)\b(?:palit\w*|papalitan|replace\w*|bago\s+na\s+lcd|brand\s*new\s+lcd)/i;
+const LCD_CONTEXT = /\blcd\b|\blines?\b|linya|basag|cracked|palit|dots|tuldok|kulay|blue screen|gumuguhit|bar\s?line|modif/i;
+
+// A repair word in an LCD chat asks for the LCD repair (modification), unless they explicitly want a replacement.
+function wantsLcdRepair(latest, users) {
+  const t = String(latest || '');
+  if (!REPAIR_WORD.test(t) || WANTS_REPLACE.test(t)) return false;
+  if (/backlight|walang ilaw|flicker|kislap/i.test(t)) return false;
+  const lcdChat = LCD_CONTEXT.test(t) || LCD_CONTEXT.test(String(users || ''));
+  const backlightChat = !LCD_CONTEXT.test(t) && /backlight|walang ilaw|flicker|kislap|(?:sound|tunog)[\s\S]*(?:walang display|black screen)/i.test(String(users || ''));
+  return lcdChat && !backlightChat;
+}
+
 function listKind(text) {
   const t = String(text || '');
   if (REPAIR_ONLY.test(t)) return 'repair';
@@ -289,7 +305,7 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   const size = knownSize(latestText) || knownSize(blob);
   // Customer words decide the fault. The stored symptom is only a backup, so an
   // internal label like "no display / backlight" cannot flip the price.
-  const kind = force || listKind(latestText) || listKind(users) || slotKind(thread);
+  const kind = force || (wantsLcdRepair(latestText, users) ? 'repair' : '') || listKind(latestText) || listKind(users) || slotKind(thread);
   if (!size) return '';
   if (!kind) {
     if (!asksPrice(latestText)) return '';
@@ -318,7 +334,7 @@ function listEstimate(latest, thread = {}, { force } = {}) {
 
 function wantsListedPrice(latest) {
   const t = String(latest || '');
-  return Boolean(knownSize(t) || asksPrice(t) || listKind(t));
+  return Boolean(knownSize(t) || asksPrice(t) || listKind(t) || REPAIR_WORD.test(t));
 }
 
 // A short table answer. No "Confirmed:". Do not ask the fault again once it is known.
@@ -452,6 +468,7 @@ function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
 
 module.exports = {
   lcdOptions,
+  wantsLcdRepair,
   PRICES,
   PRICE_RANGE,
   LCD_MOD,

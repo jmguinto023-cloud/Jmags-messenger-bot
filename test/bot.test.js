@@ -3295,7 +3295,7 @@ test('"repair lang" and "hindi palit lcd" quote the LCD repair, not the replacem
   try {
     const first = await send('magkano po palit lcd samsung 65');
     assert.match(first, /₱30,500/);
-    for (const ask of ['Kung repair lang magkano', 'Yung hndi palit lcd magkano', 'Repair modification']) {
+    for (const ask of ['Kung repair lang magkano', 'Yung hndi palit lcd magkano', 'Repair modification', 'pwede pa ba ayusin', 'paayos na lang po', 'fix lang po magkano', 'kaya pa ba yan']) {
       const reply = await send(ask);
       assert.match(reply, /₱9,500/, ask);
       assert.match(reply, /LCD repair \(modification\)/, ask);
@@ -3310,4 +3310,12 @@ test('a cracked screen asking for repair only is told modification does not appl
   const reply = listEstimate('repair lang po magkano', thread);
   assert.match(reply, /₱30,500/);
   assert.match(reply, /hindi na po applicable ang LCD repair\/modification/);
+});
+
+test('a repair word in a backlight chat keeps the backlight price, and "palit na lang" keeps the replacement', () => {
+  const { listEstimate } = require('../src/estimate');
+  const backlight = { history: [{ role: 'user', content: 'samsung 55 may sound pero walang display' }] };
+  assert.doesNotMatch(listEstimate('magkano repair', backlight), /LCD repair/);
+  const lcd = { history: [{ role: 'user', content: 'magkano po palit lcd samsung 65' }] };
+  assert.match(listEstimate('sige palit na lang magkano', lcd), /₱30,500/);
 });
