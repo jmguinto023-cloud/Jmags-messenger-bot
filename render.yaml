@@ -155,6 +155,9 @@ services:
       # Empty keeps the code default (15 requests per minute). 0 turns the gap off. A wait is capped at 20 seconds.
       - key: LLM_MAX_RPM
         sync: false
+      # true: OpenAI writes every normal reply in its own words; list prices and templates become facts it must use.
+      - key: AI_REASONS_FIRST
+        sync: false
       # Preferred customer model. Empty key means the OpenAI provider is skipped.
       - key: OPENAI_API_KEY
         sync: false

@@ -160,9 +160,8 @@ test('[[HANDOFF]] is stripped, the thread is closed, and the bot stops', async (
 
 test('after the gate, one price stays and power supply is not named', () => {
   const rules = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'rules.md'), 'utf8');
-  assert.match(rules, /₱1,000, deducted from the repair/);
-  assert.match(rules, /₱500 max/);
-  assert.match(rules, /₱500 off for check-ups booked within the week/);
+  assert.match(rules, /₱1,000, waived if they push through/);
+  assert.doesNotMatch(rules, /deducted|ibabawas|₱500 max|₱500 off/);
   assert.match(rules, /Manila: \+₱1,000/);
   assert.match(rules, /never "power supply" or "mainboard"/);
   const thread = { history: [], slots: {} };
@@ -248,4 +247,14 @@ test('basag then 65 no display magkano still gets a reply', async () => {
     assert.equal(Boolean(s.app.store.thread('after-basag').gateClosed), false);
     assert.doesNotMatch(next, /quote-gate handoff/);
   } finally { await s.close(); }
+});
+
+test('a clock time or a peso amount is never read as the TV size', () => {
+  const { knownSize } = require('../src/estimate');
+  assert.equal(knownSize('Samsung 55 inch po\n[Customer sent a video at 07:40 - RECEIVED, forwarded to the technician for review.]'), 55);
+  assert.equal(knownSize('[Customer sent a video at 10:50 - RECEIVED]'), 0);
+  assert.equal(knownSize('₱8,500 po ba talaga?'), 0);
+  assert.equal(knownSize('500 pesos lang'), 0);
+  assert.equal(knownSize('43 inches po, 10:30 ko sinend'), 43);
+  assert.equal(knownSize('TCL 40" po'), 40);
 });

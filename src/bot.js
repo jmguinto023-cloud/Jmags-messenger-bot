@@ -18,7 +18,7 @@ const {
 } = require('./ops');
 const { updateIntake, intakeContext, applyReplyGuard, CLOSE_LINE, isEchoOnly, nextAsk, questionTopic, QUESTIONS } = require('./intake');
 const { noteEvidence, nextEvidenceAsk, nextStep, coreReady, remindsMissingProof, declinesEvidence, steerTurn, ASK_VIDEO } = require('./evidence');
-const { rememberJob, shapeReply, isWait, WAIT_LINE, staffVoice, gatePassed, isCracked, isPanelPriceHandoff } = require('./quote-gate');
+const { rememberJob, shapeReply, shapeAiReply, isWait, WAIT_LINE, VIDEO_WAIT_LINE, staffVoice, gatePassed, isCracked, isPanelPriceHandoff } = require('./quote-gate');
 const {
   customerBrief, withWelcome, wantsBooking, saysFormDone, formUrlFor, formMessage,
   FORM_OK, FORM_MISSING, localJobs, submissionMatches, netlifySubmissions, phoneInThread,
@@ -1113,14 +1113,14 @@ class Bot {
   }
 
   // A weak model writes formal Tagalog essays. Rewrite once, then use a short template.
-  async fitModelReply(psid, raw) {
+  async fitModelReply(psid, raw, limits) {
     this.forceProvider = '';
     const parsed = parseHandoff(String(raw || ''));
-    if (!replyRejected(parsed.text)) return raw;
+    if (!replyRejected(parsed.text, limits)) return raw;
     let next = '';
     try {
       next = await this.llm.chat([
-        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 200 characters. Conversational Taglish with po and sir or maam. Do not restate the customer. No empathy. Do not use inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan. No emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
+        { role: 'system', content: 'Rewrite the draft as 2 or 3 short Messenger lines, under 200 characters. Conversational Taglish with po and sir or maam. Do not restate the customer. No empathy. Do not use inyong, ninyong, iyong, nararanasan, maaari, pasensya na, naiintindihan ko, or nauunawaan. At most one ":)" on good news, no other emoji. If the draft has [HANDOFF: reason], keep that tag on its own last line. Output only the reply.' },
         { role: 'user', content: String(raw).slice(0, 800) },
       ], { priority: 'high' });
       this.log.info(`rewrote long reply for ${short(psid)}`);
@@ -1128,7 +1128,7 @@ class Bot {
       this.log.warn('short rewrite failed', e.message);
     }
     const again = next ? parseHandoff(next) : null;
-    if (again && again.text && !replyRejected(again.text)) {
+    if (again && again.text && !replyRejected(again.text, limits)) {
       if (parsed.handoff) return `${again.text}\n[HANDOFF: ${parsed.reason || 'model'}]`;
       return again.text;
     }
@@ -1149,7 +1149,7 @@ class Bot {
       const lead = text.slice(0, nudgeAt).trim();
       return lead ? `${lead}\n${CHECKUP_NUDGE}` : CHECKUP_NUDGE;
     }
-    return capCustomerReply(text, 200);
+    return this.cfg.aiReasonsFirst ? capCustomerReply(text, 500, 6) : capCustomerReply(text, 200);
   }
 
   async replyWithAI(psid, ts) {
@@ -1179,14 +1179,16 @@ class Bot {
       });
       t.customerContext = brief.text;
       t.returning = brief.returning;
-      if (t.waiting && isWait(latestSoFar)) {
+      const lastBotText = String((t.history || []).filter((h) => h && h.role === 'assistant').map((h) => h.content || '').slice(-1)[0] || '');
+      const mediaAsked = Boolean(t.awaitingVideo) || /video|picture|litrato|photo|sticker/i.test(lastBotText);
+      if (t.waiting && isWait(latestSoFar, { mediaAsked })) {
         this.repliedRev.set(this.slot(psid), rev);
         return;
       }
-      if (isWait(latestSoFar)) {
+      if (isWait(latestSoFar, { mediaAsked })) {
         t.waiting = true;
         this.repliedRev.set(this.slot(psid), rev);
-        await this.send(psid, WAIT_LINE, { provider: 'rules' });
+        await this.send(psid, mediaAsked ? VIDEO_WAIT_LINE : WAIT_LINE, { provider: 'rules' });
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
@@ -1284,14 +1286,19 @@ class Bot {
       const canQuote = !hadMedia && !reviewPending(t) && !t.problemViaVideo;
       const listed = canQuote && wantsListedPrice(latestUser) ? listEstimate(latestUser, t) : '';
       const discount = discountReply(latestUser);
-      if (listed || discount) {
+      const aiFirst = Boolean(this.cfg.aiReasonsFirst);
+      // AI_REASONS_FIRST: the list price, a known-TV quote and the old template are facts for the model, not the reply.
+      const facts = aiFirst
+        ? [...new Set([listed, discount, canQuote ? quoteKnownTv(t) : '', prepared].map((x) => String(x || '').trim()).filter(Boolean))].join('\n\n')
+        : '';
+      if (!aiFirst && (listed || discount)) {
         this.repliedRev.set(this.slot(psid), rev);
         await this.send(psid, discount || listed, { provider: 'rules' });
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return;
       }
 
-      const priced = canQuote ? quoteKnownTv(t) : '';
+      const priced = canQuote && !aiFirst ? quoteKnownTv(t) : '';
       if (priced) {
         this.repliedRev.set(this.slot(psid), rev);
         await this.send(psid, priced, { provider: 'rules' });
@@ -1316,13 +1323,14 @@ class Bot {
           attachmentNote,
           intakeNote: [intakeContext(t), t.customerContext].filter(Boolean).join(' '),
           mediaStatus: mediaStatus(t),
-          preparedNote: prepared,
+          preparedNote: aiFirst ? '' : prepared,
+          facts,
         });
         if (this.llm && this.llm.lastProvider) {
           const modelName = this.llm.lastModel || '';
           this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}`);
         }
-        raw = await this.fitModelReply(psid, raw);
+        raw = await this.fitModelReply(psid, raw, aiFirst ? { maxChars: 500, maxLines: 6 } : undefined);
       } catch (e) {
         if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
         return this.giveUpOnAi(psid, e, { rev, hadMedia, hadVideo });
@@ -1343,7 +1351,7 @@ class Bot {
         latestUserText(t),
       );
       if (!handoff) guarded = await this.ensureNotEcho(psid, guarded, t);
-      if (asksBarePrice(latestUser) && !quoteKnownTv(t) && !/ilang inches|anong brand|depende po sa size/i.test(guarded)) {
+      if (!aiFirst && asksBarePrice(latestUser) && !quoteKnownTv(t) && !/ilang inches|anong brand|depende po sa size/i.test(guarded)) {
         guarded = varyRepeated(t, PRICE_ASK);
       }
       if (!asksForACall(latestUser) && /09\d{9}/.test(String(guarded || '')) && prepared) guarded = prepared;
@@ -1376,6 +1384,7 @@ class Bot {
             await this.handoff(psid, reason || 'model', this.presentReply(text) || lines.holding);
           }
         }
+        else if (aiFirst) await this.send(psid, this.presentReply(guarded), { aiDraft: true, facts });
         else await this.send(psid, this.presentReply(steerTurn(t, guarded, latestUser)));
       }
       if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
@@ -1458,7 +1467,9 @@ class Bot {
     let providerOpt = opts.provider;
     if (!opts.skipGate && !opts.ops && !opts.tips && !opts.videoFollowup) {
       rememberJob(thread);
-      const shaped = shapeReply(thread, clean, latestUserText(thread));
+      const shaped = opts.aiDraft && this.cfg.aiReasonsFirst
+        ? shapeAiReply(thread, clean, latestUserText(thread), opts.facts)
+        : shapeReply(thread, clean, latestUserText(thread));
       if (shaped.fallback && providerOpt == null) providerOpt = 'rules';
       if (shaped.handoff) {
         // closeGate false: cracked/panel price and a plain model [HANDOFF] stay open.

@@ -14,6 +14,8 @@ const RULES_PATH = path.join(__dirname, '..', 'prompts', 'rules.md');
 
 const MAGKANO_LINE = 'Para po masiguro namin ang tamang presyo, kailangan po muna namin makita ang video at model number. Hindi po kami nagbibigay ng presyo na hindi pa nakikita ang unit.';
 const WAIT_LINE = 'Sige po, hintayin po namin. Thank you po.';
+// Staff guide: when they will send the video later, do not ask again; tell them how to flag it.
+const VIDEO_WAIT_LINE = "Sige po, no problem. Pag na-send niyo na po ang video, type niyo lang po 'sent po' :)";
 const WARRANTY_ONLY = 'May warranty po ang repair namin. I-ko-confirm lang po ng staff namin ang exact coverage para sa unit ninyo.';
 const HANDOFF_LINE = 'I-che-check lang po ng staff namin ito at mag-me-message po sila sa inyo shortly.';
 // Cracked LCD: staff prices that fault only. The chat stays open for the next question.
@@ -85,12 +87,19 @@ function isMagkano(text) {
   return /\bmagkano\b|\bhow much\b|\bpresyo\b|\bprice\b/i.test(String(text || ''));
 }
 
-function isWait(text) {
+function isWait(text, { mediaAsked = false } = {}) {
   const t = String(text || '').trim();
   if (!t || /ibang shop|another shop/i.test(t)) return false;
-  return /^(?:teka|sandali|hintay|ipapadala ko pa|hahanapin ko pa)\b/i.test(t)
+  if (/^(?:teka|sandali|hintay|ipapadala ko pa|hahanapin ko pa)\b/i.test(t)
     || /^wala pa(?!\s+ba\b)/i.test(t)
-    || /\b(?:teka muna|sandali lang|hintay(?:in)? lang|ipapadala ko pa|hahanapin ko pa)\b/i.test(t);
+    || /\b(?:teka muna|sandali lang|hintay(?:in)? lang|ipapadala ko pa|hahanapin ko pa)\b/i.test(t)) return true;
+  // "Mamaya isend ko, nasa work ako", "pag uwi ko", "later po": they will send it later.
+  // Not a question and not a booking time ("mamaya po pwede kayo pumunta?").
+  if (/\?/.test(t) || /pumunta|punta|schedule|sched|book|technician|available/i.test(t)) return false;
+  // A bare "mamaya po" / "later" only means "I'll send it later" right after we asked for a video or photo;
+  // after "kailan po kayo free?" it is a booking time.
+  if (mediaAsked && /^(?:mamaya|later|maya-?maya|mamayang)\b[\s\S]{0,60}$/i.test(t)) return true;
+  return /\b(?:nasa\s+(?:work|trabaho|office|opisina|labas|byahe|biyahe)|wala\s+(?:pa\s+)?ako\s+sa\s+bahay|pag[\s-]*uwi(?:\s+ko)?|pagkauwi|pauwi\s+pa|busy\s+pa|send\s+ko\s+(?:mamaya|later|bukas|pag)|i-?send\s+ko\s+(?:mamaya|later|bukas|pag)|isend\s+ko\s+(?:mamaya|later|bukas|pag)|(?:mamaya|bukas|later)\s+(?:ko\s+)?(?:na\s+)?(?:po\s+)?i-?send)\b/i.test(t);
 }
 
 function isScheduleTalk(text) {
@@ -135,7 +144,7 @@ function rememberJob(thread) {
   }
   const latestFault = listKind(latestMsg);
   if (latestFault === 'replace' || isCracked(latestMsg)) s.symptom = 'cracked';
-  else if (latestFault === 'mod') s.symptom = 'lines';
+  else if (latestFault === 'mod' || latestFault === 'repair') s.symptom = 'lines';
   else if (latestFault === 'backlight') s.symptom = 'backlight';
   else if (isCracked(blob) && !s.symptom) s.symptom = 'cracked';
   else if (/nawala|walang (?:display|picture|ilaw)|no display|black screen|backlight|lines|linya|ayaw mag-?on|flicker|blink|kislap|kumikislap/i.test(blob) && !s.symptom) {
@@ -216,12 +225,13 @@ function flexiblePriceReply(thread, latest) {
 }
 
 function capWords(text) {
-  const canonical = [MAGKANO_LINE, WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
+  const canonical = [MAGKANO_LINE, WAIT_LINE, VIDEO_WAIT_LINE, WARRANTY_ONLY, HANDOFF_LINE, CRACKED_PRICE_LINE, SCHEDULE_HOLD, VIDEO_ACK, ASK_VIDEO, ASK_SIZE, ASK_BRAND, ASK_MODEL, ASK_CITY, ASK_BARANGAY, ASK_REPAIRED];
   let s = String(text || '');
   if (/Para mabigyan po namin kayo agad ng presyo/.test(s)) return s.trim();
   if (isPreparedPriceAnswer(s)) return s.trim();
   if (canonical.includes(s.trim())) return s;
   if (/^Nasa ₱/i.test(s) || /final po after makita ng staff/i.test(s)) return s.trim();
+  if (/^Para po sa \d+ inches:/.test(s)) return s.trim();
   // A booking-form message is sent whole. The word cap must not drop the link.
   if (/schedule form|booking form/i.test(s) && /https?:\/\//i.test(s)) return s.trim();
   const emoji = /\p{Extended_Pictographic}/gu;
@@ -316,7 +326,7 @@ function stripPersonNames(text) {
 function isSafeTemplate(text) {
   const t = String(text || '').trim();
   if (!t) return false;
-  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Nasa ₱', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
+  const leads = [NEED_FACTS_LINE, NEED_VIDEO_LINE, HOME_CHECKUP_FEE_ANSWER, CHECKUP_FEE_PLAIN, SHOP_CHECKUP_FEE_PLAIN, ASK_VIDEO, 'Pwede po pa-send ng video', 'Anong brand at size po ng TV sir?', 'Depende po sa sira sir', 'Pwede po sir. ₱1,000', 'Fixed price na po', 'Fixed po ang presyo', 'Para sa ', 'Para po sa ', 'Nasa ₱', CRACKED_PRICE_LINE, WARRANTY_ONLY, HANDOFF_LINE, WAIT_LINE, SCHEDULE_HOLD];
   return leads.some((lead) => t === lead || t.startsWith(lead));
 }
 
@@ -433,10 +443,58 @@ function legacyShape(thread, text, latest) {
   return { text: capWords(body), handoff: false, reason: reason[0] || '', silent: false };
 }
 
+// AI_REASONS_FIRST validator. The model's own words are kept. Only what breaks a hard rule is removed:
+// invented prices (anything not on the price list or in this turn's facts), staff names, a specific day or
+// clock time, a link before the gate. Warranty, anger and a correction still go to staff as before.
+function shapeAiReply(thread, text, latest, facts = '') {
+  rememberJob(thread);
+  const original = String(text || '');
+  const last = String(latest || '');
+  if (/warranty|garantiya|back-?job|backjob/i.test(last)
+      || /\b(?:galit|bwisit|tangina|putangina|leche|scam|reklamo)\b/i.test(last)
+      || /mali (?:po )?(?:yan|yun|yon)|hindi tama|mali po kayo|you(?:'re| are) wrong/i.test(last)) {
+    return { ...legacyShape(thread, original, last), fallback: true };
+  }
+  let handoff = false;
+  let reason = '';
+  const found = original.match(/\[+\s*HANDOFF\s*:?\s*([^\]]*)\]+/i);
+  if (found) { handoff = true; reason = (found[1] || '').trim() || 'model'; }
+  let body = stripPersonNames(staffVoice(stripWarrantyLength(original.replace(/\[+\s*HANDOFF\s*:?\s*[^\]]*\]+/gi, ''))));
+  // Never propose a day or a time. Asking when they are free is fine.
+  body = body
+    .replace(/\b(?:sa\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|lunes|martes|miyerkules|huwebes|biyernes|sabado|linggo)\b(?:\s+(?:ng\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?/gi, '')
+    .replace(/\b(?:alas\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, '');
+  if (!gatePassed(thread)) body = body.replace(/https?:\/\/\S+/gi, '');
+  // Only the check-up fees, this turn's facts, and the list rows for this customer's size. A price that is on
+  // the list for another size (₱25,000 is an 85" backlight) is still invented for this chat.
+  const allowed = new Set([300, 1000]);
+  const users = ((thread && thread.history) || []).filter((h) => h && h.role === 'user').map((h) => h.content || '').join('\n');
+  const size = knownSize(`${users}\n${last}`);
+  for (const key of ['backlight', 'lcdMod', 'lcdReplace']) {
+    const n = PRICE_TABLE && PRICE_TABLE[key] && PRICE_TABLE[key][size];
+    if (Number(n) >= 100) allowed.add(Math.round(Number(n)));
+  }
+  String(facts || '').replace(/₱\s?(\d{1,3}(?:,\d{3})+|\d+)/g, (m, raw) => { allowed.add(pesoValue(raw)); return m; });
+  let invented = false;
+  body = body.replace(/₱\s?(\d{1,3}(?:,\d{3})+|\d+)/g, (full, raw) => {
+    if (allowed.has(pesoValue(raw))) return full;
+    invented = true;
+    return '';
+  });
+  if (bannedPart(body) && !bannedPart(`${last}\n${facts}`)) body = body.replace(/power supply|mainboard|motherboard/gi, 'reprogramming');
+  body = body.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').replace(/\.{2,}/g, '.').replace(/\n{3,}/g, '\n\n').trim();
+  const fallbackText = String(facts || '').split('\n\n')[0].trim();
+  if (invented || !body) {
+    if (fallbackText) return { text: fallbackText, handoff: false, reason: '', silent: false, closeGate: false, fallback: true };
+    return { ...legacyShape(thread, original, last), fallback: true };
+  }
+  return { text: body, handoff, reason, silent: false, closeGate: false, fallback: false };
+}
+
 // Validator. A clean model draft is kept. A draft that breaks a hard rule falls back to the old template.
 function shapeReply(thread, text, latest) {
   rememberJob(thread);
-  if (/^Nasa ₱/i.test(String(text || '')) || /^Para sa \d/i.test(String(text || ''))) {
+  if (/^Nasa ₱/i.test(String(text || '')) || /^Para (?:po )?sa \d/i.test(String(text || ''))) {
     return { text: String(text || '').trim(), handoff: false, reason: '', silent: false, closeGate: false, fallback: false };
   }
   if (gatePassed(thread) && /https?:\/\//i.test(text) && /form|book|schedule/i.test(text)) {
@@ -466,10 +524,12 @@ function shapeReply(thread, text, latest) {
 
 module.exports = {
   rulesText,
+  shapeAiReply,
   MAGKANO_LINE,
   NEED_VIDEO_LINE,
   NEED_FACTS_LINE,
   WAIT_LINE,
+  VIDEO_WAIT_LINE,
   WARRANTY_ONLY,
   HANDOFF_LINE,
   CRACKED_PRICE_LINE,

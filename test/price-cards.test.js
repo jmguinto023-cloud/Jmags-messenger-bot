@@ -33,7 +33,7 @@ test('a size where backlight and LCD mod share a price needs the word to pick on
 });
 
 test('a check-up fee answer is recognized and a repair quote is not', () => {
-  assert.equal(answersCheckupFee('₱1,000 po ang check-up fee sa bahay, ibabawas po ito sa repair kung itutuloy nyo po.'), true);
+  assert.equal(answersCheckupFee('₱1,000 po ang check-up fee sa bahay, waived po ito kapag itinuloy ang repair.'), true);
   assert.equal(answersCheckupFee('₱300 po ang check-up kapag dadalhin ninyo ang TV sa shop.'), true);
   assert.equal(answersCheckupFee('Depende po sa sira na makikita sa video.'), false);
   assert.equal(answersCheckupFee('Possible backlight po, ₱6,000.'), false);

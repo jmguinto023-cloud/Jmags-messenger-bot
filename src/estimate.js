@@ -162,13 +162,14 @@ const SIZE_PHRASES = [
 
 // The rightmost size in the text wins, so a later "32 inches" beats an earlier 65.
 function knownSize(text) {
-  const s = String(text || '').toLowerCase();
+  // Blank out clock times ("video at 07:40") so the minutes never read as inches. Same length keeps positions.
+  const s = String(text || '').toLowerCase().replace(/\b\d{1,2}:\d{2}\b/g, (t) => ' '.repeat(t.length));
   let best = { at: -1, n: 0 };
   for (const [phrase, n] of SIZE_PHRASES) {
     const at = s.lastIndexOf(phrase);
     if (at > best.at) best = { at, n };
   }
-  const re = /\b(32|40|43|48|49|50|55|60|65|70|75|80|85)\s*(?:["”″]|''|inches?|in\b|pulgada)?/gi;
+  const re = /(?<![\d,.₱])\b(32|40|43|48|49|50|55|60|65|70|75|80|85)(?!\d)\s*(?:["”″]|''|inches?|in\b|pulgada)?/gi;
   let m;
   while ((m = re.exec(s))) {
     if (m.index >= best.at) best = { at: m.index, n: Number(m[1]) };
@@ -231,13 +232,57 @@ function priceHint(size) {
   return `Price for this chat only: ${n}" ${bits.join(', ')}. List estimate only. Final after staff sees the video.`;
 }
 
+// "repair lang", "ayusin lang", "hindi palit LCD", "repair modification": the customer wants the
+// LCD repaired (modification), not replaced. Checked before "palit lcd" so a "hindi" is not ignored.
+const REPAIR_ONLY = /\b(?:repair|ayos|ayusin|ipaayos|paayos|gawa|gawin|pagawa|modif\w*)\s+(?:lang|only|muna|na lang)\b|\b(?:hindi|hndi|hnd|hinde|di|wag|huwag|ayaw|ayoko)\s+(?:na\s+|po\s+|muna\s+)*(?:mag[\s-]*)?(?:pa[\s-]*)?palit|\brepair\s+(?:modification|lcd)|\blcd\s+(?:repair|modification)|\bmodification\b|\bnot\s+replace/i;
+
+// Any word that means "fix it" rather than "replace it".
+const REPAIR_WORD = /\b(?:repair\w*|ni-?repair|ayos\w*|ayusin|maayos|inayos|paayos|ipaayos|pa-?ayos|pagawa|ipagawa|magpagawa|gawa(?:in)?|gawin|ginawa|fix\w*|modif\w*|i-?modify|remedyo|remedy|kaya\s+pa(?:\s+ba)?|pwede\s+pa(?:\s+ba)?\s+(?:ma)?(?:ayos|gawa|repair))\b/i;
+// "palit/replace" that is not negated ("hindi palit" is a repair request).
+const WANTS_REPLACE = /(?<!\b(?:hindi|hndi|hnd|hinde|di|wag|huwag|ayaw|ayoko|not)\s+(?:na\s+|po\s+|muna\s+)*(?:mag[\s-]*)?(?:pa[\s-]*)?)\b(?:palit\w*|papalitan|replace\w*|bago\s+na\s+lcd|brand\s*new\s+lcd)/i;
+const LCD_CONTEXT = /\blcd\b|\blines?\b|linya|basag|cracked|palit|dots|tuldok|kulay|blue screen|gumuguhit|bar\s?line|modif/i;
+
+// Power supply / motherboard named by the customer ("power supply pumutok", "board"). A plain "ayaw mag-on" is not
+// quoted here (owner rule: ask for the video, do not name the part). Checked on the latest message first,
+// so an earlier "basag" or "palit lcd" in the chat cannot turn this into an LCD price.
+const POWER_FAULT = /power\s*supply|\bpsu\b|\bsupply\b|pumutok|pumuputok|sumabog|amoy\s+sunog|nasunog|motherboard|mother\s*board|mainboard|main\s*board|\bboard\b/i;
+
+function powerQuote(text, size, label) {
+  const t = String(text || '');
+  const n = parseInt(size, 10);
+  const board = /motherboard|mother\s*board|mainboard|main\s*board|\bboard\b/i.test(t);
+  const psu = /power\s*supply|\bpsu\b|\bsupply\b/i.test(t);
+  const nums = (board && !psu ? [MOBO_BASIC[n], MOBO_SMART[n]]
+    : psu && !board ? [PSU_BASIC[n], PSU_SMART[n]]
+      : [PSU_BASIC[n], PSU_SMART[n], MOBO_BASIC[n], MOBO_SMART[n]]).filter((v) => Number(v) > 0);
+  if (!nums.length) return '';
+  const low = Math.min(...nums);
+  const high = Math.max(...nums);
+  const money = low === high ? phpAmount(low) : `${phpAmount(low)}–${phpAmount(high)}`;
+  const what = board && !psu ? 'motherboard' : psu && !board ? 'power supply' : 'power supply o motherboard';
+  return `Nasa ${money} po ang repair ng ${what} para sa ${label}, depende kung smart o basic TV. Estimate po iyan, final po after makita ng staff ang video.`;
+}
+
+// A repair word in an LCD chat asks for the LCD repair (modification), unless they explicitly want a replacement.
+function wantsLcdRepair(latest, users) {
+  const t = String(latest || '');
+  if (!REPAIR_WORD.test(t) || WANTS_REPLACE.test(t) || POWER_FAULT.test(t)) return false;
+  if (/backlight|walang ilaw|flicker|kislap/i.test(t)) return false;
+  const lcdChat = LCD_CONTEXT.test(t) || LCD_CONTEXT.test(String(users || ''));
+  const backlightChat = !LCD_CONTEXT.test(t) && /backlight|walang ilaw|flicker|kislap|(?:sound|tunog)[\s\S]*(?:walang display|black screen)/i.test(String(users || ''));
+  return lcdChat && !backlightChat;
+}
+
 function listKind(text) {
   const t = String(text || '');
+  if (REPAIR_ONLY.test(t)) return 'repair';
   if (/basag|cracked|smashed|broken lcd|durog|palit lcd|lcd replacement|replace(?:ment)? lcd/i.test(t)) return 'replace';
   // Sound with a dark screen is a backlight fault, same as walang ilaw.
   const dark = /walang (?:display|picture|ilaw)|no (?:display|picture)|black screen/i.test(t);
   if (FLICKER.test(t) || ((/sound|tunog/i.test(t) && dark))) return 'backlight';
   if (/may linya|\blinya\b|\blines\b|lcd modification|\bmodif|no display|walang (?:display|picture)/i.test(t)) return 'mod';
+  // Dots or colors and blue screen are LCD faults (Meta guide). A bare "LCD" price ask gets both LCD options.
+  if (/\blcd\b|dots|tuldok|iba[\s'-]*ibang kulay|blue screen|asul na screen/i.test(t)) return 'mod';
   if (/backlight|walang ilaw/i.test(t)) return 'backlight';
   return '';
 }
@@ -251,6 +296,19 @@ function sizeOptions(size) {
   ].filter(Boolean);
   if (!bits.length) return '';
   return `Para sa ${size}": ${bits.join(', ')}. Ano po ang sira, backlight, may lines, o basag?`;
+}
+
+// Meta-guide LCD answer: both options for the size, all-in, then ask for the video.
+// Sent whole (quote-gate passes lines starting "Para po sa N inches:"). ":)" is text, not an emoji.
+function lcdOptions(size) {
+  if (!LCD_MOD[size] || !LCD_REPLACE[size]) return '';
+  return [
+    `Para po sa ${size} inches:`,
+    `LCD MODIFICATION: ${phpAmount(LCD_MOD[size])}, para sa unit na pwede pang i-modify depende sa aktwal na sira.`,
+    `BRAND NEW LCD REPLACEMENT: ${phpAmount(LCD_REPLACE[size])}, palit ng bagong LCD para sa basag o sirang panel.`,
+    'Kasama na po sa presyo ang home service, labor, travel at warranty :)',
+    'Estimate po ito, final po after makita ng staff ang video. Pwede po pa-send ng short video ng TV habang naka-on?',
+  ].join('\n');
 }
 
 function slotKind(thread = {}) {
@@ -268,11 +326,27 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   const size = knownSize(latestText) || knownSize(blob);
   // Customer words decide the fault. The stored symptom is only a backup, so an
   // internal label like "no display / backlight" cannot flip the price.
-  const kind = force || listKind(latestText) || listKind(users) || slotKind(thread);
+  const kind = force || (POWER_FAULT.test(latestText) && !/basag|cracked|\blcd\b|lines?\b|linya/i.test(latestText) ? 'power' : '') || (wantsLcdRepair(latestText, users) ? 'repair' : '') || listKind(latestText) || listKind(users) || slotKind(thread);
   if (!size) return '';
   if (!kind) {
     if (!asksPrice(latestText)) return '';
     return sizeOptions(size);
+  }
+  if (kind === 'mod') {
+    const both = lcdOptions(size);
+    if (both) return both;
+  }
+  if (kind === 'power') {
+    return powerQuote(latestText, size, unitLabel(`${latestText}\n${blob}`, size));
+  }
+  if (kind === 'repair') {
+    const label = unitLabel(`${latestText}\n${blob}`, size);
+    // A cracked screen cannot be modified (staff guide). Say so instead of quoting a repair.
+    if (/basag|cracked|smashed|durog|nabato|nabagsak/i.test(users + '\n' + latestText) && LCD_REPLACE[size]) {
+      return `Nasa ${phpAmount(LCD_REPLACE[size])} po ang palit LCD para sa ${label}. Kapag basag po ang screen, hindi na po applicable ang LCD repair/modification, palit LCD na po ang option. Final po after makita ng staff ang video.`;
+    }
+    if (!LCD_MOD[size]) return '';
+    return `Nasa ${phpAmount(LCD_MOD[size])} po ang LCD repair (modification) para sa ${label}, hindi palit LCD. Estimate po iyan, final po after makita ng staff ang video.`;
   }
   const label = unitLabel(`${latestText}\n${blob}`, size);
   const price = kind === 'replace' ? LCD_REPLACE[size] : kind === 'mod' ? LCD_MOD[size] : BACKLIGHT[size];
@@ -284,7 +358,7 @@ function listEstimate(latest, thread = {}, { force } = {}) {
 
 function wantsListedPrice(latest) {
   const t = String(latest || '');
-  return Boolean(knownSize(t) || asksPrice(t) || listKind(t));
+  return Boolean(knownSize(t) || asksPrice(t) || listKind(t) || REPAIR_WORD.test(t) || POWER_FAULT.test(t));
 }
 
 // A short table answer. No "Confirmed:". Do not ask the fault again once it is known.
@@ -417,6 +491,8 @@ function scriptedReply(latest, thread = {}, { allowPrice = true } = {}) {
 }
 
 module.exports = {
+  lcdOptions,
+  wantsLcdRepair,
   PRICES,
   PRICE_RANGE,
   LCD_MOD,

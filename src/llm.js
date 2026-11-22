@@ -63,12 +63,27 @@ class LLM {
     return this._prompt;
   }
 
-  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus, preparedNote } = {}) {
+  // Full JMAG's orientation for a model with a large context (OpenAI): the whole guide,
+  // brand-new reference, business rules and behavior bank, then the current rules, which win.
+  richPrompt(history) {
+    return [
+      "# JMAG's Appliances orientation (background: who we are, how our staff talk, how a chat goes)",
+      this.systemPrompt(),
+      fs.readFileSync(path.join(__dirname, '..', 'prompts', 'staff-playbook.md'), 'utf8').trim(),
+      HUMAN_VOICE,
+      '# CURRENT RULES. These override anything above, including older examples that quote a price before the video.',
+      compactPrompt(history, this.cfg),
+    ].join('\n\n');
+  }
+
+  async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus, preparedNote, facts } = {}) {
     if (!this.configured()) throw new Error('LLM not configured (LLM_BASE_URL / LLM_MODEL missing)');
     const fallback = String(preparedNote || '').trim();
+    const factText = String(facts || '').trim();
     const messages = [
-      { role: 'system', content: compactPrompt(history, this.cfg) },
+      { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt(history) },
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Answer the customer's latest question first, in 1 to 3 short Taglish sentences, with po. Then ask at most one next-step question. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line and still answer the question. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}${fallback ? ` Safe fallback if a rule blocks your draft: ${fallback}` : ''}`.trim() },
+      ...(factText ? [{ role: 'system', content: `FACTS FOR THIS REPLY (exact, from JMAG's price list and rules): ${factText}\nUse these peso amounts exactly if you mention a price; never any other amount. Do not copy these sentences. Answer in your own words like JMAG's staff: what the problem most likely is and why (say "possible" unless it is clear), what the repair involves and includes, then one useful next question.` }] : []),
       ...normalizeTurns(history, { attachmentNote }),
     ];
     return this.chat(messages, { priority: 'high' });
@@ -86,7 +101,7 @@ class LLM {
       ? ' They were asked for a video and have not sent it. Remind them to send the video.'
       : '';
     const messages = [
-      { role: 'system', content: compactPrompt(history, this.cfg) },
+      { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt(history) },
       { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-3 short lines, under 200 characters, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
       ...turns,
     ];
@@ -156,7 +171,8 @@ class LLM {
     const res = await fetch(`${this.cfg.llmBaseUrl}/chat/completions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(this.payload(messages)),
+      // richContent is only for the router's OpenAI provider.
+      body: JSON.stringify(this.payload(messages.map(({ richContent, ...m }) => m))),
       signal: AbortSignal.timeout(this.cfg.llmTimeoutMs),
     });
     const raw = await res.text();
@@ -214,6 +230,24 @@ function parseHandoff(raw) {
   const text = raw.replace(re, '').replace(/\n{3,}/g, '\n\n').trim();
   return { text, handoff: reason !== null, reason: reason || '' };
 }
+const HUMAN_VOICE = [
+  '# Sound like a real JMAG\'s staff member, not a bot',
+  '- Write the way a friendly JMAG\'s staff member types on Messenger: casual Taglish, po and sir or maam, short lines.',
+  '- React to what they actually said before the next step, in a few words, the way a person would. Use their details (brand, size, sira) naturally.',
+  '- Vary your wording from reply to reply. Do not reuse the same opener or the same sentence you already sent in this chat.',
+  '- Explain the why in plain words when you ask for something (for example, the video helps the technician see the sira so the price is exact).',
+  '- If they joke, thank you, or chat, answer like a person first, then continue.',
+  '- Still follow every current rule below: one question at a time, no empathy paragraph, no restating their whole message, no made-up prices.',
+].join('\n');
+
+const AI_REASONS_FIRST = [
+  '# You answer the customer yourself (this overrides the handoff lists above)',
+  '- Think about the TV problem like an experienced JMAG technician and explain it in plain Taglish: the likely cause, why, what the repair involves. Say "possible" when it is not certain.',
+  '- Do not say "itatanong ko sa staff/technician" or hand off just because a question is technical, a price is not on file, or you are unsure of a detail. Give your best explanation and ask for the video or the model sticker so the technician can confirm.',
+  '- Hand off ([HANDOFF: reason]) ONLY for: a complaint or angry customer, warranty or backjob or refund, a discount or tawad request, the customer asking for a person or a call, a non-TV appliance or a CRT, or a booking that is ready for the form.',
+  '- Prices: use only the peso amounts in the FACTS or the price line for this chat. Never propose a day or a time.',
+].join('\n');
+
 function businessRulesText() {
   const file = path.join(__dirname, '..', 'prompts', 'business-rules.md');
   return fs.readFileSync(file, 'utf8').trim();
@@ -252,6 +286,7 @@ function compactPrompt(history, cfg = {}) {
     businessRulesText(),
   ];
   if (url) lines.push(bookingFormMessage(url));
+  if (cfg.aiReasonsFirst) lines.push(AI_REASONS_FIRST);
   return lines.join('\n');
 }
 

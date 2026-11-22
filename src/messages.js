@@ -10,23 +10,23 @@ function bookingFormMessage(url) {
 const FORMAL_REPLY = /\b(?:inyong|ninyong|iyong|nararanasan|maaari)\b|pasensya na|naiintindihan ko|nauunawaan/i;
 const SAFE_TEMPLATE = 'Sige po sir. Anong brand at size po ng TV, at ano pong sira?';
 
-function capCustomerReply(text, limit = 200) {
+function capCustomerReply(text, limit = 200, maxLines = 3) {
   const max = Number(limit) > 0 ? Number(limit) : 200;
   let s = String(text || '').replace(/\p{Extended_Pictographic}/gu, '');
   s = s.replace(/[ \t]+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n').trim();
-  s = s.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 3).join('\n');
+  s = s.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, maxLines).join('\n');
   if (s.length <= max) return s;
   const cut = s.slice(0, max);
   const at = Math.max(cut.lastIndexOf('\n'), cut.lastIndexOf('. '), cut.lastIndexOf('? '));
   return (at >= 40 ? cut.slice(0, at + 1) : cut).trim();
 }
 
-function replyRejected(text) {
+function replyRejected(text, { maxChars = 200, maxLines = 3 } = {}) {
   const s = String(text || '').trim();
   if (!s) return false;
   if (FORMAL_REPLY.test(s)) return true;
   const count = s.split('\n').map((line) => line.trim()).filter(Boolean).length;
-  return s.length > 200 || count > 3;
+  return s.length > maxChars || count > maxLines;
 }
 
 // CRT, tube, and other non-flatscreen units. Do not guess whether JMAG repairs them.

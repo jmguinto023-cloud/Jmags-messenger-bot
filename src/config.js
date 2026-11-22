@@ -62,6 +62,9 @@ function loadConfig(env = process.env) {
     // Hybrid AI: opt-in only. Never send customer data externally by default.
     aiRouterEnabled: bool(env.AI_ROUTER_ENABLED, false),
     aiSmartRulesEnabled: bool(env.AI_SMART_RULES_ENABLED, false),
+    // OpenAI writes every normal reply in its own words. Price-list answers and templates become facts it must use,
+    // and the validator trims invented prices, names and day/time offers instead of swapping in a template.
+    aiReasonsFirst: bool(env.AI_REASONS_FIRST, false),
     aiAllowExternalData: bool(env.AI_EXTERNAL_DATA_ALLOWED, false),
     // Groq only. Gemini is used only when AI_PROVIDER_ORDER lists it, for example groq,gemini.
     aiProviderOrder: env.AI_PROVIDER_ORDER || 'groq',

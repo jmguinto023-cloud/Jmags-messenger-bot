@@ -1,5 +1,6 @@
 'use strict';
-// Space out LLM calls and read provider retry hints (Retry-After, Gemini retryDelay).
+// Space out the start of LLM calls (calls themselves run in parallel) and read provider
+// retry hints (Retry-After, Gemini retryDelay).
 
 function parseDelayMs(value, now = Date.now()) {
   if (value == null || value === '') return null;
@@ -62,11 +63,11 @@ class LlmGate {
         if (this.maxWaitMs > 0 && wait > this.maxWaitMs) wait = this.maxWaitMs;
         if (wait > 0) await this.sleep(wait);
         this.nextAt = this.now() + this.minGap;
-        try {
-          job.resolve(await job.fn());
-        } catch (e) {
-          job.reject(e);
-        }
+        // Only the START of each call is spaced. Do not wait for it to finish, so one slow
+        // customer (retries, model fallback) never holds up replies to other customers.
+        let started;
+        try { started = Promise.resolve(job.fn()); } catch (e) { started = Promise.reject(e); }
+        started.then(job.resolve, job.reject);
       }
     } finally {
       this.running = false;

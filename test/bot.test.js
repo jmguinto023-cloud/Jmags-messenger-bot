@@ -1056,7 +1056,7 @@ test('lines on a known size quote LCD modification without a checkup essay', asy
   try {
     await s.post(msg('rng', { text: 'may lines po sa TCL 40 inch, taga Cabuyao' }));
     const text = s.mock.calls.messages[0].message.text;
-    assert.match(text, /Nasa ₱4,500 po ang LCD modification para sa TCL 40/);
+    assert.match(text, /Para po sa 40 inches:\nLCD MODIFICATION: ₱4,500[\s\S]*BRAND NEW LCD REPLACEMENT: ₱10,000/);
     assert.doesNotMatch(text, /Cabuyao|9,000/);
   } finally { await s.close(); }
 });
@@ -1092,7 +1092,7 @@ test('a sized no-display price question quotes the LCD modification list price',
   try {
     await s.post(msg('pre-video', { text: '65 no display magkano' }));
     const text = s.mock.calls.messages.map((m) => m.message.text || '').join('\n');
-    assert.match(text, /Nasa ₱9,500 po ang LCD modification/);
+    assert.match(text, /LCD MODIFICATION: ₱9,500[\s\S]*BRAND NEW LCD REPLACEMENT: ₱30,500/);
     assert.match(text, /final po after makita ng staff ang video/i);
     assert.doesNotMatch(text, /11,?000|8,?500/);
   } finally { await s.close(); }
@@ -2658,12 +2658,14 @@ test('LLM retries honor Retry-After and Gemini retryDelay, and fresh replies go 
   let release;
   const blocker = new Promise((r) => { release = r; });
   const gate = new LlmGate({ rpm: 0, sleep: async () => {} });
-  const low = gate.schedule(async () => { await blocker; order.push('low'); }, { priority: 'low' });
+  const low = gate.schedule(async () => { order.push('low start'); await blocker; order.push('low'); }, { priority: 'low' });
   const high = gate.schedule(async () => { order.push('high'); }, { priority: 'high' });
   const low2 = gate.schedule(async () => { order.push('low2'); }, { priority: 'low' });
+  // A slow call no longer blocks the others, and the fresh reply still starts before the queued follow-up.
+  await Promise.all([high, low2]);
   release();
-  await Promise.all([low, high, low2]);
-  assert.deepEqual(order, ['low', 'high', 'low2']);
+  await low;
+  assert.deepEqual(order, ['low start', 'high', 'low2', 'low']);
 });
 
 test('failed follow-ups back off, old chats are skipped, and startup does not send them all', async () => {
@@ -2829,7 +2831,7 @@ test('the ten live messages get short rule answers instead of a model essay', as
 
     await send('live-8', 'Astron 40 may linya');
     const price = await send('live-8', 'magkano po kaya');
-    assert.match(price, /Nasa ₱4,500 po ang LCD modification para sa Astron 40/);
+    assert.match(price, /Para po sa 40 inches:\nLCD MODIFICATION: ₱4,500[\s\S]*BRAND NEW LCD REPLACEMENT/);
     assert.match(price, /final po after makita ng staff ang video/i);
 
     const disc = await send('live-9', 'pa discount naman po');
@@ -2840,7 +2842,8 @@ test('the ten live messages get short rule answers instead of a model essay', as
     assert.equal(Boolean(s.app.store.thread('live-9').handedOff), false);
 
     assert.ok(s.mock.calls.llm.length > 0);
-    for (const text of s.mock.calls.messages.map((m) => m.message.text)) {
+    // The two-option LCD price block (Meta guide format) is the one prepared answer allowed to be longer.
+    for (const text of s.mock.calls.messages.map((m) => m.message.text).filter((t) => !/^Para po sa \d+ inches:/.test(t))) {
       assert.ok(text.length <= 200, text);
       assert.ok(text.split('\n').filter(Boolean).length <= 3, text);
       assert.doesNotMatch(text, /\b(?:inyong|ninyong|iyong|nararanasan|maaari)\b|pasensya na|naiintindihan ko|nauunawaan/i);
@@ -3279,5 +3282,108 @@ test('by default a handoff keeps the thread with the bot instead of passing it t
     await s.post(msg('keep-1', { text: 'gusto ko makausap ang tao' }, t0));
     assert.equal(s.app.store.thread('keep-1').handedOff, true);
     assert.equal(s.mock.calls.pass.length, 0);
+  } finally { await s.close(); }
+});
+
+test('"repair lang" and "hindi palit lcd" quote the LCD repair, not the replacement (live test chat)', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Pwede po kami mag-serve sa Manila. Anong brand at model number ng TV?';
+  const send = async (text) => {
+    await s.post(msg('jmag', { text }));
+    return s.mock.calls.messages.map((m) => m.message.text).filter(Boolean).at(-1);
+  };
+  try {
+    const first = await send('magkano po palit lcd samsung 65');
+    assert.match(first, /₱30,500/);
+    for (const ask of ['Kung repair lang magkano', 'Yung hndi palit lcd magkano', 'Repair modification', 'pwede pa ba ayusin', 'paayos na lang po', 'fix lang po magkano', 'kaya pa ba yan']) {
+      const reply = await send(ask);
+      assert.match(reply, /₱9,500/, ask);
+      assert.match(reply, /LCD repair \(modification\)/, ask);
+      assert.doesNotMatch(reply, /₱30,500/, ask);
+    }
+  } finally { await s.close(); }
+});
+
+test('a cracked screen asking for repair only is told modification does not apply', () => {
+  const { listEstimate } = require('../src/estimate');
+  const thread = { history: [{ role: 'user', content: 'basag po yung screen ng samsung 65' }] };
+  const reply = listEstimate('repair lang po magkano', thread);
+  assert.match(reply, /₱30,500/);
+  assert.match(reply, /hindi na po applicable ang LCD repair\/modification/);
+});
+
+test('a repair word in a backlight chat keeps the backlight price, and "palit na lang" keeps the replacement', () => {
+  const { listEstimate } = require('../src/estimate');
+  const backlight = { history: [{ role: 'user', content: 'samsung 55 may sound pero walang display' }] };
+  assert.doesNotMatch(listEstimate('magkano repair', backlight), /LCD repair/);
+  const lcd = { history: [{ role: 'user', content: 'magkano po palit lcd samsung 65' }] };
+  assert.match(listEstimate('sige palit na lang magkano', lcd), /₱30,500/);
+});
+
+test('"mamaya isend ko, nasa work ako" after a video ask gets one wait line, then silence (live test chat)', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Pwede po pa-send ng video ng TV habang naka-on?';
+  const texts = () => s.mock.calls.messages.map((m) => m.message.text).filter(Boolean);
+  try {
+    await s.post(msg('later', { text: 'hello po sira tv ko' }));
+    assert.match(texts().at(-1), /video/);
+    const before = texts().length;
+    await s.post(msg('later', { text: 'Mamaya isend ko nasa work ako' }));
+    assert.equal(texts().at(-1), "Sige po, no problem. Pag na-send niyo na po ang video, type niyo lang po 'sent po' :)");
+    const afterWait = texts().length;
+    assert.equal(afterWait, before + 1);
+    await s.post(msg('later', { text: 'Mamaya po' }));
+    assert.equal(texts().length, afterWait, 'no second video ask');
+    assert.doesNotMatch(texts().join('\n').split("type niyo lang po 'sent po'")[1] || '', /Pwede po pa-send ng video/);
+  } finally { await s.close(); }
+});
+
+test('"mamaya po" or "bukas po" without a video ask is not a wait', () => {
+  const { isWait } = require('../src/quote-gate');
+  assert.equal(isWait('Mamaya po'), false);
+  assert.equal(isWait('bukas po', { mediaAsked: true }), false);
+  assert.equal(isWait('mamaya po pwede kayo pumunta?', { mediaAsked: true }), false);
+  assert.equal(isWait('nasa work pa ako'), true);
+  assert.equal(isWait('bukas ko na isend'), true);
+});
+
+test('"power supply pumutok" after an LCD chat quotes the power supply, not the LCD (live test chat)', () => {
+  const { listEstimate } = require('../src/estimate');
+  const thread = { history: [
+    { role: 'user', content: 'magkano po palit lcd samsung 65' },
+    { role: 'user', content: 'Kapag basag naman magkano?' },
+  ] };
+  const psu = listEstimate('Kapag power supply pumutok magkano?', thread);
+  assert.match(psu, /^Nasa ₱9,000–₱11,500 po ang repair ng power supply para sa Samsung 65/);
+  assert.doesNotMatch(psu, /30,500|LCD/);
+  assert.match(listEstimate('motherboard naman magkano', thread), /motherboard/);
+  assert.match(listEstimate('Kapag basag naman magkano?', thread), /₱30,500/);
+});
+
+test('AI_REASONS_FIRST: OpenAI explains in its own words, list prices are facts, invented prices fall back', async () => {
+  const s = await setup({ AI_REASONS_FIRST: 'true' });
+  const texts = () => s.mock.calls.messages.map((m) => m.message.text).filter(Boolean);
+  const reasoning = 'Base po sa sinabi nyo, possible na sira na po ang panel ng LCD kaya may linya. '
+    + 'Ang LCD modification po ay ₱9,500 para sa 65", inaayos po ang koneksyon ng panel imbes na palitan, kasama na po ang home service at warranty. '
+    + 'Pwede po pa-send ng short video habang naka-on para ma-confirm ng technician?';
+  try {
+    s.mock.state.llmResponder = () => reasoning;
+    await s.post(msg('aif', { text: 'Samsung 65 may linya po, magkano repair?' }));
+    const call = s.mock.calls.llm.at(-1).body.messages.map((m) => m.content).join('\n');
+    assert.match(call, /FACTS FOR THIS REPLY[\s\S]*₱9,500/, 'list price is given to the model as a fact');
+    assert.match(call, /You answer the customer yourself/);
+    assert.equal(texts().at(-1), reasoning.replace('ng technician?', 'ng staff po namin?'), 'the model reply is sent whole (staff voice), not swapped for a template');
+
+    s.mock.state.llmResponder = () => 'Nasa ₱25,000 po iyan sir. Kailan po kayo free?';
+    await s.post(msg('aif', { text: 'magkano po lahat?' }));
+    assert.doesNotMatch(texts().at(-1), /25,000/, 'an invented price never goes out');
+
+    s.mock.state.llmResponder = () => 'Possible po na power board ang problema. Pwede po kami pumunta sa Sabado 9am.';
+    await s.post(msg('aif', { text: 'bakit po kaya nag-off bigla?' }));
+    assert.doesNotMatch(texts().at(-1), /Sabado|9am/i, 'no day or time is proposed');
+    assert.match(texts().at(-1), /Possible po/);
+
+    await s.post(msg('aif', { text: 'covered pa po ba ng warranty yung repair nyo dati?' }));
+    assert.equal(s.app.store.thread('aif').handedOff, true, 'warranty still goes to staff');
   } finally { await s.close(); }
 });

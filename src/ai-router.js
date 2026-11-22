@@ -158,8 +158,16 @@ class AiRouter {
   }
 
   async ask(provider, payload) {
-    const reqPayload = sanitizePayload({ ...payload, model: provider.model },
+    // A provider with a large context (OpenAI) gets the full orientation in richContent.
+    // Others (Groq) get the compact prompt; the full one is too big for them (HTTP 413).
+    // richContent is fixed shop text (it holds the shop's own phone numbers), so it is put in
+    // after redaction. Customer turns are still redacted.
+    const useRich = provider.name === 'openai';
+    const original = payload.messages || [];
+    const clean = sanitizePayload({ ...payload, messages: original.map(({ richContent, ...m }) => m), model: provider.model },
       this.redactPII && provider.thirdParty);
+    const reqPayload = { ...clean, messages: clean.messages.map((m, i) => (
+      useRich && original[i] && original[i].richContent ? { ...m, content: original[i].richContent } : m)) };
     // Groq uses max_tokens. reasoning_effort is an OpenAI GPT-5 field and is not sent.
     if (provider.name === 'groq') {
       if (!reqPayload.max_tokens && reqPayload.max_completion_tokens) {

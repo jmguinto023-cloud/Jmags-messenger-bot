@@ -248,3 +248,33 @@ test('a blank OpenAI key is skipped and Groq uses max_tokens without reasoning_e
   assert.equal(payload.reasoning_effort, undefined);
   assert.equal(router.lastProvider, 'groq');
 });
+
+test('OpenAI gets the full JMAG orientation, Groq gets the compact prompt, richContent is never sent', async () => {
+  const { LLM } = require('../src/llm');
+  const llm = new LLM({ systemPromptFile: require('node:path').join(__dirname, '..', 'prompts', 'system-prompt.md'), llmMaxRpm: 0 });
+  const history = [{ role: 'user', content: 'samsung 55 walang display' }];
+  const rich = llm.richPrompt(history);
+  assert.match(rich, /JMAG's Appliances orientation/);
+  assert.match(rich, /## 1\. Voice/);
+  assert.match(rich, /Sound like a real JMAG's staff member/);
+  assert.match(rich, /JMAGS CUSTOMER-BEHAVIOR BANK/);
+  assert.ok(rich.indexOf('CURRENT RULES') > rich.indexOf('## 1. Voice'), 'current rules come last and win');
+  assert.match(rich, /THE QUOTE GATE/);
+
+  const bodies = {};
+  const router = new AiRouter({
+    providers: buildProviders({ aiAllowExternalData: true, openaiApiKey: 'oa', groqApiKey: 'g', aiProviderOrder: 'openai,groq' }),
+    retryBackoffMs: 0, rateLimitBackoffMs: 0,
+    fetcher: async (url, opts) => {
+      const name = url.includes('api.openai.com') ? 'openai' : 'groq';
+      bodies[name] = JSON.parse(opts.body);
+      return name === 'openai' ? failure(500) : ok('groq ok');
+    },
+  });
+  const payload = { messages: [{ role: 'system', content: 'COMPACT', richContent: 'FULL ORIENTATION 09386369374' }, { role: 'user', content: 'hi 09171234567' }] };
+  assert.equal(await router.complete(payload), 'groq ok');
+  assert.equal(bodies.openai.messages[0].content, 'FULL ORIENTATION 09386369374');
+  assert.doesNotMatch(bodies.openai.messages[1].content, /09171234567/);
+  assert.equal(bodies.groq.messages[0].content, 'COMPACT');
+  for (const b of Object.values(bodies)) assert.equal(JSON.stringify(b).includes('richContent'), false);
+});
