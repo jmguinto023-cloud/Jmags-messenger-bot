@@ -135,7 +135,7 @@ function rememberJob(thread) {
   }
   const latestFault = listKind(latestMsg);
   if (latestFault === 'replace' || isCracked(latestMsg)) s.symptom = 'cracked';
-  else if (latestFault === 'mod') s.symptom = 'lines';
+  else if (latestFault === 'mod' || latestFault === 'repair') s.symptom = 'lines';
   else if (latestFault === 'backlight') s.symptom = 'backlight';
   else if (isCracked(blob) && !s.symptom) s.symptom = 'cracked';
   else if (/nawala|walang (?:display|picture|ilaw)|no display|black screen|backlight|lines|linya|ayaw mag-?on|flicker|blink|kislap|kumikislap/i.test(blob) && !s.symptom) {

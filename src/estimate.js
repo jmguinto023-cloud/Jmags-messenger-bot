@@ -232,8 +232,13 @@ function priceHint(size) {
   return `Price for this chat only: ${n}" ${bits.join(', ')}. List estimate only. Final after staff sees the video.`;
 }
 
+// "repair lang", "ayusin lang", "hindi palit LCD", "repair modification": the customer wants the
+// LCD repaired (modification), not replaced. Checked before "palit lcd" so a "hindi" is not ignored.
+const REPAIR_ONLY = /\b(?:repair|ayos|ayusin|ipaayos|paayos|gawa|gawin|pagawa|modif\w*)\s+(?:lang|only|muna|na lang)\b|\b(?:hindi|hndi|hnd|hinde|di|wag|huwag|ayaw|ayoko)\s+(?:na\s+|po\s+|muna\s+)*(?:mag[\s-]*)?(?:pa[\s-]*)?palit|\brepair\s+(?:modification|lcd)|\blcd\s+(?:repair|modification)|\bmodification\b|\bnot\s+replace/i;
+
 function listKind(text) {
   const t = String(text || '');
+  if (REPAIR_ONLY.test(t)) return 'repair';
   if (/basag|cracked|smashed|broken lcd|durog|palit lcd|lcd replacement|replace(?:ment)? lcd/i.test(t)) return 'replace';
   // Sound with a dark screen is a backlight fault, same as walang ilaw.
   const dark = /walang (?:display|picture|ilaw)|no (?:display|picture)|black screen/i.test(t);
@@ -293,6 +298,15 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   if (kind === 'mod') {
     const both = lcdOptions(size);
     if (both) return both;
+  }
+  if (kind === 'repair') {
+    const label = unitLabel(`${latestText}\n${blob}`, size);
+    // A cracked screen cannot be modified (staff guide). Say so instead of quoting a repair.
+    if (/basag|cracked|smashed|durog|nabato|nabagsak/i.test(users + '\n' + latestText) && LCD_REPLACE[size]) {
+      return `Nasa ${phpAmount(LCD_REPLACE[size])} po ang palit LCD para sa ${label}. Kapag basag po ang screen, hindi na po applicable ang LCD repair/modification, palit LCD na po ang option. Final po after makita ng staff ang video.`;
+    }
+    if (!LCD_MOD[size]) return '';
+    return `Nasa ${phpAmount(LCD_MOD[size])} po ang LCD repair (modification) para sa ${label}, hindi palit LCD. Estimate po iyan, final po after makita ng staff ang video.`;
   }
   const label = unitLabel(`${latestText}\n${blob}`, size);
   const price = kind === 'replace' ? LCD_REPLACE[size] : kind === 'mod' ? LCD_MOD[size] : BACKLIGHT[size];

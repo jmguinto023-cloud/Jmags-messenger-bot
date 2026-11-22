@@ -3284,3 +3284,30 @@ test('by default a handoff keeps the thread with the bot instead of passing it t
     assert.equal(s.mock.calls.pass.length, 0);
   } finally { await s.close(); }
 });
+
+test('"repair lang" and "hindi palit lcd" quote the LCD repair, not the replacement (live test chat)', async () => {
+  const s = await setup();
+  s.mock.state.llmResponder = () => 'Pwede po kami mag-serve sa Manila. Anong brand at model number ng TV?';
+  const send = async (text) => {
+    await s.post(msg('jmag', { text }));
+    return s.mock.calls.messages.map((m) => m.message.text).filter(Boolean).at(-1);
+  };
+  try {
+    const first = await send('magkano po palit lcd samsung 65');
+    assert.match(first, /₱30,500/);
+    for (const ask of ['Kung repair lang magkano', 'Yung hndi palit lcd magkano', 'Repair modification']) {
+      const reply = await send(ask);
+      assert.match(reply, /₱9,500/, ask);
+      assert.match(reply, /LCD repair \(modification\)/, ask);
+      assert.doesNotMatch(reply, /₱30,500/, ask);
+    }
+  } finally { await s.close(); }
+});
+
+test('a cracked screen asking for repair only is told modification does not apply', () => {
+  const { listEstimate } = require('../src/estimate');
+  const thread = { history: [{ role: 'user', content: 'basag po yung screen ng samsung 65' }] };
+  const reply = listEstimate('repair lang po magkano', thread);
+  assert.match(reply, /₱30,500/);
+  assert.match(reply, /hindi na po applicable ang LCD repair\/modification/);
+});
