@@ -69,7 +69,7 @@ async function main() {
     for (let i = 0; i < 100 && mock.calls.messages.length === before; i++) await new Promise((r) => setTimeout(r, 50));
     await new Promise((r) => setTimeout(r, 200));
     console.log(`\n${step++}) Customer (${psid}): "${text}"\n   webhook ack: ${res.status} in ${ackMs} ms, reply after ${Date.now() - t0} ms`);
-    for (const m of mock.calls.messages.slice(before)) console.log(`   BOT → ${m.message.text.replace(/\n/g, '\n         ')}`);
+    for (const m of mock.calls.messages.slice(before)) console.log(`   BOT → ${m.message.text != null ? m.message.text.replace(/\n/g, '\n         ') : `[picture: ${(m.message.attachment && m.message.attachment.payload && m.message.attachment.payload.url) || 'attachment'}]`}`);
     for (const p of mock.calls.pass.slice(passBefore)) console.log(`   HANDOFF → pass_thread_control to app ${p.target_app_id} (${p.metadata})`);
   }
 
