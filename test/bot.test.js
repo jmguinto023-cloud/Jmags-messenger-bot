@@ -2658,12 +2658,14 @@ test('LLM retries honor Retry-After and Gemini retryDelay, and fresh replies go 
   let release;
   const blocker = new Promise((r) => { release = r; });
   const gate = new LlmGate({ rpm: 0, sleep: async () => {} });
-  const low = gate.schedule(async () => { await blocker; order.push('low'); }, { priority: 'low' });
+  const low = gate.schedule(async () => { order.push('low start'); await blocker; order.push('low'); }, { priority: 'low' });
   const high = gate.schedule(async () => { order.push('high'); }, { priority: 'high' });
   const low2 = gate.schedule(async () => { order.push('low2'); }, { priority: 'low' });
+  // A slow call no longer blocks the others, and the fresh reply still starts before the queued follow-up.
+  await Promise.all([high, low2]);
   release();
-  await Promise.all([low, high, low2]);
-  assert.deepEqual(order, ['low', 'high', 'low2']);
+  await low;
+  assert.deepEqual(order, ['low start', 'high', 'low2', 'low']);
 });
 
 test('failed follow-ups back off, old chats are skipped, and startup does not send them all', async () => {
