@@ -160,6 +160,20 @@ function keywordHit(text, keywords) {
 }
 
 // "Pwde mag paschedule bukas?", "pa-book po", "pa-home service", "appointment": the customer wants to book now.
+const SCHEDULE_CHANGE_LINE = 'Sige po, i-forward ko po sa staff namin ang tungkol sa schedule ninyo, sila po ang magko-confirm. May iba pa po ba kayong tanong?';
+
+// "pa-resched", "ibang araw na lang", "cancel", "ilipat", "hindi ako available bukas".
+function wantsScheduleChange(text) {
+  return /\b(?:re-?sched\w*|pa-?re-?sched\w*|ibang\s+(?:araw|petsa|oras|date|time)|ilipat|lipat\w*|i-?move|move|postpone|ipagpaliban|i-?cancel|cancel\w*|palit(?:an)?\s+(?:ng\s+)?(?:schedule|sched|araw|petsa|oras)|hindi\s+(?:po\s+)?(?:ako|kami)\s+(?:available|pwede|makakapunta))\b/i.test(String(text || ''));
+}
+
+// Context for the model about an existing booking: it must not confirm or change the schedule.
+function bookedNote(t) {
+  if (!t || !(t.bookingStaffOnly || t.bookingDone)) return '';
+  const when = t.bookingDate ? ` for ${t.bookingDate}` : '';
+  return `This customer is already booked${when}; staff will call to confirm. Answer their questions normally. Do not send the booking form again, and never confirm, move or cancel the schedule yourself.`;
+}
+
 function asksToSchedule(text) {
   const t = String(text || '');
   if (/\b(?:cancel|ayaw|huwag|wag|hindi\s+(?:na|muna))\b/i.test(t)) return false;
@@ -880,7 +894,7 @@ class Bot {
     // Booking silence is per chat. Copying a link, the form, the confirm, and AGREE
     // do not turn the bot on, and nothing here clears it. A later inbound stays quiet
     // while BOT_ENABLED is on or off until staff explicitly clear bookingStaffOnly.
-    if (t && t.bookingStaffOnly) return 'booking handed to staff';
+    if (t && t.bookingStaffOnly && !this.cfg.bookingKeepAnswering) return 'booking handed to staff';
     if (t && t.gateClosed) return 'quote-gate handoff';
     if (!this.scheduleOpen(now)) return 'outside BOT_SCHEDULE';
     if (this.cfg.testPsids.length && !this.isTestPsid(psid)) return 'not in BOT_TEST_PSIDS allowlist';
@@ -1233,6 +1247,15 @@ class Bot {
       }
 
       const latestUser = latestUserText(t);
+      // Booked customer asks to move or cancel: staff own the schedule. Say so once per ask, flag staff, keep answering.
+      if (this.cfg.bookingKeepAnswering && (t.bookingStaffOnly || t.bookingDone) && wantsScheduleChange(latestUser)) {
+        this.repliedRev.set(this.slot(psid), rev);
+        await this.send(psid, SCHEDULE_CHANGE_LINE, { provider: 'rules', skipGate: true });
+        await this.labelBooked(psid, t);
+        await this.notifyStaff('Booked customer: schedule change', `${t.bookingName || 'Customer'}: ${String(latestUser).slice(0, 160)}`);
+        if ((this.rev.get(this.slot(psid)) || 0) !== rev) continue;
+        return;
+      }
       const scopeLine = nonFlatscreenLine(latestUser);
       if (scopeLine) {
         this.repliedRev.set(this.slot(psid), rev);
@@ -1333,14 +1356,16 @@ class Bot {
         raw = await this.llm.reply(modelHistory, {
           nowText: this.nowText(),
           attachmentNote,
-          intakeNote: [intakeContext(t), t.customerContext].filter(Boolean).join(' '),
+          intakeNote: [intakeContext(t), t.customerContext, bookedNote(t)].filter(Boolean).join(' '),
           mediaStatus: mediaStatus(t),
           preparedNote: aiFirst ? '' : prepared,
           facts,
         });
         if (this.llm && this.llm.lastProvider) {
           const modelName = this.llm.lastModel || '';
-          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}`);
+          const u = this.llm.router && this.llm.router.lastUsage;
+          const tokens = u ? ` tokens in=${u.input} cached=${u.cached} out=${u.output} reasoning=${u.reasoning}` : '';
+          this.log.info(`model reply provider=${this.llm.lastProvider}${modelName ? ` model=${modelName}` : ''}${tokens}`);
         }
         raw = await this.fitModelReply(psid, raw, aiFirst ? { maxChars: 500, maxLines: 6 } : undefined);
       } catch (e) {
@@ -1461,7 +1486,7 @@ class Bot {
 
   async send(psid, text, opts = {}) {
     const handed = this.store.findThread(psid);
-    if (handed && handed.bookingStaffOnly) {
+    if (handed && handed.bookingStaffOnly && !this.cfg.bookingKeepAnswering) {
       this.log.info(`no auto reply to ${short(psid)}: booking handed to staff`);
       return false;
     }
@@ -1679,6 +1704,7 @@ class Bot {
       bookingNeedsStaff: false,
       bookingNeedsStaffReason: '',
     });
+    await this.labelBooked(psid, t);
     this.store.addTurn(psid, 'assistant', text, now, { history: true, handoffReason: '', provider: 'booking-form' });
     this.store.flushNow();
     this.log.info(`booking confirm sent to ${short(psid)} wait=${wait} via ${opts.source || 'form'} page=${pageName}`);
@@ -2244,6 +2270,20 @@ class Bot {
     await this.notifyStaff('Booking needs staff', `${who}: ${reason}. No Messenger confirm was sent.`);
   }
 
+  // A booked customer is labelled once in the Page Inbox so staff follow up (BOOKED_LABEL, default "Follow up").
+  async labelBooked(psid, t) {
+    const label = String(this.cfg.bookedLabel || '').trim();
+    if (!label || t.bookedLabelAt) return;
+    try {
+      const done = await this.graph.addLabel(psid, label);
+      if (done !== null) {
+        t.bookedLabelAt = this.now();
+        this.store.save();
+        this.log.info(`booked label "${label}" on ${short(psid)}`);
+      }
+    } catch (e) { this.log.warn(`booked label for ${short(psid)} failed`, e.message); }
+  }
+
   async onBookingAgree(psid, t, ts, isStandby) {
     t.awaitingAgree = false;
     t.bookingConfirmed = true;
@@ -2252,6 +2292,7 @@ class Bot {
     t.bookingStaffOnly = true;
     this.store.save();
     this.log.info(`booking AGREE from ${short(psid)} wait=${t.bookingWait}`);
+    await this.labelBooked(psid, t);
     if (!isStandby) {
       const ack = bookingConfirm.agreeAckText(t.bookingWait);
       try {

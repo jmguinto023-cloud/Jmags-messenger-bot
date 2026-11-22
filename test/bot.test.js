@@ -3431,3 +3431,42 @@ test('"Pwde mag paschedule bukas?" gets the booking form link, not in-chat name 
     assert.equal(texts().filter((t) => /jmagscutomerform/.test(t)).length, 1, 'the form is sent once');
   } finally { await s.close(); }
 });
+
+test('BOOKING_KEEP_ANSWERING: a booked customer still gets answers, a schedule change goes to staff, and the chat is labelled Follow up', async () => {
+  const s = await setup({ BOOKING_KEEP_ANSWERING: 'true' });
+  s.mock.state.llmResponder = () => 'Possible po power supply ang sira. Pwede po pa-send ng video?';
+  const texts = () => s.mock.calls.messages.map((m) => m.message.text).filter(Boolean);
+  try {
+    await s.post(msg('booked', { text: 'hello po' }));
+    const t = s.app.store.thread('booked');
+    Object.assign(t, { bookingStaffOnly: true, bookingDone: true, bookingConfirmed: true, bookingDate: '2026-11-23' });
+    s.app.store.save();
+
+    const before = texts().length;
+    await s.post(msg('booked', { text: 'Magkano power supply 32 inches' }));
+    assert.ok(texts().length > before, 'the bot answers after the booking');
+    assert.match(texts().at(-1), /₱/);
+    const llmBefore = s.mock.calls.llm.length;
+    await s.post(msg('booked', { text: 'gaano po katagal ang repair?' }));
+    assert.ok(s.mock.calls.llm.length > llmBefore, 'OpenAI answers a booked customer');
+    assert.match(s.mock.calls.llm.at(-1).body.messages.map((m) => m.content).join('\n'), /already booked for 2026-11-23/);
+
+    await s.post(msg('booked', { text: 'pa-resched po sana sa ibang araw' }));
+    assert.match(texts().at(-1), /i-forward ko po sa staff namin ang tungkol sa schedule/);
+    assert.notEqual(s.app.store.thread('booked').handedOff, true, 'the chat is not silenced');
+
+    await s.app.bot.labelBooked('booked', s.app.store.thread('booked'));
+    assert.ok(s.mock.calls.labelCreates.some((c) => /Follow up/.test(JSON.stringify(c))) || s.mock.calls.labels.length > 0, 'Follow up label applied');
+  } finally { await s.close(); }
+});
+
+test('without BOOKING_KEEP_ANSWERING a booked chat stays with staff (old behavior)', async () => {
+  const s = await setup();
+  try {
+    await s.post(msg('quiet', { text: 'hello po' }));
+    Object.assign(s.app.store.thread('quiet'), { bookingStaffOnly: true });
+    const before = s.mock.calls.messages.length;
+    await s.post(msg('quiet', { text: 'Magkano power supply 32 inches' }));
+    assert.equal(s.mock.calls.messages.length, before);
+  } finally { await s.close(); }
+});

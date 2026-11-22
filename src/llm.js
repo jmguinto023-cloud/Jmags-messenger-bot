@@ -63,12 +63,28 @@ class LLM {
     return this._prompt;
   }
 
-  // Full JMAG's orientation for a model with a large context (OpenAI): the whole guide,
-  // brand-new reference, business rules and behavior bank, then the current rules, which win.
+  // JMAG's orientation for OpenAI, trimmed to what the compact rules do not already carry: the voice and
+  // its examples, shop facts, area add-ons, hesitation, and off-topic messages from the guide, plus the
+  // brand-new reference and behavior bank. The all-sizes price table, the intake and handoff sections and
+  // the repeated rules are left out (the compact rules and this chat's price line cover them). ~45% fewer tokens.
+  orientation() {
+    if (this._orientation == null) {
+      const guide = fs.readFileSync(this.cfg.systemPromptFile, 'utf8');
+      const keep = ['## 1. Voice', '## 1b. Short examples', '## 2. Shop', '## 3. Area and totals', '## 9. Hesitation and discount', '## 12. Random'];
+      const sections = guide.split(/\n(?=## )/);
+      const head = sections[0].split('\n')[0];
+      const kept = sections.filter((sec) => keep.some((k) => sec.startsWith(k))).map((sec) => sec.trim());
+      const refFile = this.cfg.brandNewReferenceFile || path.join(__dirname, '..', 'prompts', 'brand-new-reference.md');
+      this._orientation = [head, ...kept, fs.readFileSync(refFile, 'utf8').trim(),
+        '## JMAGS Behavior Bank (approved customer-service behavior, no new prices)\n' + behaviorBaseline()].join('\n\n');
+    }
+    return this._orientation;
+  }
+
   richPrompt(history) {
     return [
       "# JMAG's Appliances orientation (background: who we are, how our staff talk, how a chat goes)",
-      this.systemPrompt(),
+      this.orientation(),
       fs.readFileSync(path.join(__dirname, '..', 'prompts', 'staff-playbook.md'), 'utf8').trim(),
       HUMAN_VOICE,
       '# CURRENT RULES. These override anything above, including older examples that quote a price before the video.',

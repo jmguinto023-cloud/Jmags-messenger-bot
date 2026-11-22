@@ -65,6 +65,11 @@ function loadConfig(env = process.env) {
     // OpenAI writes every normal reply in its own words. Price-list answers and templates become facts it must use,
     // and the validator trims invented prices, names and day/time offers instead of swapping in a template.
     aiReasonsFirst: bool(env.AI_REASONS_FIRST, false),
+    // After a confirmed booking the bot keeps answering questions (owner choice B). A request to change or cancel
+    // the schedule is forwarded to staff without silencing the chat. Off = old behavior: staff only after booking.
+    bookingKeepAnswering: bool(env.BOOKING_KEEP_ANSWERING, false),
+    // Page Inbox label put on a chat when the bot books the customer. Empty = no label.
+    bookedLabel: env.BOOKED_LABEL === undefined ? 'Follow up' : env.BOOKED_LABEL,
     aiAllowExternalData: bool(env.AI_EXTERNAL_DATA_ALLOWED, false),
     // Groq only. Gemini is used only when AI_PROVIDER_ORDER lists it, for example groq,gemini.
     aiProviderOrder: env.AI_PROVIDER_ORDER || 'groq',
