@@ -3470,3 +3470,13 @@ test('without BOOKING_KEEP_ANSWERING a booked chat stays with staff (old behavio
     assert.equal(s.mock.calls.messages.length, before);
   } finally { await s.close(); }
 });
+
+test('the per-turn note carries this chat\'s price line', async () => {
+  const s = await setup({ AI_REASONS_FIRST: 'true' });
+  s.mock.state.llmResponder = () => 'Possible backlight po. Pwede po pa-send ng video?';
+  try {
+    await s.post(msg('pl', { text: 'samsung 55 po, bakit kaya nawala display?' }));
+    const sys = s.mock.calls.llm.at(-1).body.messages.filter((m) => m.role === 'system').map((m) => m.content);
+    assert.ok(sys.some((c) => /^Price for this chat only: 55"/.test(c)), 'price line in the per-turn note');
+  } finally { await s.close(); }
+});

@@ -366,3 +366,26 @@ test('why the backup answered is recorded: the Claude error, then "resting" whil
   assert.equal(await router.complete(payload), 'openai po');
   assert.match(router.lastFailures.join(' '), /anthropic: resting after an error \(HTTP 400 .*credit balance/);
 });
+
+test('the cached instructions are the same for every customer; the price line moves to the per-turn note', () => {
+  const { LLM } = require('../src/llm');
+  const llm = new LLM({ systemPromptFile: require('node:path').join(__dirname, '..', 'prompts', 'system-prompt.md'), llmMaxRpm: 0 });
+  const a = llm.richPrompt([{ role: 'user', content: 'tcl 32 may linya' }]);
+  const b = llm.richPrompt([{ role: 'user', content: 'samsung 65 walang display' }]);
+  assert.equal(a, b, 'identical text, so the whole block is cached');
+  assert.doesNotMatch(a, /Price for this chat only/);
+  assert.match(llm.priceLine([{ role: 'user', content: 'samsung 55 walang display' }]), /^Price for this chat only: 55" backlight ₱8,500/);
+});
+
+test('a long chat keeps the last 16 messages word for word and a digest of everything earlier', () => {
+  const { trimHistory, RECENT_TURNS } = require('../src/llm');
+  const rows = [{ role: 'user', content: 'Samsung 55 po, taga Brgy San Jose, Calamba', ts: 1 },
+    { role: 'assistant', content: 'Nasa ₱8,500 po ang backlight para sa Samsung 55.', ts: 2 }];
+  for (let i = 0; i < 28; i++) rows.push({ role: i % 2 ? 'assistant' : 'user', content: `msg ${i}`, ts: 10 + i });
+  const out = trimHistory(rows);
+  assert.equal(out.length, RECENT_TURNS + 1);
+  assert.match(out[0].content, /Samsung 55 po, taga Brgy San Jose, Calamba/, 'early facts are kept');
+  assert.match(out[0].content, /Prices we already quoted earlier: Nasa ₱8,500/);
+  assert.deepEqual(out.slice(1), rows.slice(-RECENT_TURNS), 'recent messages are unchanged');
+  assert.deepEqual(trimHistory(rows.slice(0, 10)), rows.slice(0, 10), 'short chats are sent whole');
+});

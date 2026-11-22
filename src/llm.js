@@ -81,15 +81,25 @@ class LLM {
     return this._orientation;
   }
 
-  richPrompt(history) {
-    return [
+  // Identical for every customer and every turn (no chat-specific text), so Claude/OpenAI cache it whole.
+  richPrompt() {
+    if (this._rich) return this._rich;
+    this._rich = [
       "# JMAG's Appliances orientation (background: who we are, how our staff talk, how a chat goes)",
       this.orientation(),
       fs.readFileSync(path.join(__dirname, '..', 'prompts', 'staff-playbook.md'), 'utf8').trim(),
       HUMAN_VOICE,
       '# CURRENT RULES. These override anything above, including older examples that quote a price before the video.',
-      compactPrompt(history, this.cfg),
+      compactPrompt([], this.cfg, { priceInTurn: true }),
     ].join('\n\n');
+    return this._rich;
+  }
+
+  // This chat's price line, sent in the per-turn note (not cached) next to the other facts.
+  priceLine(history) {
+    const blob = (history || []).map((h) => (h && h.content) || '').join('\n');
+    const hint = priceHint(knownSize(blob));
+    return /^Price for this chat only/.test(hint) ? hint : `Price for this chat only: ${hint}`;
   }
 
   async reply(history, { nowText, attachmentNote, intakeNote, mediaStatus, preparedNote, facts } = {}) {
@@ -97,10 +107,10 @@ class LLM {
     const fallback = String(preparedNote || '').trim();
     const factText = String(facts || '').trim();
     const messages = [
-      { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt(history) },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Answer the customer's latest question first, in 1 to 3 short Taglish sentences, with po. Then ask at most one next-step question. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line and still answer the question. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}${fallback ? ` Safe fallback if a rule blocks your draft: ${fallback}` : ''}`.trim() },
+      { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt() },
+      { role: 'system', content: `${this.priceLine(history)}\nCurrent date/time in the Philippines: ${nowText}. Answer the customer's latest question first, in 1 to 3 short Taglish sentences, with po. Then ask at most one next-step question. Never restate or summarize what they said. No empathy paragraph. No formal Tagalog. If you hand off, put [HANDOFF: reason] on its own last line and still answer the question. Do not hand off when sending the schedule form. ${intakeNote || ''} ${mediaStatus || ''}${fallback ? ` Safe fallback if a rule blocks your draft: ${fallback}` : ''}`.trim() },
       ...(factText ? [{ role: 'system', content: `FACTS FOR THIS REPLY (exact, from JMAG's price list and rules): ${factText}\nUse these peso amounts exactly if you mention a price; never any other amount. Do not copy these sentences. Answer in your own words like JMAG's staff: what the problem most likely is and why (say "possible" unless it is clear), what the repair involves and includes, then one useful next question.` }] : []),
-      ...normalizeTurns(history, { attachmentNote }),
+      ...normalizeTurns(trimHistory(history), { attachmentNote }),
     ];
     return this.chat(messages, { priority: 'high' });
   }
@@ -117,8 +127,8 @@ class LLM {
       ? ' They were asked for a video and have not sent it. Remind them to send the video.'
       : '';
     const messages = [
-      { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt(history) },
-      { role: 'system', content: `Current date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-3 short lines, under 200 characters, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
+      { role: 'system', content: compactPrompt(history, this.cfg), richContent: this.richPrompt() },
+      { role: 'system', content: `${this.priceLine(history)}\nCurrent date/time in the Philippines: ${nowText}. Write ONE short human Taglish follow-up. The customer has not answered. If they already gave a size, brand, or issue, or asked the price or a schedule, this is the one gentle follow-up for that lead: 2-3 short lines, under 200 characters, no repeated greeting, ask when they are free. Urgency like limited slots this week. No discount, promo, tawad, or lower price. Use a brand-new comparison only from a CONFIRMED row. Do not output [HANDOFF].${extra}` },
       ...turns,
     ];
     return this.chat(messages, { priority: 'low' });
@@ -269,12 +279,31 @@ function businessRulesText() {
   return fs.readFileSync(file, 'utf8').trim();
 }
 
+// Long chats: the last RECENT_TURNS messages go word for word; everything the customer said before
+// that goes as one short digest, so earlier facts (brand, size, sira, location, what was agreed) are
+// never lost. The collected-facts note (intakeContext) is sent separately as well.
+const RECENT_TURNS = 16;
+function trimHistory(history) {
+  const rows = (history || []).filter((h) => h && String(h.content || '').trim());
+  if (rows.length <= RECENT_TURNS) return rows;
+  const older = rows.slice(0, -RECENT_TURNS);
+  const recent = rows.slice(-RECENT_TURNS);
+  let said = older.filter((h) => h.role === 'user').map((h) => String(h.content).replace(/\s+/g, ' ').trim()).join(' | ');
+  if (said.length > 1200) said = '…' + said.slice(-1200);
+  const quoted = older.filter((h) => h.role === 'assistant' && /₱/.test(h.content)).map((h) => String(h.content).replace(/\s+/g, ' ').slice(0, 200));
+  const lines = [`[Earlier in this chat (${older.length} older messages), the customer said: ${said || 'nothing else'}]`];
+  if (quoted.length) lines.push(`[Prices we already quoted earlier: ${quoted.slice(-2).join(' | ')}]`);
+  return [{ role: 'user', content: lines.join('\n'), ts: older[older.length - 1].ts }, ...recent];
+}
+
 function estimateTokens(text) {
   return Math.ceil(String(text || '').length / 4);
 }
 
 // What the provider actually sees. The full markdown file is too big for Groq (HTTP 413).
-function compactPrompt(history, cfg = {}) {
+// opts.priceInTurn: leave out this chat's price line (it goes in the per-turn note instead), so the
+// prompt is identical for every customer and the provider can cache all of it.
+function compactPrompt(history, cfg = {}, opts = {}) {
   const blob = (history || []).map((h) => (h && h.content) || '').join('\n');
   const size = knownSize(blob);
   const url = cfg.bookingFormUrl || '';
@@ -296,7 +325,7 @@ function compactPrompt(history, cfg = {}) {
     'Do not name a city, street, or shop address. Home service areas: Cavite, Laguna, Batangas. Ask where they are.',
     'Warranty only: backlight and new LCD 6 months; motherboard and power supply 5 months; rebonding 3 months; LCD repair 3 months (32-65) or 2 months (70-85). If unsure, hand off. Do not invent a warranty.',
     'Shop check-up ₱300. Home check-up ₱1,000, waived if the repair proceeds. Never offer a discount.',
-    'Price for this chat only: ' + priceHint(size),
+    opts.priceInTurn ? '' : 'Price for this chat only: ' + priceHint(size),
     'Before any repair price ask for a short on-TV video, then a photo of the model sticker. One question. Do not re-ask a known brand, size, or sira. Do not hand off just because they repeat themselves.',
     'Example: Samsung 55 may sound walang display -> Pwede po pa-send ng short video ng TV habang naka-on, para makita ng technician namin ang sira?',
     businessRulesText(),
@@ -306,4 +335,4 @@ function compactPrompt(history, cfg = {}) {
   return lines.join('\n');
 }
 
-module.exports = { LLM, parseHandoff, normalizeTurns, compactPrompt, estimateTokens };
+module.exports = { LLM, parseHandoff, normalizeTurns, compactPrompt, estimateTokens, trimHistory, RECENT_TURNS };
