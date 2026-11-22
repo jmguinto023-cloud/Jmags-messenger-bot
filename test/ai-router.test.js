@@ -351,3 +351,18 @@ test('Claude Haiku answers first with the JMAG orientation cached, and OpenAI ta
     assert.deepEqual(calls, ['anthropic', 'openai'], m);
   }
 });
+
+test('why the backup answered is recorded: the Claude error, then "resting" while it cools down', async () => {
+  const router = new AiRouter({
+    providers: buildProviders({ aiAllowExternalData: true, anthropicApiKey: 'ak', openaiApiKey: 'oa', aiProviderOrder: 'anthropic,openai' }),
+    retryBackoffMs: 0, rateLimitBackoffMs: 0,
+    fetcher: async (url) => (String(url).includes('api.anthropic.com')
+      ? new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low' } }), { status: 400, headers: { 'content-type': 'application/json' } })
+      : ok('openai po')),
+  });
+  const payload = { messages: [{ role: 'user', content: 'hi' }] };
+  assert.equal(await router.complete(payload), 'openai po');
+  assert.match(router.lastFailures.join(' '), /anthropic: HTTP 400 .*credit balance is too low/);
+  assert.equal(await router.complete(payload), 'openai po');
+  assert.match(router.lastFailures.join(' '), /anthropic: resting after an error \(HTTP 400 .*credit balance/);
+});
