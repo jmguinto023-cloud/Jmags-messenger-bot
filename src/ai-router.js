@@ -6,6 +6,7 @@
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai';
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1';
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+const Anthropic = require('@anthropic-ai/sdk').default;
 
 function gpt5Family(model) {
   return /^gpt-5/i.test(String(model || ''));
@@ -28,6 +29,13 @@ function buildProviders(cfg) {
     groq: usableKey(cfg.groqApiKey) ? {
       name: 'groq', baseUrl: GROQ_ENDPOINT,
       apiKey: usableKey(cfg.groqApiKey), model: cfg.groqModel || 'openai/gpt-oss-20b',
+      thirdParty: true,
+    } : null,
+    anthropic: usableKey(cfg.anthropicApiKey) ? {
+      name: 'anthropic',
+      apiKey: usableKey(cfg.anthropicApiKey), model: cfg.anthropicModel || 'claude-haiku-5-5',
+      effort: cfg.anthropicEffort || 'low',
+      timeoutMs: Number(cfg.anthropicTimeoutMs) || 20000,
       thirdParty: true,
     } : null,
     openai: usableKey(cfg.openaiApiKey) ? {
@@ -162,12 +170,13 @@ class AiRouter {
     // Others (Groq) get the compact prompt; the full one is too big for them (HTTP 413).
     // richContent is fixed shop text (it holds the shop's own phone numbers), so it is put in
     // after redaction. Customer turns are still redacted.
-    const useRich = provider.name === 'openai';
+    const useRich = provider.name === 'openai' || provider.name === 'anthropic';
     const original = payload.messages || [];
     const clean = sanitizePayload({ ...payload, messages: original.map(({ richContent, ...m }) => m), model: provider.model },
       this.redactPII && provider.thirdParty);
     const reqPayload = { ...clean, messages: clean.messages.map((m, i) => (
       useRich && original[i] && original[i].richContent ? { ...m, content: original[i].richContent } : m)) };
+    if (provider.name === 'anthropic') return this.askAnthropic(provider, reqPayload);
     // Groq uses max_tokens. reasoning_effort is an OpenAI GPT-5 field and is not sent.
     if (provider.name === 'groq') {
       if (!reqPayload.max_tokens && reqPayload.max_completion_tokens) {
@@ -220,5 +229,66 @@ class AiRouter {
     return answer.trim();
   }
 }
+
+// Claude through the official SDK. The JMAG orientation (first system message) is cached; per-turn notes follow it.
+// Thinking stays adaptive at low effort. A refusal or an empty answer throws, so the next provider answers.
+AiRouter.prototype.askAnthropic = async function askAnthropic(provider, payload) {
+  if (!provider.client) {
+    provider.client = new Anthropic({
+      apiKey: provider.apiKey,
+      maxRetries: 0,
+      timeout: Math.max(1000, Number(provider.timeoutMs) || this.timeoutMs),
+      fetch: (...args) => this.fetcher(...args),
+    });
+  }
+  const systemTexts = [];
+  const turns = [];
+  for (const m of payload.messages || []) {
+    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    if (m.role === 'system') { if (text.trim()) systemTexts.push(text); continue; }
+    const role = m.role === 'assistant' ? 'assistant' : 'user';
+    const last = turns[turns.length - 1];
+    if (last && last.role === role) last.content += `\n${text}`;
+    else turns.push({ role, content: text });
+  }
+  while (turns.length && turns[0].role !== 'user') turns.shift();
+  if (!turns.length) turns.push({ role: 'user', content: '[Customer sent a message]' });
+  const system = systemTexts.length
+    ? [{ type: 'text', text: systemTexts[0], cache_control: { type: 'ephemeral' } },
+      ...(systemTexts.length > 1 ? [{ type: 'text', text: systemTexts.slice(1).join('\n\n') }] : [])]
+    : undefined;
+  let res;
+  try {
+    res = await provider.client.messages.create({
+      model: provider.model,
+      max_tokens: 2048,
+      ...(system ? { system } : {}),
+      messages: turns,
+      output_config: { effort: provider.effort || 'low' },
+    });
+  } catch (e) {
+    const err = new Error(`anthropic API HTTP ${e && e.status ? e.status : 'error'}`);
+    err.status = (e && e.status) || 0;
+    err.billingIssue = /credit balance|billing|insufficient/i.test(String((e && e.message) || ''));
+    throw err;
+  }
+  if (res.stop_reason === 'refusal') {
+    const err = new Error('anthropic declined the request');
+    err.status = 422;
+    throw err;
+  }
+  const answer = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  if (!answer) throw new Error('anthropic returned an empty response');
+  const u = res.usage || {};
+  const read = Number(u.cache_read_input_tokens) || 0;
+  const write = Number(u.cache_creation_input_tokens) || 0;
+  this.lastUsage = {
+    input: (Number(u.input_tokens) || 0) + read + write,
+    cached: read,
+    output: Number(u.output_tokens) || 0,
+    reasoning: 0,
+  };
+  return answer;
+};
 
 module.exports = { AiRouter, buildProviders, redactContact, sanitizePayload, gpt5Family };
