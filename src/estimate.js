@@ -242,10 +242,31 @@ const REPAIR_WORD = /\b(?:repair\w*|ni-?repair|ayos\w*|ayusin|maayos|inayos|paay
 const WANTS_REPLACE = /(?<!\b(?:hindi|hndi|hnd|hinde|di|wag|huwag|ayaw|ayoko|not)\s+(?:na\s+|po\s+|muna\s+)*(?:mag[\s-]*)?(?:pa[\s-]*)?)\b(?:palit\w*|papalitan|replace\w*|bago\s+na\s+lcd|brand\s*new\s+lcd)/i;
 const LCD_CONTEXT = /\blcd\b|\blines?\b|linya|basag|cracked|palit|dots|tuldok|kulay|blue screen|gumuguhit|bar\s?line|modif/i;
 
+// Power supply / motherboard named by the customer ("power supply pumutok", "board"). A plain "ayaw mag-on" is not
+// quoted here (owner rule: ask for the video, do not name the part). Checked on the latest message first,
+// so an earlier "basag" or "palit lcd" in the chat cannot turn this into an LCD price.
+const POWER_FAULT = /power\s*supply|\bpsu\b|\bsupply\b|pumutok|pumuputok|sumabog|amoy\s+sunog|nasunog|motherboard|mother\s*board|mainboard|main\s*board|\bboard\b/i;
+
+function powerQuote(text, size, label) {
+  const t = String(text || '');
+  const n = parseInt(size, 10);
+  const board = /motherboard|mother\s*board|mainboard|main\s*board|\bboard\b/i.test(t);
+  const psu = /power\s*supply|\bpsu\b|\bsupply\b/i.test(t);
+  const nums = (board && !psu ? [MOBO_BASIC[n], MOBO_SMART[n]]
+    : psu && !board ? [PSU_BASIC[n], PSU_SMART[n]]
+      : [PSU_BASIC[n], PSU_SMART[n], MOBO_BASIC[n], MOBO_SMART[n]]).filter((v) => Number(v) > 0);
+  if (!nums.length) return '';
+  const low = Math.min(...nums);
+  const high = Math.max(...nums);
+  const money = low === high ? phpAmount(low) : `${phpAmount(low)}–${phpAmount(high)}`;
+  const what = board && !psu ? 'motherboard' : psu && !board ? 'power supply' : 'power supply o motherboard';
+  return `Nasa ${money} po ang repair ng ${what} para sa ${label}, depende kung smart o basic TV. Estimate po iyan, final po after makita ng staff ang video.`;
+}
+
 // A repair word in an LCD chat asks for the LCD repair (modification), unless they explicitly want a replacement.
 function wantsLcdRepair(latest, users) {
   const t = String(latest || '');
-  if (!REPAIR_WORD.test(t) || WANTS_REPLACE.test(t)) return false;
+  if (!REPAIR_WORD.test(t) || WANTS_REPLACE.test(t) || POWER_FAULT.test(t)) return false;
   if (/backlight|walang ilaw|flicker|kislap/i.test(t)) return false;
   const lcdChat = LCD_CONTEXT.test(t) || LCD_CONTEXT.test(String(users || ''));
   const backlightChat = !LCD_CONTEXT.test(t) && /backlight|walang ilaw|flicker|kislap|(?:sound|tunog)[\s\S]*(?:walang display|black screen)/i.test(String(users || ''));
@@ -305,7 +326,7 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   const size = knownSize(latestText) || knownSize(blob);
   // Customer words decide the fault. The stored symptom is only a backup, so an
   // internal label like "no display / backlight" cannot flip the price.
-  const kind = force || (wantsLcdRepair(latestText, users) ? 'repair' : '') || listKind(latestText) || listKind(users) || slotKind(thread);
+  const kind = force || (POWER_FAULT.test(latestText) && !/basag|cracked|\blcd\b|lines?\b|linya/i.test(latestText) ? 'power' : '') || (wantsLcdRepair(latestText, users) ? 'repair' : '') || listKind(latestText) || listKind(users) || slotKind(thread);
   if (!size) return '';
   if (!kind) {
     if (!asksPrice(latestText)) return '';
@@ -314,6 +335,9 @@ function listEstimate(latest, thread = {}, { force } = {}) {
   if (kind === 'mod') {
     const both = lcdOptions(size);
     if (both) return both;
+  }
+  if (kind === 'power') {
+    return powerQuote(latestText, size, unitLabel(`${latestText}\n${blob}`, size));
   }
   if (kind === 'repair') {
     const label = unitLabel(`${latestText}\n${blob}`, size);
@@ -334,7 +358,7 @@ function listEstimate(latest, thread = {}, { force } = {}) {
 
 function wantsListedPrice(latest) {
   const t = String(latest || '');
-  return Boolean(knownSize(t) || asksPrice(t) || listKind(t) || REPAIR_WORD.test(t));
+  return Boolean(knownSize(t) || asksPrice(t) || listKind(t) || REPAIR_WORD.test(t) || POWER_FAULT.test(t));
 }
 
 // A short table answer. No "Confirmed:". Do not ask the fault again once it is known.

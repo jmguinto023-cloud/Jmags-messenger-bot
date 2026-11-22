@@ -3346,3 +3346,16 @@ test('"mamaya po" or "bukas po" without a video ask is not a wait', () => {
   assert.equal(isWait('nasa work pa ako'), true);
   assert.equal(isWait('bukas ko na isend'), true);
 });
+
+test('"power supply pumutok" after an LCD chat quotes the power supply, not the LCD (live test chat)', () => {
+  const { listEstimate } = require('../src/estimate');
+  const thread = { history: [
+    { role: 'user', content: 'magkano po palit lcd samsung 65' },
+    { role: 'user', content: 'Kapag basag naman magkano?' },
+  ] };
+  const psu = listEstimate('Kapag power supply pumutok magkano?', thread);
+  assert.match(psu, /^Nasa ₱9,000–₱11,500 po ang repair ng power supply para sa Samsung 65/);
+  assert.doesNotMatch(psu, /30,500|LCD/);
+  assert.match(listEstimate('motherboard naman magkano', thread), /motherboard/);
+  assert.match(listEstimate('Kapag basag naman magkano?', thread), /₱30,500/);
+});
