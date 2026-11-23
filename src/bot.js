@@ -37,6 +37,7 @@ const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
 const { BookingDashboard } = require('./booking-dashboard');
+const { LabelSync } = require('./label-sync');
 const inquiryReminder = require('./inquiry-reminder');
 const priceCards = require('./price-cards');
 const applianceOneTime = require('./appliance-one-time');
@@ -185,6 +186,7 @@ class Bot {
     Object.assign(this, { cfg, store, graph, llm, log, push, now });
     this.switches = switches || new PageSwitches(cfg, { now: () => this.now(), log: this.log });
     this.dashboardBookings = new BookingDashboard(cfg, { log, now: () => this.now() });
+    this.labelSync = new LabelSync({ cfg, store, graph, bot: this, log, now: () => this.now() });
     this.pending = new Map(); // psid -> { texts:[], timer, latestTs }
     this.chains = new Map(); // psid -> promise (keeps one reply at a time per customer)
     this.inflight = new Set();
@@ -2286,21 +2288,44 @@ class Bot {
     } catch (e) { this.log.warn(`booked label for ${short(psid)} failed`, e.message); }
   }
 
-  // Best-effort mirror of a dashboard Desk mark to a Page Inbox custom label.
-  // followUp reuses BOOKED_LABEL ("Follow up"); other marks use their own metaLabel,
-  // created on first use the same way. Graph has no removeLabel, so clearing a mark only
-  // drops the Desk marker and leaves any Inbox label in place. Never throws.
+  // Best-effort write-through of a dashboard Desk mark to a Page Inbox custom label, so
+  // Messenger stays the source of truth (label-sync.js reads it back). followUp reuses
+  // BOOKED_LABEL ("Follow up"); other marks use their own metaLabel, created on first use.
+  // on → addLabel; off → removeLabel (so clearing a mark also drops the Messenger label).
+  // Never throws, never blocks the dashboard action.
   async syncMarkLabel(psid, markId, on) {
-    if (!on || !psid) return;
+    if (!psid) return;
     const mark = (DESK_MARKS || []).find((m) => m.id === markId);
     if (!mark) return;
     const label = String((markId === 'followUp' ? this.cfg.bookedLabel : '') || mark.metaLabel || '').trim();
     if (!label) return;
     try {
       const page = this.locateThread(psid).page;
-      const add = () => this.graph.addLabel(psid, label);
-      await (page && currentPage() !== page ? withPage(page, add) : add());
+      const act = () => (on ? this.graph.addLabel(psid, label) : this.graph.removeLabel(psid, label));
+      await (page && currentPage() !== page ? withPage(page, act) : act());
     } catch (e) { this.log.warn(`mark label "${markId}" for ${short(psid)} failed`, e.message); }
+  }
+
+  // Best-effort: make sure the Desk marks' Messenger labels exist in the Page Inbox(es)
+  // with consistent names, so staff and the dashboard use the same label text. Called once
+  // at startup. No-op without a Page token. Never throws.
+  async ensureDeskLabels() {
+    const names = [];
+    for (const m of DESK_MARKS) {
+      const name = String((m.id === 'followUp' ? this.cfg.bookedLabel : '') || m.metaLabel || '').trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+    if (!names.length) return;
+    const pages = (this.cfg.pages || []).filter((p) => p && p.token);
+    try {
+      if (pages.length) {
+        for (const page of pages) {
+          await (currentPage() !== page ? withPage(page, () => this.graph.ensureLabels(names)) : this.graph.ensureLabels(names));
+        }
+      } else if (this.cfg.pageAccessToken) {
+        await this.graph.ensureLabels(names);
+      }
+    } catch (e) { this.log.warn(`ensure desk labels failed: ${e.message}`); }
   }
 
   async onBookingAgree(psid, t, ts, isStandby) {

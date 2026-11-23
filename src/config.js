@@ -108,6 +108,13 @@ function loadConfig(env = process.env) {
     // Copy form bookings into the ops dashboard even when nobody has it open.
     // Empty stays on. false stops the copy. It never sends a customer message.
     bookingDashboardSync: bool(env.BOOKING_DASHBOARD_SYNC, true),
+    // Desk label sync: read Messenger Page Inbox custom labels back into Desk marks so the
+    // inbox stays the source of truth. On by default, but no-ops without a Page token.
+    labelSyncEnabled: bool(env.LABEL_SYNC_ENABLED, true),
+    labelSyncIntervalMs: num(env.LABEL_SYNC_INTERVAL_MS, 150000), // ~2.5 min between cycles
+    labelSyncLookbackDays: num(env.LABEL_SYNC_LOOKBACK_DAYS, 30), // only poll recently-active threads
+    labelSyncMaxPerCycle: num(env.LABEL_SYNC_MAX_PER_CYCLE, 200), // cap Graph calls per cycle
+    labelSyncThrottleMs: num(env.LABEL_SYNC_THROTTLE_MS, 150), // small delay between calls
     // Form → Messenger "Willing to wait?" confirmation. On by default; independent of BOT_SCHEDULE.
     bookingConfirmEnabled: bool(env.BOOKING_CONFIRM_ENABLED, true),
     // Signs ?token= and ?ref= on booking-form links. Empty falls back to APP_SECRET.

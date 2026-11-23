@@ -17,10 +17,15 @@ function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-test('DESK_MARKS ships followUp (yellow) and qualified (green)', () => {
-  assert.deepEqual(DESK_MARKS.map((m) => m.id), ['followUp', 'qualified']);
-  assert.equal(DESK_MARKS[0].color, '#f5c518');
+test('DESK_MARKS leads with highPotential (amber), then qualified (green) and followUp (blue)', () => {
+  assert.deepEqual(DESK_MARKS.map((m) => m.id), ['highPotential', 'qualified', 'followUp']);
+  assert.equal(DESK_MARKS[0].color, '#e8a200');
   assert.equal(DESK_MARKS[1].color, '#2e9e4f');
+  assert.equal(DESK_MARKS[2].color, '#3b82f6');
+  // Each mark carries its exact Messenger label text.
+  assert.deepEqual(DESK_MARKS.map((m) => m.metaLabel), ['High Potential', 'Qualified', 'Follow up']);
+  // Visually distinct colours (no two marks share a colour).
+  assert.equal(new Set(DESK_MARKS.map((m) => m.color)).size, DESK_MARKS.length);
 });
 
 test('setMark sets a mark, stores note/time, and clears it', () => {

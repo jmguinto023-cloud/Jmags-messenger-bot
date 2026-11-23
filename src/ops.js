@@ -18,11 +18,16 @@ const PAY_TYPES = ['Check-up fee', 'Repair', 'Parts', 'Other'];
 const METHODS = ['Cash', 'GCash', 'Maya', 'Bank transfer'];
 const TABS = ['today', 'jobs', 'customers', 'desk', 'money', 'finance', 'parts'];
 // Colour-coded Desk marks staff can toggle on a customer thread so they can see and
-// remember who to chase. Add more here later. followUp mirrors the booking "Follow up"
-// Page Inbox label (config BOOKED_LABEL); qualified gets its own "Qualified" label.
+// remember who to chase. Messenger Page Inbox custom labels are the source of truth:
+// each mark carries the exact label text (metaLabel) staff apply in the Facebook inbox,
+// label-sync.js reads them back every cycle, and the dashboard colour buttons write the
+// same label (bot.syncMarkLabel) so the two stay consistent. highPotential is the
+// headline "line-up"; followUp mirrors the booking label (config BOOKED_LABEL). Colours
+// are visually distinct and readable on the light ops.css theme. Add more here later.
 const DESK_MARKS = [
-  { id: 'followUp', label: 'Follow up', color: '#f5c518', metaLabel: 'Follow up' },
+  { id: 'highPotential', label: 'High Potential', color: '#e8a200', metaLabel: 'High Potential' },
   { id: 'qualified', label: 'Qualified', color: '#2e9e4f', metaLabel: 'Qualified' },
+  { id: 'followUp', label: 'Follow up', color: '#3b82f6', metaLabel: 'Follow up' },
 ];
 const MONTHS = ['Enero', 'Pebrero', 'Marso', 'Abril', 'Mayo', 'Hunyo', 'Hulyo', 'Agosto', 'Setyembre', 'Oktubre', 'Nobyembre', 'Disyembre'];
 

@@ -418,19 +418,35 @@ function deskRow(view, mark, row) {
   </li>`;
 }
 
-function deskTab(view) {
-  const data = view.desk || {};
-  const sections = DESK_MARKS.map((mark) => {
-    const list = data[mark.id] || [];
-    const rows = list.map((row) => deskRow(view, mark, row)).join('');
-    return `<section class="card desk-cat" id="mark-${esc(mark.id)}" style="border-top:3px solid ${mark.color}">
-      <header><h2><span class="mark-dot" style="background:${mark.color}"></span>${esc(mark.label)}</h2><span class="meta">${list.length} customer${list.length === 1 ? '' : 's'} naka-mark</span></header>
+// Colour key for the Desk marks, driven by DESK_MARKS so it stays in sync when marks are
+// added, renamed, or recoloured. One compact row: a colour dot + label per mark, in order.
+function markLegend() {
+  const items = DESK_MARKS.map((m) => `<span class="legend-item"><span class="mark-dot" style="background:${m.color}"></span>${esc(m.label)}</span>`).join('');
+  return `<div class="mark-legend" aria-label="Colour key">${items}</div>`;
+}
+
+function deskSection(view, mark, list, lineup) {
+  const rows = list.map((row) => deskRow(view, mark, row)).join('');
+  const headCount = lineup
+    ? `<span class="count">${list.length}</span> in the line-up`
+    : `${list.length} customer${list.length === 1 ? '' : 's'} naka-mark`;
+  return `<section class="card desk-cat${lineup ? ' desk-headline' : ''}" id="mark-${esc(mark.id)}" style="border-top:${lineup ? 4 : 3}px solid ${mark.color}">
+      <header><h2><span class="mark-dot" style="background:${mark.color}"></span>${esc(mark.label)}${lineup ? ' line-up' : ''}</h2><span class="meta">${headCount}</span></header>
       ${rows ? `<ul>${rows}</ul>` : `<p class="empty">Walang naka-mark na ${esc(mark.label.toLowerCase())}. Mark a customer from the Today or Customers tab.</p>`}
     </section>`;
-  }).join('');
+}
+
+function deskTab(view) {
+  const data = view.desk || {};
+  const [headline, ...rest] = DESK_MARKS;
+  const headlineHtml = headline ? deskSection(view, headline, data[headline.id] || [], true) : '';
+  const restHtml = rest.map((mark) => deskSection(view, mark, data[mark.id] || [], false)).join('');
   return `<section>
     <div class="page-head"><h1>Desk</h1><input class="search grow" placeholder="Search name or last 4" data-filter=".desk-cat [data-followup]"></div>
-    ${sections}
+    ${markLegend()}
+    <p class="sub desk-caption">These marks mirror your Messenger Page Inbox labels — apply a label in the Facebook inbox and it shows up here; the colour buttons set the same label back.</p>
+    ${headlineHtml}
+    ${restHtml}
   </section>`;
 }
 

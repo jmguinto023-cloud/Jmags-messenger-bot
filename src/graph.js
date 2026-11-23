@@ -386,24 +386,79 @@ class Graph {
     return this.call('POST', `${labelId}/label`, { params: { user } });
   }
 
-  // Read-back stub: the custom labels currently on a PSID, for reconciling Desk marks
-  // with labels a staffer set directly in the Messenger inbox.
-  //
-  // The Messenger Platform documents GET /{PSID}/custom_labels?fields=name, but whether
-  // a given Page token has the scope to read another user's labels is not verified here,
-  // so this is NOT wired into any polling loop — Desk relies on dashboard marking plus the
-  // addLabel mirror above. The Messenger yellow STAR is a separate inbox flag and is not
-  // exposed by this (or any) Graph endpoint, so it can never be read back. Returns [] on
-  // any failure so a caller that opts in can treat "no labels" and "cannot read" alike.
+  // The custom labels currently on a PSID, so label-sync.js can reconcile Desk marks with
+  // labels a staffer set directly in the Messenger Page Inbox. GET /{PSID}/custom_labels.
+  // Returns an array of { id, name } (page_label_name preferred as the display text), or []
+  // on any failure so a caller treats "no labels" and "cannot read" alike. The Messenger
+  // yellow STAR is a separate inbox flag and is not exposed by any Graph endpoint, so it
+  // can never be read back. Never throws.
   async listUserLabels(psid) {
     const user = String(psid || '').trim();
     if (!user) return [];
     try {
-      const res = await this.call('GET', `${user}/custom_labels`, { params: { fields: 'name,page_label_name', limit: '100' } });
-      return (res.data || []).map((l) => String((l && (l.page_label_name || l.name)) || '')).filter(Boolean);
+      const res = await this.call('GET', `${user}/custom_labels`, { params: { fields: 'name,page_label_name,id', limit: '100' } });
+      return (res.data || [])
+        .map((l) => ({ id: String((l && l.id) || ''), name: String((l && (l.page_label_name || l.name)) || '').trim() }))
+        .filter((l) => l.name);
     } catch {
       return [];
     }
+  }
+
+  // Find the Page Inbox custom-label id for a name, optionally creating it when missing.
+  // Shares the id cache with addLabel so a label created on either path is reused. Returns
+  // '' for a blank/numeric name or when the label is missing and create is false.
+  async _findLabelId(name, { create = false } = {}) {
+    const label = String(name || '').trim();
+    if (!label || /^\d+$/.test(label)) return '';
+    const cacheName = `${this.pageNode()}::${label}`;
+    const cached = this.labelIds.get(cacheName);
+    if (cached) return cached;
+    const page = this.pageNode();
+    const list = await this.call('GET', `${page}/custom_labels`, { params: { fields: 'id,name,page_label_name', limit: '100' } });
+    const found = (list.data || []).find((l) => l && (l.page_label_name === label || l.name === label) && l.id);
+    let labelId = found ? String(found.id) : '';
+    if (!labelId && create) {
+      const created = await this.call('POST', `${page}/custom_labels`, { body: { page_label_name: label, name: label } });
+      labelId = created && created.id ? String(created.id) : '';
+    }
+    if (labelId) this.labelIds.set(cacheName, labelId);
+    return labelId;
+  }
+
+  // Remove a Page Inbox custom label from a PSID: find the existing label id (never
+  // create one), then DELETE /{label-id}/label?user={psid}. The mirror of addLabel so
+  // clearing a Desk mark also clears the Messenger label. Missing label = no-op. Never throws.
+  async removeLabel(psid, labelName) {
+    const user = String(psid || '').trim();
+    const name = String(labelName || '').trim();
+    if (!user || !name) return null;
+    try {
+      const labelId = await this._findLabelId(name, { create: false });
+      if (!labelId || labelId === user) return null;
+      return await this.call('DELETE', `${labelId}/label`, { params: { user } });
+    } catch (e) {
+      if (this.log) this.log.warn(`removeLabel "${name}" for …${user.slice(-4)} failed: ${e.message}`);
+      return null;
+    }
+  }
+
+  // Best-effort: make sure each named Page Inbox custom label exists, creating any that do
+  // not, so the Desk marks map to labels with consistent names. Returns the [{id,name}] it
+  // resolved. Never throws.
+  async ensureLabels(names) {
+    const out = [];
+    for (const raw of names || []) {
+      const name = String(raw || '').trim();
+      if (!name) continue;
+      try {
+        const id = await this._findLabelId(name, { create: true });
+        if (id) out.push({ id, name });
+      } catch (e) {
+        if (this.log) this.log.warn(`ensureLabels "${name}" failed: ${e.message}`);
+      }
+    }
+    return out;
   }
 }
 module.exports = { Graph };
