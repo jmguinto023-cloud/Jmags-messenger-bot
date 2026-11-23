@@ -81,6 +81,7 @@ class Store {
       videoReplyAt: 0, videoFollowupCount: 0, videoFollowupAt: 0, videoFollowupPending: false,
       bookingFormSent: false, bookingDone: false, pendingMedia: [], attachmentNote: '',
       mediaNotes: [], tipsSent: false, problemViaVideo: false,
+      marks: {},
     });
     if (!t.psid) t.psid = String(psid || '');
     if (page && page.id && !t.pageId) t.pageId = page.id;
@@ -183,6 +184,19 @@ class Store {
     if (row.psid) this.thread(row.psid).videoReviewed = true;
     this.save();
     return true;
+  }
+  // Desk marks on the customer thread (thread.marks): the single source of truth
+  // behind the colour-coded Desk categories. Set by staff from the dashboard and by
+  // the booking flow. markId is a DESK_MARKS id (e.g. 'followUp', 'qualified').
+  setMark(psid, markId, on, note = '', now = Date.now()) {
+    const id = String(markId || '').trim();
+    if (!id) return null;
+    const t = (this.findThread && this.findThread(psid)) || this.thread(psid);
+    t.marks ||= {};
+    if (on) t.marks[id] = { on: true, at: now, note: String(note || '') };
+    else delete t.marks[id];
+    this.save();
+    return t;
   }
   markIvanReplied(psid, now = Date.now(), pageId = '') {
     const when = new Date(now).toISOString();

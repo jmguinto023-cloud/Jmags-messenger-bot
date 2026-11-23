@@ -24,7 +24,7 @@ const {
   FORM_OK, FORM_MISSING, localJobs, submissionMatches, netlifySubmissions, phoneInThread,
 } = require('./customer-context');
 const { optOutReason, staffEscalation, publicCommentReply, STAFF_HANDOFF_LINE } = require('./reply-rules');
-const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
+const { hotLeadInfo, HOT_LEAD_WAIT_MS, DESK_MARKS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
 const { PageSwitches, pageKey } = require('./page-switches');
@@ -37,6 +37,7 @@ const { maybeReplyToTestChallenge } = require('./messenger-test');
 const { maybeHandlePrivateChat } = require('./private-test-chat');
 const bookingConfirm = require('./booking-confirm');
 const { BookingDashboard } = require('./booking-dashboard');
+const { LabelSync } = require('./label-sync');
 const inquiryReminder = require('./inquiry-reminder');
 const priceCards = require('./price-cards');
 const applianceOneTime = require('./appliance-one-time');
@@ -185,6 +186,7 @@ class Bot {
     Object.assign(this, { cfg, store, graph, llm, log, push, now });
     this.switches = switches || new PageSwitches(cfg, { now: () => this.now(), log: this.log });
     this.dashboardBookings = new BookingDashboard(cfg, { log, now: () => this.now() });
+    this.labelSync = new LabelSync({ cfg, store, graph, bot: this, log, now: () => this.now() });
     this.pending = new Map(); // psid -> { texts:[], timer, latestTs }
     this.chains = new Map(); // psid -> promise (keeps one reply at a time per customer)
     this.inflight = new Set();
@@ -2286,6 +2288,46 @@ class Bot {
     } catch (e) { this.log.warn(`booked label for ${short(psid)} failed`, e.message); }
   }
 
+  // Best-effort write-through of a dashboard Desk mark to a Page Inbox custom label, so
+  // Messenger stays the source of truth (label-sync.js reads it back). followUp reuses
+  // BOOKED_LABEL ("Follow up"); other marks use their own metaLabel, created on first use.
+  // on → addLabel; off → removeLabel (so clearing a mark also drops the Messenger label).
+  // Never throws, never blocks the dashboard action.
+  async syncMarkLabel(psid, markId, on) {
+    if (!psid) return;
+    const mark = (DESK_MARKS || []).find((m) => m.id === markId);
+    if (!mark) return;
+    const label = String((markId === 'followUp' ? this.cfg.bookedLabel : '') || mark.metaLabel || '').trim();
+    if (!label) return;
+    try {
+      const page = this.locateThread(psid).page;
+      const act = () => (on ? this.graph.addLabel(psid, label) : this.graph.removeLabel(psid, label));
+      await (page && currentPage() !== page ? withPage(page, act) : act());
+    } catch (e) { this.log.warn(`mark label "${markId}" for ${short(psid)} failed`, e.message); }
+  }
+
+  // Best-effort: make sure the Desk marks' Messenger labels exist in the Page Inbox(es)
+  // with consistent names, so staff and the dashboard use the same label text. Called once
+  // at startup. No-op without a Page token. Never throws.
+  async ensureDeskLabels() {
+    const names = [];
+    for (const m of DESK_MARKS) {
+      const name = String((m.id === 'followUp' ? this.cfg.bookedLabel : '') || m.metaLabel || '').trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+    if (!names.length) return;
+    const pages = (this.cfg.pages || []).filter((p) => p && p.token);
+    try {
+      if (pages.length) {
+        for (const page of pages) {
+          await (currentPage() !== page ? withPage(page, () => this.graph.ensureLabels(names)) : this.graph.ensureLabels(names));
+        }
+      } else if (this.cfg.pageAccessToken) {
+        await this.graph.ensureLabels(names);
+      }
+    } catch (e) { this.log.warn(`ensure desk labels failed: ${e.message}`); }
+  }
+
   async onBookingAgree(psid, t, ts, isStandby) {
     t.awaitingAgree = false;
     t.bookingConfirmed = true;
@@ -2295,6 +2337,8 @@ class Bot {
     this.store.save();
     this.log.info(`booking AGREE from ${short(psid)} wait=${t.bookingWait}`);
     await this.labelBooked(psid, t);
+    // Mark the thread 'followUp' so the Desk → Follow up category reflects booked customers.
+    this.store.setMark(psid, 'followUp', true, '', ts || this.now());
     if (!isStandby) {
       const ack = bookingConfirm.agreeAckText(t.bookingWait);
       try {

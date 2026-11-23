@@ -72,6 +72,13 @@ if (require.main === module) {
     mirrorBookings();
     setInterval(mirrorBookings, 45000).unref();
   }
+  // Read Messenger Page Inbox custom labels back into Desk marks so the inbox stays the
+  // source of truth. No-ops without a Page token. Make sure the mark labels exist first.
+  if (app.bot.labelSync && app.bot.labelSync.enabled()) {
+    const syncLabels = () => app.bot.labelSync.sync().catch(() => log.warn('label sync failed'));
+    app.bot.ensureDeskLabels().then(syncLabels).catch(() => { syncLabels(); });
+    setInterval(syncLabels, app.bot.labelSync.intervalMs()).unref();
+  }
   // Read-only Page token probe every 15 minutes. Do not confuse HTTP /health
   // with Messenger availability: the server can be up while OAuth is expired.
   // No customer messages or credentials are sent to the logs.

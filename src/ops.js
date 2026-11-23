@@ -2,7 +2,7 @@
 // Shop operations: job orders, money, parts, and the replies that read them.
 // Persisted on store.data.ops inside DATA_DIR/state.json. No customer rows live in git.
 
-const { chatCustomerName, summarizeConversation } = require('./summary');
+const { chatCustomerName, summarizeConversation, firstCustomerSnippet } = require('./summary');
 const { threadCardId } = require('./form-link-card');
 const { inboxLinks, genericInboxUrl } = require('./inbox-link');
 const { statusLine } = require('./schedule');
@@ -16,7 +16,19 @@ const KNOWN_ADS = ['CAVITE - area ads', 'Cavite Page ad', 'LAGUNA - area ads', '
 const BOOSTED_BUDGET = 'Boosted posts';
 const PAY_TYPES = ['Check-up fee', 'Repair', 'Parts', 'Other'];
 const METHODS = ['Cash', 'GCash', 'Maya', 'Bank transfer'];
-const TABS = ['today', 'jobs', 'customers', 'money', 'finance', 'parts'];
+const TABS = ['today', 'jobs', 'customers', 'desk', 'money', 'finance', 'parts'];
+// Colour-coded Desk marks staff can toggle on a customer thread so they can see and
+// remember who to chase. Messenger Page Inbox custom labels are the source of truth:
+// each mark carries the exact label text (metaLabel) staff apply in the Facebook inbox,
+// label-sync.js reads them back every cycle, and the dashboard colour buttons write the
+// same label (bot.syncMarkLabel) so the two stay consistent. highPotential is the
+// headline "line-up"; followUp mirrors the booking label (config BOOKED_LABEL). Colours
+// are visually distinct and readable on the light ops.css theme. Add more here later.
+const DESK_MARKS = [
+  { id: 'highPotential', label: 'High Potential', color: '#e8a200', metaLabel: 'High Potential' },
+  { id: 'qualified', label: 'Qualified', color: '#2e9e4f', metaLabel: 'Qualified' },
+  { id: 'followUp', label: 'Follow up', color: '#3b82f6', metaLabel: 'Follow up' },
+];
 const MONTHS = ['Enero', 'Pebrero', 'Marso', 'Abril', 'Mayo', 'Hunyo', 'Hulyo', 'Agosto', 'Setyembre', 'Oktubre', 'Nobyembre', 'Disyembre'];
 
 const ASK_BOTH = 'Para macheck ko po ang status, pakisabi ang pangalan at phone number na ginamit sa booking.';
@@ -562,13 +574,18 @@ function customerRows(ops, branch) {
       return { ...c, jobIds };
     })
     .filter((c) => !branch || branch === 'ALL' || c.jobIds.length)
-    .map((c) => ({
-      name: c.name,
-      phone: c.phone,
-      address: c.address,
-      jobs: c.jobIds.length,
-      paid: totalPaidFor(ops, c),
-    }))
+    .map((c) => {
+      const linked = c.jobIds.map((id) => ops.jobs.find((j) => j.id === id)).find((j) => j && j.psid);
+      return {
+        name: c.name,
+        phone: c.phone,
+        address: c.address,
+        jobs: c.jobIds.length,
+        paid: totalPaidFor(ops, c),
+        psid: linked ? String(linked.psid) : '',
+        pageId: linked ? String(linked.pageId || '') : '',
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -1003,6 +1020,7 @@ function hotLeads(threads, reviews, now, cfg) {
       href,
       since: info.since || 0,
       waitLabel: mins ? `${mins} min` : '',
+      marks: threadMarks(thread),
     });
   }
   rows.sort((a, b) => (a.since || 0) - (b.since || 0) || a.last4.localeCompare(b.last4));
@@ -1068,10 +1086,90 @@ function aiHandoffs(threads, jobs) {
       last4: String(psid).slice(-4),
       name: job && job.customerName ? job.customerName : 'Chat',
       reason: thread.handoffReason || 'AI unavailable',
+      marks: threadMarks(thread),
     });
   }
   rows.sort((a, b) => a.last4.localeCompare(b.last4));
   return rows.slice(0, 12);
+}
+
+// The exact storage key for a PSID, so its follow-up card id can be derived.
+// Mirrors store.findThread: the namespaced key for this Page, else the bare key,
+// else any thread carrying the PSID.
+function threadKeyForPsid(threads, psid, pageId) {
+  const id = String(psid || '');
+  if (!id || !threads) return '';
+  if (pageId && threads[`${pageId}:${id}`]) return `${pageId}:${id}`;
+  if (threads[id]) return id;
+  for (const [key, t] of Object.entries(threads)) {
+    if (t && String(t.psid || '') === id) return key;
+  }
+  return '';
+}
+
+// The exact storage key for a PSID, so its Desk card id can be derived. Mirrors
+// store.findThread: the namespaced key for this Page, else the bare key, else any
+// thread carrying the PSID.
+function threadKeyForPsid(threads, psid, pageId) {
+  const id = String(psid || '');
+  if (!id || !threads) return '';
+  if (pageId && threads[`${pageId}:${id}`]) return `${pageId}:${id}`;
+  if (threads[id]) return id;
+  for (const [key, t] of Object.entries(threads)) {
+    if (t && String(t.psid || '') === id) return key;
+  }
+  return '';
+}
+
+// Which marks are currently on for a thread, e.g. { followUp: true, qualified: false }.
+// Reads defensively so threads saved before marks existed are treated as unmarked.
+function threadMarks(thread) {
+  const marks = (thread && thread.marks) || {};
+  const out = {};
+  for (const m of DESK_MARKS) out[m.id] = Boolean(marks[m.id] && marks[m.id].on === true);
+  return out;
+}
+
+function markRow(key, thread, state, reviews, cfg) {
+  const psid = (thread && thread.psid) || key;
+  const pageId = (thread && thread.pageId) || (cfg && cfg.pageId) || '';
+  const sameChat = (r) => r && String(r.psid) === String(psid) && (!thread.pageId || !r.pageId || r.pageId === thread.pageId);
+  const named = (reviews || []).find(sameChat);
+  const review = (reviews || []).find((r) => sameChat(r) && (r.conversationLink || r.conversationId));
+  let href = '';
+  if (review) href = inboxLinks(pageId, review).messenger || '';
+  // Without a stored thread link, open the Page inbox list.
+  if (!href) href = genericInboxUrl(pageId);
+  return {
+    cardId: threadCardId(key),
+    name: (named && named.customerName) || chatCustomerName(thread.history) || '',
+    last4: String(psid).slice(-4),
+    snippet: firstCustomerSnippet(thread.history),
+    note: String((state && state.note) || ''),
+    markedAt: Number((state && state.at) || 0),
+    lastUserTs: Number(thread.lastUserTs || 0),
+    href,
+  };
+}
+
+// Per-mark Desk datasets: { followUp: [rows], qualified: [rows] }. One scan of the
+// threads. Like hotLeads/aiHandoffs, reads threads directly and is not branch-filtered.
+function deskMarks(threads, reviews, now, cfg) {
+  const out = {};
+  for (const m of DESK_MARKS) out[m.id] = [];
+  for (const [key, thread] of Object.entries(threads || {})) {
+    const marks = thread && thread.marks;
+    if (!marks) continue;
+    for (const m of DESK_MARKS) {
+      const state = marks[m.id];
+      if (!state || state.on !== true) continue;
+      out[m.id].push(markRow(key, thread, state, reviews, cfg));
+    }
+  }
+  for (const m of DESK_MARKS) {
+    out[m.id].sort((a, b) => (b.markedAt || 0) - (a.markedAt || 0) || a.last4.localeCompare(b.last4));
+  }
+  return out;
 }
 
 function buildView(store, opts) {
@@ -1149,7 +1247,12 @@ function buildView(store, opts) {
     })),
     reorder: lowStock(ops.parts, branch),
     jobs: visibleJobs.map((j) => ({ ...j, balance: jobBalance(j, ops.payments), warrantyEnd: warrantyEndOf(j) })),
-    customers: customerRows(ops, branch),
+    customers: customerRows(ops, branch).map((c) => {
+      const key = c.psid ? threadKeyForPsid(opts.threads || {}, c.psid, c.pageId) : '';
+      const t = key ? (opts.threads || {})[key] : null;
+      return { ...c, cardId: key ? threadCardId(key) : '', marks: threadMarks(t) };
+    }),
+    desk: deskMarks(opts.threads || {}, opts.reviews || [], now, opts.cfg || {}),
     money: moneyReport(ops, { period, branch, now, tz }),
     finance: financeReport(ops, { period, branch, now, tz }),
     adBudget: adBudgetReport(ops, { period, branch, now, tz }),
@@ -1473,6 +1576,33 @@ function applyAction(store, params, now, tz = 'Asia/Manila') {
     return { ok: true };
   }
 
+  if (action === 'mark') {
+    const markId = field(params, 'mark');
+    if (!DESK_MARKS.some((m) => m.id === markId)) return { ok: false, error: 'Unknown mark' };
+    // Resolve the thread by opaque card id (keeps the PSID server-side) or by PSID.
+    const want = field(params, 'card').toLowerCase();
+    const byPsid = field(params, 'psid');
+    let match = null;
+    for (const [key, thread] of Object.entries(store.data.threads || {})) {
+      if (!thread) continue;
+      if (want ? threadCardId(key) === want : String(thread.psid || key) === byPsid) {
+        match = { key, thread };
+        break;
+      }
+    }
+    if (!match) return { ok: false, error: 'Hindi makita ang chat.' };
+    const on = field(params, 'on') === '1';
+    const psid = match.thread.psid
+      || (match.key.includes(':') ? match.key.slice(match.key.indexOf(':') + 1) : match.key);
+    // Write on the exact thread this card resolved to (same shape as store.setMark,
+    // which the booking flow uses on the PSID path).
+    match.thread.marks ||= {};
+    if (on) match.thread.marks[markId] = { on: true, at: now, note: field(params, 'note') };
+    else delete match.thread.marks[markId];
+    store.save();
+    return { ok: true, mark: markId, on, psid, pageId: match.thread.pageId || '' };
+  }
+
   return { ok: false, error: 'Unknown action' };
 }
 
@@ -1606,8 +1736,8 @@ function exportCsv(store, kind, opts) {
 }
 
 module.exports = {
-  STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, TABS, AD_AREAS, KNOWN_ADS,
-  areaFromAd, adBudgetOf,
+  STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, TABS, AD_AREAS, KNOWN_ADS, DESK_MARKS,
+  areaFromAd, adBudgetOf, threadMarks,
   ASK_BOTH, ASK_NAME, ASK_PHONE, UNSURE, DELIVERY_NOTICE, DELIVERY_STATUS,
   emptyOps, ensureOps, manilaStamp, addMonths, addDays, parseBranch, branchLabel,
   parseCsv, parseJobsCsv, parsePaymentsCsv, parseAdsCsv,
