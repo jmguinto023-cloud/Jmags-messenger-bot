@@ -1,6 +1,6 @@
 'use strict';
 // JMAG's Operations, laid out like the shop dashboard: light cards, green actions, bottom nav.
-const { STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, KNOWN_ADS, adBudgetOf, branchLabel } = require('./ops');
+const { STATUSES, TECHS, BRANCHES, PAY_TYPES, METHODS, KNOWN_ADS, DESK_MARKS, adBudgetOf, branchLabel } = require('./ops');
 const { smsBadge } = require('./sms');
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -158,6 +158,7 @@ function icon(name) {
     money: '<rect x="2" y="5" width="16" height="10" rx="2"/><circle cx="10" cy="10" r="2"/>',
     finance: '<path d="M3 4h14l-4 5v5l-6 2V9z"/>',
     parts: '<path d="M3 7l7-4 7 4v7l-7 4-7-4zM10 3v14"/>',
+    desk: '<path d="M3 5h14v4H3zM4 9v6M16 9v6M3 12h14"/>',
   };
   return `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${paths[name] || ''}</svg>`;
 }
@@ -218,6 +219,7 @@ function header(view) {
 function dock(view) {
   const tabs = [
     ['today', 'Today', 'today'], ['jobs', 'Jobs', 'jobs'], ['customers', 'Customers', 'customers'],
+    ['desk', 'Desk', 'desk'],
     ['money', 'Money', 'money'], ['finance', 'Finance', 'finance'], ['parts', 'Parts', 'parts'],
   ];
   return `<nav class="dock" aria-label="Sections">${tabs.map(([id, label, glyph]) => `<a class="${view.tab === id ? 'on' : ''}" href="${href(view, { tab: id })}">${icon(glyph)}${label}</a>`).join('')}</nav>`;
@@ -382,6 +384,56 @@ function chart(view) {
   </section>`;
 }
 
+// One colour chip per Desk mark that toggles that mark for a customer. Lit in the
+// mark's colour when on, outlined when off. The browser sends the opaque card id;
+// the PSID stays on the server.
+function markChip(view, cardId, mark, on) {
+  if (!cardId) return '';
+  const style = on
+    ? `background:${mark.color};border-color:${mark.color};color:#111`
+    : `color:${mark.color};border-color:${mark.color}`;
+  return `<form method="post" action="/ops/action" class="mark-chip-form">${hidden(view)}<input type="hidden" name="action" value="mark"><input type="hidden" name="card" value="${esc(cardId)}"><input type="hidden" name="mark" value="${esc(mark.id)}"><input type="hidden" name="on" value="${on ? '0' : '1'}"><button class="mark-chip${on ? ' on' : ''}" type="submit" style="${style}" data-mark="${esc(mark.id)}" data-on="${on ? '1' : '0'}">${on ? '●' : '○'} ${esc(mark.label)}</button></form>`;
+}
+
+// The full row of mark chips, given the row's current {markId: bool} state.
+function markChips(view, cardId, state) {
+  if (!cardId) return '';
+  return `<span class="mark-chips">${DESK_MARKS.map((m) => markChip(view, cardId, m, Boolean(state && state[m.id]))).join('')}</span>`;
+}
+
+// Clear button for a single mark inside a Desk category.
+function clearMarkBtn(view, cardId, mark, label) {
+  if (!cardId) return '';
+  return `<form method="post" action="/ops/action" class="followup-clear">${hidden(view)}<input type="hidden" name="action" value="mark"><input type="hidden" name="card" value="${esc(cardId)}"><input type="hidden" name="mark" value="${esc(mark.id)}"><input type="hidden" name="on" value="0"><button class="ghost" type="submit" data-clear-mark="${esc(mark.id)}">${esc(label || '✓ Done')}</button></form>`;
+}
+
+function deskRow(view, mark, row) {
+  const when = row.markedAt ? ago(new Date(row.markedAt).toISOString(), view.now) : '';
+  const snippet = row.snippet ? `<div class="meta">“${esc(row.snippet)}”</div>` : '';
+  const note = row.note ? `<div class="meta">Note: ${esc(row.note)}</div>` : '';
+  return `<li class="followup" data-followup="${esc(row.last4)}">
+    <div><b>${row.name ? `${esc(row.name)} · ` : ''}···${esc(row.last4)}</b>${snippet}${note}
+    <div class="meta">${when ? `Marked ${esc(when)} · ` : ''}<a class="linkish" href="${esc(row.href)}" target="_blank" rel="noopener">Open chat</a></div></div>
+    ${clearMarkBtn(view, row.cardId, mark, '✓ Done')}
+  </li>`;
+}
+
+function deskTab(view) {
+  const data = view.desk || {};
+  const sections = DESK_MARKS.map((mark) => {
+    const list = data[mark.id] || [];
+    const rows = list.map((row) => deskRow(view, mark, row)).join('');
+    return `<section class="card desk-cat" id="mark-${esc(mark.id)}" style="border-top:3px solid ${mark.color}">
+      <header><h2><span class="mark-dot" style="background:${mark.color}"></span>${esc(mark.label)}</h2><span class="meta">${list.length} customer${list.length === 1 ? '' : 's'} naka-mark</span></header>
+      ${rows ? `<ul>${rows}</ul>` : `<p class="empty">Walang naka-mark na ${esc(mark.label.toLowerCase())}. Mark a customer from the Today or Customers tab.</p>`}
+    </section>`;
+  }).join('');
+  return `<section>
+    <div class="page-head"><h1>Desk</h1><input class="search grow" placeholder="Search name or last 4" data-filter=".desk-cat [data-followup]"></div>
+    ${sections}
+  </section>`;
+}
+
 function todayTab(view) {
   const k = view.kpis;
   const lines = lineMap(view.jobs);
@@ -411,10 +463,10 @@ function todayTab(view) {
   const feed = activity.map((job) => `<li><b>${job.status === 'Completed' ? 'Marked job done' : 'Added a job'}: ${esc(job.customerName)} · ${esc(job.unitType || 'TV')}</b><div class="meta">${esc(ago(job.updatedAt || job.createdAt, view.now))}</div></li>`).join('');
   const flags = `${view.dailyOn ? '' : '<p class="note" id="daily-flag">Daily status updates are off.</p>'}${view.deliveryOn ? '' : '<p class="note" id="delivery-flag">Delivery notifications are off.</p>'}`;
   const notice = SMS_NOTICES[view.notice] ? `<p class="note" data-sms-notice="${esc(view.notice)}">${esc(SMS_NOTICES[view.notice])}</p>` : '';
-  const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div>${row.cardId ? `<p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.cardId)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>` : ''}</li>`).join('');
+  const ivanRows = (view.aiHandoffs || []).map((row) => `<li data-ai-handoff="${esc(row.last4)}"><b>${esc(row.name)}</b> ···${esc(row.last4)}<div class="meta">${esc(row.reason)}</div>${row.cardId ? `<p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.cardId)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>${markChips(view, row.cardId, row.marks)}` : ''}</li>`).join('');
   const ivan = ivanRows ? `<section class="card" id="ai-handoffs"><header><h2>Needs Ivan</h2><span class="meta">The AI could not answer</span></header><ul>${ivanRows}</ul></section>` : '';
   const leads = view.hotLeads || [];
-  const leadItems = leads.map((row) => `<li data-hot-lead="${esc(row.last4)}"><b>${row.name ? `${esc(row.name)} · ` : ''}···${esc(row.last4)}</b>${row.phoneLast4 ? ` <span class="meta">phone ••${esc(row.phoneLast4)}</span>` : ''} · ${esc(row.reason)}<div class="meta">${esc(row.waitLabel)} <a class="linkish" href="${esc(row.href)}" target="_blank" rel="noopener">Open chat</a></div>${row.cardId ? `<p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.cardId)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>` : ''}</li>`).join('');
+  const leadItems = leads.map((row) => `<li data-hot-lead="${esc(row.last4)}"><b>${row.name ? `${esc(row.name)} · ` : ''}···${esc(row.last4)}</b>${row.phoneLast4 ? ` <span class="meta">phone ••${esc(row.phoneLast4)}</span>` : ''} · ${esc(row.reason)}<div class="meta">${esc(row.waitLabel)} <a class="linkish" href="${esc(row.href)}" target="_blank" rel="noopener">Open chat</a></div>${row.cardId ? `<p><button type="button" class="ghost copy-form-link" data-card-id="${esc(row.cardId)}">Copy form link</button> <span class="copy-form-note" role="status"></span></p>${markChips(view, row.cardId, row.marks)}` : ''}</li>`).join('');
   const hot = `<section class="card" id="hot-leads"><header><h2>Hot leads</h2><span class="meta">${leads.length} oldest first</span></header><input class="search" type="search" placeholder="Search name or last 4" data-filter="#hot-leads [data-hot-lead]">${leadItems ? `<ul>${leadItems}</ul>` : '<p class="empty">No hot leads.</p>'}</section>`;
   return `<section>
     ${flags}
@@ -623,7 +675,7 @@ function jobsTab(view) {
 
 function customersTab(view) {
   const rows = view.customers.map((c, i) => `<div class="cust-row">
-    <div><div class="person${i % 7 === 3 ? ' green' : ''}">${esc(c.name)}</div><div class="meta">${esc(c.phone)} · ${esc(c.address)}</div></div>
+    <div><div class="person${i % 7 === 3 ? ' green' : ''}">${esc(c.name)}</div><div class="meta">${esc(c.phone)} · ${esc(c.address)}</div>${markChips(view, c.cardId, c.marks)}</div>
     <div class="right"><div>${esc(c.jobs)} job${Number(c.jobs) === 1 ? '' : 's'}</div><div class="meta">${peso(c.paid)}</div></div>
   </div>`).join('');
   return `<section>
@@ -989,6 +1041,7 @@ function opsPage(view) {
     today: todayTab,
     jobs: jobsTab,
     customers: customersTab,
+    desk: deskTab,
     money: moneyTab,
     finance: financeTab,
     parts: partsTab,

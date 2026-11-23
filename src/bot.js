@@ -24,7 +24,7 @@ const {
   FORM_OK, FORM_MISSING, localJobs, submissionMatches, netlifySubmissions, phoneInThread,
 } = require('./customer-context');
 const { optOutReason, staffEscalation, publicCommentReply, STAFF_HANDOFF_LINE } = require('./reply-rules');
-const { hotLeadInfo, HOT_LEAD_WAIT_MS } = require('./ops');
+const { hotLeadInfo, HOT_LEAD_WAIT_MS, DESK_MARKS } = require('./ops');
 const { bookingTurn } = require('./booking');
 const { currentPage, routeEntry, storageKey, withPage } = require('./pages');
 const { PageSwitches, pageKey } = require('./page-switches');
@@ -2286,6 +2286,23 @@ class Bot {
     } catch (e) { this.log.warn(`booked label for ${short(psid)} failed`, e.message); }
   }
 
+  // Best-effort mirror of a dashboard Desk mark to a Page Inbox custom label.
+  // followUp reuses BOOKED_LABEL ("Follow up"); other marks use their own metaLabel,
+  // created on first use the same way. Graph has no removeLabel, so clearing a mark only
+  // drops the Desk marker and leaves any Inbox label in place. Never throws.
+  async syncMarkLabel(psid, markId, on) {
+    if (!on || !psid) return;
+    const mark = (DESK_MARKS || []).find((m) => m.id === markId);
+    if (!mark) return;
+    const label = String((markId === 'followUp' ? this.cfg.bookedLabel : '') || mark.metaLabel || '').trim();
+    if (!label) return;
+    try {
+      const page = this.locateThread(psid).page;
+      const add = () => this.graph.addLabel(psid, label);
+      await (page && currentPage() !== page ? withPage(page, add) : add());
+    } catch (e) { this.log.warn(`mark label "${markId}" for ${short(psid)} failed`, e.message); }
+  }
+
   async onBookingAgree(psid, t, ts, isStandby) {
     t.awaitingAgree = false;
     t.bookingConfirmed = true;
@@ -2295,6 +2312,8 @@ class Bot {
     this.store.save();
     this.log.info(`booking AGREE from ${short(psid)} wait=${t.bookingWait}`);
     await this.labelBooked(psid, t);
+    // Mark the thread 'followUp' so the Desk → Follow up category reflects booked customers.
+    this.store.setMark(psid, 'followUp', true, '', ts || this.now());
     if (!isStandby) {
       const ack = bookingConfirm.agreeAckText(t.bookingWait);
       try {

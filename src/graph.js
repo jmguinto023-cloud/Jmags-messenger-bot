@@ -385,5 +385,25 @@ class Graph {
     }
     return this.call('POST', `${labelId}/label`, { params: { user } });
   }
+
+  // Read-back stub: the custom labels currently on a PSID, for reconciling Desk marks
+  // with labels a staffer set directly in the Messenger inbox.
+  //
+  // The Messenger Platform documents GET /{PSID}/custom_labels?fields=name, but whether
+  // a given Page token has the scope to read another user's labels is not verified here,
+  // so this is NOT wired into any polling loop — Desk relies on dashboard marking plus the
+  // addLabel mirror above. The Messenger yellow STAR is a separate inbox flag and is not
+  // exposed by this (or any) Graph endpoint, so it can never be read back. Returns [] on
+  // any failure so a caller that opts in can treat "no labels" and "cannot read" alike.
+  async listUserLabels(psid) {
+    const user = String(psid || '').trim();
+    if (!user) return [];
+    try {
+      const res = await this.call('GET', `${user}/custom_labels`, { params: { fields: 'name,page_label_name', limit: '100' } });
+      return (res.data || []).map((l) => String((l && (l.page_label_name || l.name)) || '')).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
 }
 module.exports = { Graph };

@@ -424,6 +424,10 @@ function createServer({ cfg, bot, log }) {
       }
       const result = applyAction(bot.store, params, bot.now(), cfg.timezone);
       if (!result.ok) return send(400, result.error || 'Bad request');
+      if (result.mark && result.psid) {
+        // Best-effort Meta label sync; never block the dashboard action on it.
+        Promise.resolve(bot.syncMarkLabel(result.psid, result.mark, result.on)).catch(() => {});
+      }
       if (result.notifyDelivery) {
         try {
           await bot.notifyForDelivery(result.id);
